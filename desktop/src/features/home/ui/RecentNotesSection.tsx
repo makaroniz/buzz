@@ -9,6 +9,7 @@ type RecentNotesSectionProps = {
   notes: UserNote[];
   profiles: Record<string, UserProfileSummary>;
   agentPubkeys: ReadonlySet<string>;
+  title?: string;
   onOpenPulse: () => void;
 };
 
@@ -26,6 +27,7 @@ export function RecentNotesSection({
   notes,
   profiles,
   agentPubkeys,
+  title = "Recent Notes",
   onOpenPulse,
 }: RecentNotesSectionProps) {
   if (notes.length === 0) return null;
@@ -35,9 +37,7 @@ export function RecentNotesSection({
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold text-foreground">
-            Recent Notes
-          </h3>
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         </div>
         <button
           className="text-xs text-primary hover:underline"
@@ -48,8 +48,8 @@ export function RecentNotesSection({
         </button>
       </div>
 
-      <div className="space-y-0 overflow-hidden rounded-md border border-border/60">
-        {notes.slice(0, 5).map((note) => {
+      <div className="space-y-0 overflow-hidden rounded-md border border-border/60 bg-background/45 shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/35">
+        {notes.map((note) => {
           const profile = profiles[note.pubkey.toLowerCase()];
           const displayName =
             profile?.displayName ?? `${note.pubkey.slice(0, 8)}...`;

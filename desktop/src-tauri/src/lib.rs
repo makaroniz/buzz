@@ -491,6 +491,7 @@ pub fn run() {
             add_reaction,
             remove_reaction,
             get_event,
+            pick_home_background_file,
             upload_media,
             pick_and_upload_media,
             upload_media_bytes,

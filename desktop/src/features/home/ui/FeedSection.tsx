@@ -151,7 +151,7 @@ export function FeedSection({
       </div>
 
       {items.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border/60 px-4 py-5 text-center">
+        <div className="rounded-md border border-dashed border-border/60 bg-background/45 px-4 py-5 text-center shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/35">
           <p className="text-sm font-medium text-muted-foreground">
             {emptyTitle}
           </p>
@@ -160,7 +160,7 @@ export function FeedSection({
           </p>
         </div>
       ) : (
-        <div className="divide-y divide-border/60 rounded-md border border-border/60">
+        <div className="divide-y divide-border/60 rounded-md border border-border/60 bg-background/45 shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/35">
           {items.map((item) => {
             const channelId = item.channelId;
             const canOpenChannel =

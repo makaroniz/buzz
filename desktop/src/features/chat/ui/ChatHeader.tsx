@@ -84,35 +84,37 @@ export function ChatHeader({
   return (
     <header
       className={cn(
-        "relative z-30 flex min-h-11 min-w-0 shrink-0 cursor-default select-none items-center gap-2.5 bg-background/70 py-1.5 pl-4 pr-2 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[margin,padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:pl-6 sm:pr-3",
+        "relative z-30 flex min-h-11 min-w-0 shrink-0 cursor-default select-none items-center gap-2.5 py-1.5 pl-4 pr-2 transition-[margin,padding] duration-200 ease-linear sm:pl-6 sm:pr-3",
+        mode === "home"
+          ? "bg-transparent"
+          : "bg-background/70 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]",
         overlaysContent && "-mb-11",
         reserveGlobalControls && "md:pl-40",
       )}
       data-testid="chat-header"
       data-tauri-drag-region
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-1">
-          <ChannelIcon
-            channelType={channelType}
-            mode={mode}
-            visibility={visibility}
-          />
-          <h1
-            className="min-w-0 truncate text-sm font-semibold leading-5 tracking-tight"
-            data-testid="chat-title"
-            title={trimmedDescription || undefined}
-          >
-            {title}
-          </h1>
-          {statusBadge ? (
-            <div className="flex shrink-0 flex-wrap items-center gap-1">
-              {statusBadge}
-            </div>
-          ) : null}
-        </div>
+      <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(60vw,36rem)] -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-1 text-center">
+        <ChannelIcon
+          channelType={channelType}
+          mode={mode}
+          visibility={visibility}
+        />
+        <h1
+          className="min-w-0 truncate text-sm font-semibold leading-5 tracking-tight"
+          data-testid="chat-title"
+          title={trimmedDescription || undefined}
+        >
+          {title}
+        </h1>
+        {statusBadge ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-1">
+            {statusBadge}
+          </div>
+        ) : null}
       </div>
 
+      <div className="min-w-0 flex-1" />
       {actions ? <div className="shrink-0">{actions}</div> : null}
     </header>
   );

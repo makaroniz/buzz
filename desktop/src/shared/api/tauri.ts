@@ -1,4 +1,4 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 import type {
   AddChannelMembersInput,
@@ -78,6 +78,30 @@ type RawUserSearchResult = {
 type RawSearchUsersResponse = {
   users: RawUserSearchResult[];
 };
+
+type RawHomeBackgroundFile =
+  | {
+      kind: "asset";
+      path: string;
+      file_name: string | null;
+    }
+  | {
+      kind: "script";
+      content: string;
+      file_name: string | null;
+    };
+
+export type HomeBackgroundFile =
+  | {
+      kind: "asset";
+      sourceUrl: string;
+      fileName: string | null;
+    }
+  | {
+      kind: "script";
+      content: string;
+      fileName: string | null;
+    };
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
 
@@ -316,6 +340,32 @@ export async function invokeTauri<T>(
   } catch (error) {
     throw toTauriError(error);
   }
+}
+
+export async function pickHomeBackgroundFile(
+  kind: "image" | "video" | "script",
+): Promise<HomeBackgroundFile | null> {
+  const result = await invokeTauri<RawHomeBackgroundFile | null>(
+    "pick_home_background_file",
+    { kind },
+  );
+  if (!result) {
+    return null;
+  }
+
+  if (result.kind === "script") {
+    return {
+      kind: "script",
+      content: result.content,
+      fileName: result.file_name,
+    };
+  }
+
+  return {
+    kind: "asset",
+    sourceUrl: convertFileSrc(result.path),
+    fileName: result.file_name,
+  };
 }
 
 function fromRawChannel(channel: RawChannel): Channel {

@@ -60,6 +60,7 @@ function HomeRouteComponent() {
   return (
     <HomeScreen
       availableChannelIds={availableChannelIds}
+      channels={channels}
       currentPubkey={identityQuery.data?.pubkey}
       onOpenFeedItem={(item) => {
         if (!item.channelId) {
@@ -75,6 +76,9 @@ function HomeRouteComponent() {
       }}
       onOpenPulse={() => {
         void goPulse();
+      }}
+      onOpenSearchResult={(hit) => {
+        void openSearchHit(hit);
       }}
     />
   );
