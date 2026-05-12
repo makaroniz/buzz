@@ -217,6 +217,15 @@ pub async fn query_events(
         return Ok(Json(Value::Array(presence_events)));
     }
 
+    // ── Git browse: synthesize kind:20100-20103 from git data (ephemeral) ──
+    if let Some(git_events) = super::git::synthesis::synthesize_git_browse(&state, &filters).await {
+        tracing::debug!(
+            count = git_events.len(),
+            "git browse synthesis: returning events"
+        );
+        return Ok(Json(Value::Array(git_events)));
+    }
+
     // Execute each filter and collect results, enforcing channel access.
     let mut events: Vec<Value> = Vec::new();
     for filter in &filters {

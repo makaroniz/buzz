@@ -121,6 +121,17 @@ pub const KIND_PRESENCE_UPDATE: u32 = 20001;
 pub const KIND_PAIRING: u32 = 24134;
 /// Ephemeral: typing indicator for a channel.
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
+
+// Git browse events (ephemeral, synthesized on query — never client-submitted)
+/// Git tree listing (ephemeral, synthesized on query).
+pub const KIND_GIT_TREE: u32 = 20100;
+/// Git blob metadata (ephemeral, synthesized on query).
+pub const KIND_GIT_BLOB: u32 = 20101;
+/// Git commit log (ephemeral, synthesized on query).
+pub const KIND_GIT_COMMIT_LOG: u32 = 20102;
+/// Git README content (ephemeral, synthesized on query).
+pub const KIND_GIT_README: u32 = 20103;
+
 /// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
 pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 
@@ -346,6 +357,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_GROUP_ROLES,
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
+    KIND_GIT_TREE,
+    KIND_GIT_BLOB,
+    KIND_GIT_COMMIT_LOG,
+    KIND_GIT_README,
     KIND_BLOSSOM_AUTH,
     KIND_PAIRING,
     KIND_AGENT_OBSERVER_FRAME,
@@ -479,12 +494,18 @@ pub const fn is_command_kind(kind: u32) -> bool {
     )
 }
 
-/// Returns `true` if `kind` is a relay-only enrichment kind (40900–40902).
+/// Returns `true` if `kind` is a relay-only kind (enrichments + synthesized git browse).
 /// Client submission of these kinds must be rejected.
 pub const fn is_relay_only_kind(kind: u32) -> bool {
     matches!(
         kind,
-        KIND_ENRICHMENT | KIND_CHANNEL_SUMMARY | KIND_PRESENCE_SNAPSHOT
+        KIND_ENRICHMENT
+            | KIND_CHANNEL_SUMMARY
+            | KIND_PRESENCE_SNAPSHOT
+            | KIND_GIT_TREE
+            | KIND_GIT_BLOB
+            | KIND_GIT_COMMIT_LOG
+            | KIND_GIT_README
     )
 }
 

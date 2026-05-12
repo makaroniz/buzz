@@ -47,6 +47,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     // ── Git routes: configurable body limit (default 500 MB) ─────────────────
     let git_router = api::git::git_router(state.clone());
 
+    // ── Git browse routes (unauthenticated read-only) ────────────────────────
+    let git_browse_router = api::git::browse_router(state.clone());
+
     // ── Internal git policy route (pre-receive hook callback) ────────────────
     let git_policy_router = api::git::git_policy_router(state.clone());
 
@@ -80,6 +83,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let mut merged = api_router
         .merge(media_router)
         .merge(git_router)
+        .merge(git_browse_router)
         .merge(git_policy_router);
 
     // When SPROUT_WEB_DIR is set, serve the SPA as a fallback for unmatched routes.

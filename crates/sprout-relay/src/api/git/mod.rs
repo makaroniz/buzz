@@ -22,10 +22,13 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::state::AppState;
 
+pub mod browse;
 pub mod hook;
 pub mod policy;
+pub mod synthesis;
 pub mod transport;
 
+pub use browse::browse_router;
 pub use transport::git_router;
 
 /// Middleware that rejects requests from non-loopback addresses.

@@ -4145,6 +4145,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "moka",
  "nostr",
+ "percent-encoding",
  "rand 0.10.1",
  "redis",
  "serde",
