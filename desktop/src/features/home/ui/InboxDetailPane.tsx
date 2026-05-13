@@ -236,59 +236,63 @@ export function InboxDetailPane({
               ) : null}
             </div>
             {displayMessages.map((message) => (
-              <div className="px-6 py-3" key={message.id}>
+              <div className="px-6 py-2" key={message.id}>
                 <div
-                  className={cn(
-                    "relative rounded-2xl px-3 py-2",
-                    message.isSelected
-                      ? "bg-primary/10 ring-1 ring-primary/25"
-                      : "",
-                  )}
-                  data-testid={
-                    message.isSelected
-                      ? "home-inbox-selected-message"
-                      : "home-inbox-context-message"
-                  }
+                  className="relative"
                   style={{
-                    marginLeft: `${Math.min(message.depth, 6) * 24}px`,
+                    marginLeft: `${Math.min(message.depth, 6) * 28}px`,
                   }}
                 >
                   {message.depth > 0 ? (
                     <div
                       aria-hidden="true"
-                      className="absolute bottom-2 top-2 border-l border-border/70"
-                      style={{ left: "-12px" }}
+                      className="absolute bottom-0 top-0 border-l border-border/70"
+                      style={{ left: "-14px" }}
                     />
                   ) : null}
-                  <div className="mb-3 flex items-center gap-3">
+                  <article
+                    className={cn(
+                      "group/message flex items-start gap-2.5 rounded-xl border-l-2 px-2 py-1 transition-colors",
+                      message.isSelected
+                        ? "border-primary/35 bg-muted/25"
+                        : "border-transparent hover:bg-muted/20",
+                    )}
+                    data-testid={
+                      message.isSelected
+                        ? "home-inbox-selected-message"
+                        : "home-inbox-context-message"
+                    }
+                  >
                     <UserAvatar
                       avatarUrl={message.avatarUrl}
-                      className="h-8 w-8 rounded-md"
+                      className="h-8 w-8 shrink-0 rounded-xl"
                       displayName={message.authorLabel}
                       size="md"
                     />
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-semibold text-foreground">
+                    <div className="-mt-1 min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0">
+                        <p className="truncate text-sm font-semibold leading-none tracking-tight text-foreground">
                           {message.authorLabel}
                         </p>
                         {message.isSelected ? (
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+                          <span className="text-[10px] font-semibold uppercase leading-none tracking-[0.14em] text-muted-foreground/70">
                             Inbox item
                           </span>
                         ) : null}
+                        <p className="ml-auto text-xs text-muted-foreground">
+                          {message.fullTimestampLabel}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        {message.fullTimestampLabel}
-                      </p>
+                      <div className="-mt-0.5">
+                        <Markdown
+                          className="max-w-full text-left text-sm text-foreground"
+                          content={message.content}
+                          mentionNames={message.mentionNames}
+                          tight
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <Markdown
-                    className="max-w-none text-left text-[15px] text-foreground"
-                    content={message.content}
-                    mentionNames={message.mentionNames}
-                    tight
-                  />
+                  </article>
                 </div>
               </div>
             ))}
