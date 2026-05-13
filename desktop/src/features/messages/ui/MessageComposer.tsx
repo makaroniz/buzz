@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import { EditorContent } from "@tiptap/react";
-import { X } from "lucide-react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
@@ -21,7 +20,6 @@ import {
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { cn } from "@/shared/lib/cn";
-import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments, DropZoneOverlay } from "./ComposerAttachments";
 import { EmojiAutocomplete } from "./EmojiAutocomplete";
@@ -29,6 +27,8 @@ import {
   MentionAutocomplete,
   type MentionSuggestion,
 } from "./MentionAutocomplete";
+import { MessageComposerEditTarget } from "./MessageComposerEditTarget";
+import { MessageComposerReplyTarget } from "./MessageComposerReplyTarget";
 import { MessageComposerToolbar } from "./MessageComposerToolbar";
 
 type MessageComposerProps = {
@@ -45,6 +45,7 @@ type MessageComposerProps = {
   onCancelEdit?: () => void;
   onCancelReply?: () => void;
   onEditSave?: (content: string) => Promise<void>;
+  onEditLastMessage?: () => void;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -73,6 +74,7 @@ export function MessageComposer({
   onCancelEdit,
   onCancelReply,
   onEditSave,
+  onEditLastMessage,
   onSend,
   placeholder,
   profiles,
@@ -89,6 +91,7 @@ export function MessageComposer({
 
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
   const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
+  const [isInlineEditPreview, setIsInlineEditPreview] = React.useState(false);
 
   const handleFormattingToggle = React.useCallback((pressed: boolean) => {
     if (pressed) setIsEmojiPickerOpen(false);
@@ -118,12 +121,14 @@ export function MessageComposer({
   const isSendingRef = React.useRef(isSending);
   const onSendRef = React.useRef(onSend);
   const onEditSaveRef = React.useRef(onEditSave);
+  const onEditLastMessageRef = React.useRef(onEditLastMessage);
   const editTargetRef = React.useRef(editTarget);
   const channelIdRef = React.useRef(channelId);
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
   onSendRef.current = onSend;
   onEditSaveRef.current = onEditSave;
+  onEditLastMessageRef.current = onEditLastMessage;
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
 
@@ -211,12 +216,15 @@ export function MessageComposer({
       contentRef.current = editTarget.body;
       richText.setContent(editTarget.body);
       richText.focus();
-    } else if (preEditContentRef.current !== null) {
-      const restored = preEditContentRef.current;
-      preEditContentRef.current = null;
-      setContent(restored);
-      contentRef.current = restored;
-      restored ? richText.setContent(restored) : richText.clearContent();
+    } else {
+      setIsInlineEditPreview(false);
+      if (preEditContentRef.current !== null) {
+        const restored = preEditContentRef.current;
+        preEditContentRef.current = null;
+        setContent(restored);
+        contentRef.current = restored;
+        restored ? richText.setContent(restored) : richText.clearContent();
+      }
     }
   }, [editTarget?.id]);
 
@@ -462,6 +470,21 @@ export function MessageComposer({
         onCancelEdit();
         return;
       }
+
+      if (
+        event.key === "ArrowUp" &&
+        !editTargetRef.current &&
+        !replyTarget &&
+        !disabledRef.current &&
+        !isSendingRef.current &&
+        contentRef.current.trim().length === 0 &&
+        media.pendingImetaRef.current.length === 0 &&
+        onEditLastMessageRef.current
+      ) {
+        event.preventDefault();
+        setIsInlineEditPreview(true);
+        onEditLastMessageRef.current();
+      }
     },
     [
       emojiAutocomplete.handleEmojiKeyDown,
@@ -471,6 +494,8 @@ export function MessageComposer({
       mentions.handleMentionKeyDown,
       applyMentionInsert,
       onCancelEdit,
+      replyTarget,
+      media.pendingImetaRef,
     ],
   );
 
@@ -594,53 +619,17 @@ export function MessageComposer({
             selectedIndex={mentions.mentionSelectedIndex}
             suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
           />
-          {editTarget ? (
-            <div
-              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-3 py-2"
-              data-testid="edit-target"
-            >
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Editing message
-                </p>
-                <p className="truncate text-sm text-foreground/80">
-                  {editTarget.body}
-                </p>
-              </div>
-              <Button
-                className="shrink-0"
-                onClick={onCancelEdit}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                Cancel
-              </Button>
-            </div>
+          {editTarget && !isInlineEditPreview ? (
+            <MessageComposerEditTarget
+              body={editTarget.body}
+              onCancelEdit={onCancelEdit}
+            />
           ) : replyTarget ? (
-            <div
-              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
-              data-testid="reply-target"
-            >
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Replying to {replyTarget.author}
-                </p>
-                <p className="truncate text-sm text-foreground/80">
-                  {replyTarget.body}
-                </p>
-              </div>
-              <Button
-                aria-label="Cancel reply"
-                className="h-7 w-7 shrink-0 px-0"
-                onClick={onCancelReply}
-                size="icon"
-                type="button"
-                variant="ghost"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <MessageComposerReplyTarget
+              author={replyTarget.author}
+              body={replyTarget.body}
+              onCancelReply={onCancelReply}
+            />
           ) : null}
 
           {media.uploadState.status === "error" ? (

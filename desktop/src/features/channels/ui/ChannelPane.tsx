@@ -15,7 +15,11 @@ import {
 } from "@/features/channels/ui/BotActivityBar";
 import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
-import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import {
+  buildMainTimelineEntries,
+  type MainTimelineEntry,
+} from "@/features/messages/lib/threadPanel";
+import { findLatestEditableMessage } from "@/features/messages/lib/findLatestEditableMessage";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel, ManagedAgent } from "@/shared/api/types";
@@ -234,6 +238,14 @@ export const ChannelPane = React.memo(function ChannelPane({
       threadMessages.some((entry) => entry.message.id === editTarget.id));
   const mainEditTarget = editTarget && !isEditInThread ? editTarget : null;
   const threadEditTarget = editTarget && isEditInThread ? editTarget : null;
+  const latestEditableMainMessage = React.useMemo(
+    () =>
+      findLatestEditableMessage(
+        buildMainTimelineEntries(messages).map((entry) => entry.message),
+        currentPubkey,
+      ),
+    [currentPubkey, messages],
+  );
 
   const isNonMemberView =
     activeChannel !== null &&
@@ -376,6 +388,11 @@ export const ChannelPane = React.memo(function ChannelPane({
                 isSending={isSending}
                 onCancelEdit={onCancelEdit}
                 onEditSave={onEditSave}
+                onEditLastMessage={
+                  latestEditableMainMessage && onEdit
+                    ? () => onEdit(latestEditableMainMessage)
+                    : undefined
+                }
                 onSend={onSendMessage}
                 profiles={profiles}
                 toolbarExtraActions={

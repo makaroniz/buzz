@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowDown, X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import { findLatestEditableMessage } from "@/features/messages/lib/findLatestEditableMessage";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
@@ -122,6 +123,14 @@ export function MessageThreadPanel({
   const threadMessages = React.useMemo(
     () => threadReplies.map((entry) => entry.message),
     [threadReplies],
+  );
+  const latestEditableThreadMessage = React.useMemo(
+    () =>
+      findLatestEditableMessage(
+        threadHead ? [threadHead, ...threadMessages] : threadMessages,
+        currentPubkey,
+      ),
+    [currentPubkey, threadHead, threadMessages],
   );
 
   const {
@@ -306,6 +315,11 @@ export function MessageThreadPanel({
               onCancelEdit={onCancelEdit}
               onCancelReply={composerReplyTarget ? onCancelReply : undefined}
               onEditSave={onEditSave}
+              onEditLastMessage={
+                latestEditableThreadMessage && onEdit
+                  ? () => onEdit(latestEditableThreadMessage)
+                  : undefined
+              }
               onSend={onSend}
               placeholder={`Reply in thread to ${threadHead.author}`}
               profiles={profiles}
