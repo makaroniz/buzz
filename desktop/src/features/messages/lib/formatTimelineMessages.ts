@@ -1,6 +1,7 @@
 import type {
   Channel,
   ChannelMember,
+  PresenceStatus,
   RelayEvent,
   RespondToMode,
 } from "@/shared/api/types";
@@ -137,6 +138,8 @@ export function formatTimelineMessages(
   personaLookup?: Map<string, string>,
   /** Map from lowercase pubkey → respond-to mode for bot messages. */
   respondToLookup?: Map<string, RespondToMode>,
+  /** Map from lowercase pubkey → presence status. */
+  presenceLookup?: Map<string, PresenceStatus>,
 ): TimelineMessage[] {
   const currentPubkeyLower = currentPubkey?.toLowerCase();
   const roleByPubkey = new Map<string, string>();
@@ -333,6 +336,7 @@ export function formatTimelineMessages(
       role,
       personaDisplayName: personaLookup?.get(authorPubkey.toLowerCase()),
       respondTo: respondToLookup?.get(authorPubkey.toLowerCase()),
+      presenceStatus: presenceLookup?.get(authorPubkey.toLowerCase()),
       time: formatTime(event.created_at),
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,

@@ -45,6 +45,7 @@ import type {
   RelayEvent,
   RespondToMode,
 } from "@/shared/api/types";
+import { usePresenceQuery } from "@/features/presence/hooks";
 import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
@@ -109,10 +110,7 @@ export function ChannelScreen({
     : (activeChannel?.lastMessageAt ?? null);
 
   React.useEffect(() => {
-    if (!activeChannelId || activeChannel?.isMember === false) {
-      return;
-    }
-
+    if (!activeChannelId || activeChannel?.isMember === false) return;
     markChannelRead(activeChannelId, activeReadAt);
   }, [activeChannel?.isMember, activeChannelId, activeReadAt, markChannelRead]);
   const {
@@ -159,6 +157,13 @@ export function ChannelScreen({
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
   });
+  const messagePresenceQuery = usePresenceQuery(messageAuthorPubkeys, {
+    enabled: messageAuthorPubkeys.length > 0,
+  });
+  const presenceLookup = React.useMemo(
+    () => new Map(Object.entries(messagePresenceQuery.data ?? {})),
+    [messagePresenceQuery.data],
+  );
   const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
   const channelMembers = channelMembersQuery.data;
   const managedAgentsQuery = useManagedAgentsQuery();
@@ -201,7 +206,6 @@ export function ChannelScreen({
     );
     const pLookup = new Map<string, string>();
     const rLookup = new Map<string, RespondToMode>();
-
     const botPubkeys = new Set(
       (channelMembers ?? [])
         .filter((m) => m.role === "bot")
@@ -215,8 +219,6 @@ export function ChannelScreen({
         if (botPubkeys.has(key) && rt) rLookup.set(key, rt);
       }
     }
-
-    // Override with local managed agent data (authoritative for own bots).
     for (const agent of agents) {
       const key = agent.pubkey.toLowerCase();
       rLookup.set(key, agent.respondTo);
@@ -241,6 +243,7 @@ export function ChannelScreen({
         channelMembers,
         personaLookup,
         respondToLookup,
+        presenceLookup,
       ),
     [
       activeChannel,
@@ -249,6 +252,7 @@ export function ChannelScreen({
       currentPubkey,
       messageProfiles,
       personaLookup,
+      presenceLookup,
       respondToLookup,
       resolvedMessages,
     ],
@@ -413,12 +417,10 @@ export function ChannelScreen({
       setThreadScrollTargetId(null);
       return;
     }
-
     if (openThreadHeadMessage && !threadReplyTargetId) {
       setThreadReplyTargetId(openThreadHeadMessage.id);
       return;
     }
-
     if (threadReplyTargetId && !threadReplyTargetMessage) {
       setThreadReplyTargetId(openThreadHeadMessage?.id ?? null);
     }

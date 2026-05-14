@@ -12,6 +12,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
+import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Globe, Users } from "lucide-react";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
@@ -140,6 +141,7 @@ export const MessageRow = React.memo(
           ? { Icon: Users, title: "Responds to select users" }
           : null;
 
+    const isSmall = isThreadReplyLayout;
     const avatarNode = (
       <div className="relative shrink-0">
         <UserAvatar
@@ -149,12 +151,30 @@ export const MessageRow = React.memo(
           displayName={message.author}
           testId="message-avatar"
         />
-        {respondToIcon && !isThreadReplyLayout ? (
+        {respondToIcon ? (
           <span
-            className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background text-muted-foreground"
+            className={cn(
+              "absolute -right-0.5 flex items-center justify-center rounded-full bg-background text-muted-foreground",
+              isSmall ? "-top-0.5 h-3 w-3" : "-top-0.5 h-3.5 w-3.5",
+            )}
             title={respondToIcon.title}
           >
-            <respondToIcon.Icon className="h-2.5 w-2.5" />
+            <respondToIcon.Icon
+              className={isSmall ? "h-2 w-2" : "h-2.5 w-2.5"}
+            />
+          </span>
+        ) : null}
+        {message.presenceStatus && message.respondTo ? (
+          <span
+            className={cn(
+              "absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-background",
+              isSmall ? "h-3 w-3" : "h-3.5 w-3.5",
+            )}
+          >
+            <PresenceDot
+              className={isSmall ? "h-1.5 w-1.5" : "h-2 w-2"}
+              status={message.presenceStatus}
+            />
           </span>
         ) : null}
       </div>
@@ -392,6 +412,7 @@ export const MessageRow = React.memo(
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.message.respondTo === next.message.respondTo &&
+    prev.message.presenceStatus === next.message.presenceStatus &&
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.layoutVariant === next.layoutVariant &&

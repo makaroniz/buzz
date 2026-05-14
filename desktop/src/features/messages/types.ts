@@ -9,6 +9,8 @@ export type TimelineReaction = {
   }>;
 };
 
+import type { PresenceStatus } from "@/shared/api/types";
+
 export type TimelineMessage = {
   id: string;
   createdAt: number;
@@ -20,6 +22,7 @@ export type TimelineMessage = {
   personaDisplayName?: string;
   /** For bot messages, the respond-to mode (who can interact with this bot). */
   respondTo?: "owner-only" | "allowlist" | "anyone";
+  presenceStatus?: PresenceStatus;
   time: string;
   body: string;
   parentId?: string | null;
