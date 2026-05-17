@@ -11,6 +11,7 @@ import {
 } from "@/features/home/lib/inbox";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useInboxThreadContext } from "@/features/home/useInboxThreadContext";
+import { useResizableInboxListWidth } from "@/features/home/useResizableInboxListWidth";
 import { InboxDetailPane } from "@/features/home/ui/InboxDetailPane";
 import { InboxListPane } from "@/features/home/ui/InboxListPane";
 import {
@@ -126,6 +127,12 @@ export function HomeView({
   const [localRepliesByItemId, setLocalRepliesByItemId] = React.useState<
     Record<string, InboxReply[]>
   >({});
+  const {
+    canResetInboxListWidth,
+    handleInboxListResizeStart,
+    handleInboxListWidthReset,
+    inboxListWidthPx,
+  } = useResizableInboxListWidth();
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
   const feedItems = React.useMemo(
     () =>
@@ -327,8 +334,13 @@ export function HomeView({
   return (
     <div className="flex-1 overflow-hidden">
       <div
-        className="grid h-full min-h-0 w-full lg:grid-cols-[320px_minmax(0,1fr)]"
+        className="relative grid h-full min-h-0 w-full lg:grid-cols-[var(--home-inbox-list-width)_minmax(0,1fr)]"
         data-testid="home-inbox"
+        style={
+          {
+            "--home-inbox-list-width": `${inboxListWidthPx}px`,
+          } as React.CSSProperties
+        }
       >
         <InboxListPane
           doneSet={doneSet}
@@ -341,6 +353,25 @@ export function HomeView({
           }}
           selectedId={selectedItemId}
         />
+
+        <button
+          aria-label="Resize inbox list"
+          className="group absolute inset-y-0 z-20 hidden w-3 -translate-x-1/2 cursor-col-resize lg:block"
+          data-testid="home-inbox-list-resize-handle"
+          onDoubleClick={
+            canResetInboxListWidth ? handleInboxListWidthReset : undefined
+          }
+          onPointerDown={handleInboxListResizeStart}
+          style={{ left: `${inboxListWidthPx}px` }}
+          title={
+            canResetInboxListWidth
+              ? "Drag to resize. Double-click to reset width."
+              : "Drag to resize."
+          }
+          type="button"
+        >
+          <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border/80 group-focus-visible:bg-border/80" />
+        </button>
 
         <InboxDetailPane
           canDelete={canDelete}
