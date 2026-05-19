@@ -4,6 +4,7 @@ mod events;
 mod huddle;
 mod managed_agents;
 mod media_proxy;
+mod mesh_llm;
 mod migration;
 mod models;
 pub mod nostr_convert;

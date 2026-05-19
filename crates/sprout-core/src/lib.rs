@@ -20,6 +20,8 @@ pub mod filter;
 pub mod git_perms;
 /// Sprout kind number registry — custom event type constants.
 pub mod kind;
+/// Mesh-LLM compute-offer envelope (kind:31990 event content).
+pub mod mesh_llm;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
 /// Agent observer frame helpers.
