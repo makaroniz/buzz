@@ -281,23 +281,45 @@ export function MembersSidebar({
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                   {bots.length}
                 </span>
-                {hasControllableManagedBots ? (
-                  <MembersSidebarAgentControls
-                    canBulkRemove={hasRemovableManagedBots}
-                    canBulkRespawn={hasControllableManagedBots}
-                    canBulkStop={hasStoppableManagedBots}
-                    disabled={isActionPending || isArchived}
-                    onRemoveAll={() => {
-                      void handleRemoveAll();
-                    }}
-                    onRespawnAll={() => {
-                      void handleRespawnAll();
-                    }}
-                    onStopAll={() => {
-                      void handleStopAll();
-                    }}
-                  />
-                ) : null}
+                <div className="ml-auto flex items-center gap-0.5">
+                  {canAddAgents ? (
+                    <QuickAddAgentPopover
+                      channelId={channelId}
+                      open={isSidebarQuickAddOpen}
+                      onOpenChange={setIsSidebarQuickAddOpen}
+                      onMoreOptions={() => {
+                        setIsSidebarQuickAddOpen(false);
+                        onOpenAddBotDialog?.();
+                      }}
+                    >
+                      <button
+                        aria-label="Add agent to channel"
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        data-testid="sidebar-add-agent-trigger"
+                        type="button"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    </QuickAddAgentPopover>
+                  ) : null}
+                  {hasControllableManagedBots ? (
+                    <MembersSidebarAgentControls
+                      canBulkRemove={hasRemovableManagedBots}
+                      canBulkRespawn={hasControllableManagedBots}
+                      canBulkStop={hasStoppableManagedBots}
+                      disabled={isActionPending || isArchived}
+                      onRemoveAll={() => {
+                        void handleRemoveAll();
+                      }}
+                      onRespawnAll={() => {
+                        void handleRespawnAll();
+                      }}
+                      onStopAll={() => {
+                        void handleStopAll();
+                      }}
+                    />
+                  ) : null}
+                </div>
               </div>
               <div className="space-y-2" data-testid="members-sidebar-bots">
                 {bots.length > 0 ? (
@@ -310,29 +332,6 @@ export function MembersSidebar({
                   </p>
                 )}
               </div>
-              {canAddAgents ? (
-                <QuickAddAgentPopover
-                  channelId={channelId}
-                  open={isSidebarQuickAddOpen}
-                  onOpenChange={setIsSidebarQuickAddOpen}
-                  onMoreOptions={() => {
-                    setIsSidebarQuickAddOpen(false);
-                    onOpenAddBotDialog?.();
-                  }}
-                >
-                  <Button
-                    aria-label="Add agent to channel"
-                    className="mt-2 h-8 w-full justify-start gap-2 text-xs text-muted-foreground"
-                    data-testid="sidebar-add-agent-trigger"
-                    size="sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Add agent
-                  </Button>
-                </QuickAddAgentPopover>
-              ) : null}
             </section>
 
             {changeRoleError ? (
