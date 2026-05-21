@@ -515,7 +515,7 @@ export function QuickAddAgentPopover({
                       className="shrink-0"
                     >
                       <Toggle
-                        className="h-8 rounded-full px-3 text-xs"
+                        className="h-8 rounded-full px-3 text-xs data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
                         onPressedChange={(pressed) =>
                           handleTeamToggle(team, pressed)
                         }
@@ -560,7 +560,7 @@ export function QuickAddAgentPopover({
                   }}
                   size="sm"
                   type="button"
-                  variant={selectMode ? "default" : "ghost"}
+                  variant={selectMode ? "secondary" : "ghost"}
                 >
                   Select
                 </Button>
