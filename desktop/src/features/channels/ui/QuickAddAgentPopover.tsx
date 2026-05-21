@@ -743,7 +743,7 @@ function QuickAddAgentAvatar({
         </span>
       )}
       {isRunning ? (
-        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-emerald-500" />
+        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-popover bg-emerald-500" />
       ) : null}
     </div>
   );
