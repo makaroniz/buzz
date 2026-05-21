@@ -664,7 +664,7 @@ export function QuickAddAgentPopover({
 
           <div className="border-t">
             <button
-              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               data-quick-add-item
               data-testid="quick-add-more-options"
               onClick={() => {
