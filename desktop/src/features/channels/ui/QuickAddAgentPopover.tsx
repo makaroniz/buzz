@@ -591,8 +591,7 @@ export function QuickAddAgentPopover({
                   const isSelected = selectedKeys.has(itemKey);
 
                   return (
-                    <motion.button
-                      layout
+                    <button
                       aria-selected={isInChannel || isSelected}
                       className={cn(
                         "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm transition-colors",
@@ -608,42 +607,35 @@ export function QuickAddAgentPopover({
                       onClick={() => handleItemClick(item)}
                       role="option"
                       tabIndex={isInChannel ? -1 : 0}
-                      transition={{ duration: 0.15 }}
                       type="button"
                     >
-                      <AnimatePresence>
-                        {selectMode && !isInChannel ? (
-                          <motion.div
-                            key="checkbox"
-                            initial={{ width: 0, opacity: 0 }}
-                            animate={{ width: 16, opacity: 1 }}
-                            exit={{ width: 0, opacity: 0 }}
-                            transition={{ duration: 0.15 }}
-                            className="shrink-0 overflow-hidden"
+                      {!isInChannel ? (
+                        <motion.div
+                          animate={{ width: selectMode ? 16 : 0, opacity: selectMode ? 1 : 0 }}
+                          initial={false}
+                          transition={{ duration: 0.15 }}
+                          className="shrink-0 overflow-hidden"
+                        >
+                          <div
+                            className={cn(
+                              "flex h-4 w-4 items-center justify-center rounded border transition-colors",
+                              isSelected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-muted-foreground/40",
+                            )}
                           >
-                            <div
-                              className={cn(
-                                "flex h-4 w-4 items-center justify-center rounded border transition-colors",
-                                isSelected
-                                  ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-muted-foreground/40",
-                              )}
-                            >
-                              {isSelected ? <Check className="h-3 w-3" /> : null}
-                            </div>
-                          </motion.div>
-                        ) : null}
-                      </AnimatePresence>
-                      <motion.div layout="position" transition={{ duration: 0.15 }} className="shrink-0">
-                        <QuickAddAgentAvatar
-                          avatarUrl={item.avatarUrl}
-                          label={item.label}
-                          isRunning={item.kind !== "persona"}
-                        />
-                      </motion.div>
-                      <motion.span layout="position" transition={{ duration: 0.15 }} className="min-w-0 flex-1 truncate font-medium">
+                            {isSelected ? <Check className="h-3 w-3" /> : null}
+                          </div>
+                        </motion.div>
+                      ) : null}
+                      <QuickAddAgentAvatar
+                        avatarUrl={item.avatarUrl}
+                        label={item.label}
+                        isRunning={item.kind !== "persona"}
+                      />
+                      <span className="min-w-0 flex-1 truncate font-medium">
                         {item.label}
-                      </motion.span>
+                      </span>
                       {isInChannel ? (
                         <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       ) : item.kind === "running-available" && !selectMode ? (
@@ -654,7 +646,7 @@ export function QuickAddAgentPopover({
                       {isItemPending ? (
                         <Spinner className="h-3.5 w-3.5 shrink-0 text-primary" />
                       ) : null}
-                    </motion.button>
+                    </button>
                   );
                 })}
               </div>
