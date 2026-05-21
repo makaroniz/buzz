@@ -1,4 +1,4 @@
-import { Check, Settings2 } from "lucide-react";
+import { Check, Settings2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import * as React from "react";
 
@@ -12,7 +12,7 @@ import {
   useTeamsQuery,
 } from "@/features/agents/hooks";
 import { Toggle } from "@/shared/ui/toggle";
-import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { useChannelMembersQuery, useRemoveChannelMemberMutation } from "@/features/channels/hooks";
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
 import { pickBotName } from "@/features/agents/lib/pickBotName";
@@ -106,6 +106,7 @@ export function QuickAddAgentPopover({
   const attachMutation = useAttachManagedAgentToChannelMutation(channelId);
   const createMutation = useCreateChannelManagedAgentMutation(channelId);
   const batchCreateMutation = useCreateChannelManagedAgentsMutation(channelId);
+  const removeMutation = useRemoveChannelMemberMutation(channelId);
   const { recentIds, pushRecent } = useBotRecents();
 
   const [pendingKey, setPendingKey] = React.useState<string | null>(null);
@@ -625,17 +626,17 @@ export function QuickAddAgentPopover({
                       className={cn(
                         "flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors",
                         isInChannel
-                          ? "cursor-default opacity-50"
+                          ? "cursor-default"
                           : "cursor-pointer hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
                         isItemPending && "pointer-events-none opacity-60",
                         isSelected && "bg-accent/50",
                       )}
                       data-quick-add-item
-                      disabled={isInChannel || Boolean(pendingKey)}
+                      disabled={!isInChannel && Boolean(pendingKey)}
                       key={itemKey}
                       onClick={() => handleItemClick(item)}
                       role="option"
-                      tabIndex={isInChannel ? -1 : 0}
+                      tabIndex={0}
                       type="button"
                     >
                       {!isInChannel ? (
@@ -667,7 +668,17 @@ export function QuickAddAgentPopover({
                           {item.label}
                         </span>
                         {isInChannel ? (
-                          <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <button
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeMutation.mutate(item.agent.pubkey);
+                            }}
+                            type="button"
+                            aria-label={`Remove ${item.label}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
                         ) : null}
                         {isItemPending ? (
                           <Spinner className="h-3.5 w-3.5 shrink-0 text-primary" />
