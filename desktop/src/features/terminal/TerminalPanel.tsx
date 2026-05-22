@@ -64,7 +64,7 @@ export function TerminalPanel({ channelId, isOpen }: TerminalPanelProps) {
       const previousCursor = document.body.style.cursor;
       const previousUserSelect = document.body.style.userSelect;
 
-      document.body.style.cursor = "row-resize";
+      document.body.style.cursor = "grabbing";
       document.body.style.userSelect = "none";
 
       const handlePointerMove = (moveEvent: PointerEvent) => {
@@ -98,6 +98,14 @@ export function TerminalPanel({ channelId, isOpen }: TerminalPanelProps) {
           <div
             className="pointer-events-auto relative flex h-full flex-col overflow-hidden rounded-2xl border border-border/50 bg-terminal shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
             onPointerDown={handleResizeStart}
+            onPointerMove={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              e.currentTarget.style.cursor =
+                e.clientY - rect.top <= 6 ? "grab" : "";
+            }}
+            onPointerLeave={(e) => {
+              e.currentTarget.style.cursor = "";
+            }}
           >
             {/* Terminal content */}
             <div className="min-h-0 flex-1 bg-terminal p-3">
