@@ -41,7 +41,9 @@ fn install_acp_runtime_blocking(provider_id: &str) -> Result<InstallRuntimeResul
             .lock()
             .map_err(|_| "install lock poisoned".to_string())?;
         if !set.insert(provider_id.to_string()) {
-            return Err(format!("an install is already in progress for {provider_id}"));
+            return Err(format!(
+                "an install is already in progress for {provider_id}"
+            ));
         }
     }
 
