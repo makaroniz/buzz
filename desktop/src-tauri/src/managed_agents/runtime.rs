@@ -858,6 +858,7 @@ pub fn spawn_agent_child(
         }
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
+    // Uses "*" because build_mcp_servers() hard-codes the server name to "sprout-mcp".
     let runtime_meta = known_acp_runtime(&record.agent_command);
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
