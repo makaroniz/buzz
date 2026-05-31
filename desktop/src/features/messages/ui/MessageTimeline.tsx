@@ -143,14 +143,14 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     <TooltipProvider delayDuration={200}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-24 pt-1 [overflow-anchor:none] sm:px-6"
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain pb-24 pt-1 [overflow-anchor:none]"
           data-scroll-restoration-id={scrollRestorationId}
           data-testid="message-timeline"
           onScroll={syncScrollState}
           ref={scrollContainerRef}
         >
           <div
-            className="flex w-full flex-col gap-2 pt-[76px]"
+            className="flex w-full flex-col gap-2 px-4 pt-12 sm:px-6"
             ref={contentRef}
           >
             <div ref={topSentinelRef} aria-hidden className="h-px" />

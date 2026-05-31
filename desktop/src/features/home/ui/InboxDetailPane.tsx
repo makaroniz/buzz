@@ -212,51 +212,49 @@ export function InboxDetailPane({
       ref={detailPaneRef}
     >
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
-        />
-        <div className="absolute inset-x-0 top-[38px] z-50 flex min-h-[32px] items-center justify-between gap-3 py-[4px] pl-6 pr-3">
-          <div className="min-w-0">
-            {canOpenChannel && contextChannelId && onOpenContext ? (
-              <button
-                className="flex min-w-0 items-center gap-[4px] text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                onClick={() => onOpenContext(contextChannelId, item.id)}
-                title={item.fullTimestampLabel}
-                type="button"
-              >
-                {hasChannelContext ? (
-                  <Hash className="h-[14px] w-[14px] shrink-0" color="gray" />
-                ) : null}
-                <span className="min-w-0 truncate">{contextLabel}</span>
-              </button>
-            ) : (
-              <h2
-                className="flex min-w-0 items-center gap-[4px] text-sm font-semibold leading-5 tracking-tight text-foreground"
-                title={item.fullTimestampLabel}
-              >
-                {hasChannelContext ? (
-                  <Hash className="h-[14px] w-[14px] shrink-0" color="gray" />
-                ) : null}
-                <span className="min-w-0 truncate">{contextLabel}</span>
-              </h2>
-            )}
-          </div>
-
-          <TooltipProvider delayDuration={200}>
-            <div className="flex shrink-0 items-center gap-1">
-              <HeaderMoreMenu
-                canDelete={canDelete}
-                isDeletingMessage={isDeletingMessage}
-                isDone={isDone}
-                onDelete={onDelete}
-                onToggleDone={onToggleDone}
-              />
+        <div className="absolute inset-x-0 top-0 z-50 h-12 bg-background/80 pt-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55">
+          <div className="flex min-h-[32px] items-start justify-between gap-3 py-[4px] pl-6 pr-3">
+            <div className="min-w-0">
+              {canOpenChannel && contextChannelId && onOpenContext ? (
+                <button
+                  className="flex min-w-0 items-center gap-[4px] text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  onClick={() => onOpenContext(contextChannelId, item.id)}
+                  title={item.fullTimestampLabel}
+                  type="button"
+                >
+                  {hasChannelContext ? (
+                    <Hash className="h-[14px] w-[14px] shrink-0" color="gray" />
+                  ) : null}
+                  <span className="min-w-0 truncate">{contextLabel}</span>
+                </button>
+              ) : (
+                <h2
+                  className="flex min-w-0 items-center gap-[4px] text-sm font-semibold leading-5 tracking-tight text-foreground"
+                  title={item.fullTimestampLabel}
+                >
+                  {hasChannelContext ? (
+                    <Hash className="h-[14px] w-[14px] shrink-0" color="gray" />
+                  ) : null}
+                  <span className="min-w-0 truncate">{contextLabel}</span>
+                </h2>
+              )}
             </div>
-          </TooltipProvider>
+
+            <TooltipProvider delayDuration={200}>
+              <div className="flex shrink-0 items-center gap-1">
+                <HeaderMoreMenu
+                  canDelete={canDelete}
+                  isDeletingMessage={isDeletingMessage}
+                  isDone={isDone}
+                  onDelete={onDelete}
+                  onToggleDone={onToggleDone}
+                />
+              </div>
+            </TooltipProvider>
+          </div>
         </div>
 
-        <div className="absolute inset-0 overflow-y-auto overscroll-contain pb-32 pt-[76px]">
+        <div className="absolute inset-0 overflow-y-auto overscroll-contain pb-32 pt-12">
           <div>
             {isThreadContextLoading ? (
               <div className="px-6 pb-3 text-[11px] text-muted-foreground">

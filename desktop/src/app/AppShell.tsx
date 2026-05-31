@@ -787,8 +787,10 @@ export function AppShell() {
                   unreadChannelIds={unreadChannelIds}
                 />
 
-                <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-                  <Outlet />
+                <SidebarInset className="min-h-0 min-w-0 overflow-hidden bg-transparent px-3 pb-3 pt-12">
+                  <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[28px] border border-border/70 bg-background/82 shadow-[0_24px_80px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-white/10 dark:bg-background/60 dark:shadow-[0_24px_90px_rgba(0,0,0,0.45)]">
+                    <Outlet />
+                  </div>
                 </SidebarInset>
 
                 <AppShellOverlays

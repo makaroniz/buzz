@@ -46,51 +46,51 @@ export function InboxListPane({
 
   return (
     <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background/60">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
-      />
-      <div className="absolute inset-x-0 top-[42px] z-50 min-h-[32px] px-5 py-[4px]">
-        <div className="flex min-w-0 items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-[6px]">
-            <Inbox className="h-[14px] w-[14px] shrink-0 text-muted-foreground" />
-            <h2 className="truncate text-sm font-semibold leading-5 tracking-tight">
-              Inbox
-            </h2>
+      <div className="absolute inset-x-0 top-0 z-50 h-12 bg-background/80 pt-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55">
+        <div className="min-h-[32px] px-5 py-[4px]">
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-[6px]">
+              <Inbox className="h-[14px] w-[14px] shrink-0 text-muted-foreground" />
+              <h2 className="truncate text-sm font-semibold leading-5 tracking-tight">
+                Inbox
+              </h2>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border-border/70 bg-background/70 px-2.5 text-[11px] font-medium leading-[1] text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/60 hover:text-foreground"
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <span>{activeFilter?.label ?? "All"}</span>
+                  <ChevronDown className="h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[10rem]">
+                <DropdownMenuRadioGroup
+                  onValueChange={(value) =>
+                    onFilterChange(value as InboxFilter)
+                  }
+                  value={filter}
+                >
+                  {FILTER_OPTIONS.map((option) => (
+                    <DropdownMenuRadioItem
+                      key={option.value}
+                      value={option.value}
+                    >
+                      {option.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border-border/70 bg-background/70 px-2.5 text-[11px] font-medium leading-[1] text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/60 hover:text-foreground"
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <span>{activeFilter?.label ?? "All"}</span>
-                <ChevronDown className="h-3 w-3" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[10rem]">
-              <DropdownMenuRadioGroup
-                onValueChange={(value) => onFilterChange(value as InboxFilter)}
-                value={filter}
-              >
-                {FILTER_OPTIONS.map((option) => (
-                  <DropdownMenuRadioItem
-                    key={option.value}
-                    value={option.value}
-                  >
-                    {option.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </div>
 
       <div
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-[76px]"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-12"
         data-testid="home-inbox-list"
       >
         {items.length === 0 ? (
