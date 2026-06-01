@@ -8,6 +8,75 @@ use crate::{
     relay::{query_relay, submit_event},
 };
 
+// ── Serverless membership (read-modify-write of kind:39002) ──────────────────
+//
+// On a generic relay there's no server to process the membership command kinds
+// (9021 join, 9022 leave, 9000 add-member, 9001 remove-member). Instead the
+// client mutates the replaceable kind:39002 member-list event directly: read
+// the current list, add/remove the pubkey, and re-publish the whole event.
+// See docs/SPROUT_LITE_MODE.md.
+
+/// Fetch the current member pubkeys (hex, lowercased) for a serverless channel
+/// from its kind:39002 event. Returns an empty list if none exists yet.
+async fn serverless_current_members(
+    state: &AppState,
+    channel_id: &str,
+) -> Result<Vec<String>, String> {
+    let events = query_relay(
+        state,
+        &[serde_json::json!({
+            "kinds": [39002],
+            "#d": [channel_id],
+            "limit": 1
+        })],
+    )
+    .await?;
+
+    let Some(ev) = events.first() else {
+        return Ok(Vec::new());
+    };
+    let members = ev
+        .tags
+        .iter()
+        .filter_map(|t| {
+            let parts = t.as_slice();
+            if parts.first().map(String::as_str) == Some("p") {
+                parts.get(1).map(|p| p.to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(members)
+}
+
+/// Re-publish the kind:39002 member list for a serverless channel after adding
+/// or removing the given pubkeys.
+async fn serverless_set_members(
+    state: &AppState,
+    channel_id: &str,
+    add: &[String],
+    remove: &[String],
+) -> Result<(), String> {
+    let mut members = serverless_current_members(state, channel_id).await?;
+    for pk in remove {
+        let pk = pk.to_ascii_lowercase();
+        members.retain(|m| m != &pk);
+    }
+    for pk in add {
+        let pk = pk.to_ascii_lowercase();
+        if !members.contains(&pk) {
+            members.push(pk);
+        }
+    }
+    members.sort();
+    members.dedup();
+
+    let builder = events::build_channel_members_serverless(channel_id, &members)?;
+    submit_event(builder, state).await?;
+    Ok(())
+}
+
 // ── Reads (pure-nostr via /query) ────────────────────────────────────────────
 
 #[tauri::command]
@@ -435,6 +504,17 @@ pub async fn add_channel_members(
         Some(other) => return Err(format!("invalid role: {other}")),
     };
 
+    if state.is_serverless() {
+        // Validate pubkeys, then add them all to the kind:39002 member list.
+        let valid: Vec<String> = pubkeys
+            .iter()
+            .filter(|p| p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(|p| p.to_ascii_lowercase())
+            .collect();
+        serverless_set_members(&state, &uuid.to_string(), &valid, &[]).await?;
+        return Ok(serde_json::json!({ "added": valid, "errors": [] }));
+    }
+
     let mut added = Vec::new();
     let mut errors = Vec::<serde_json::Value>::new();
 
@@ -462,6 +542,9 @@ pub async fn remove_channel_member(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
+    if state.is_serverless() {
+        return serverless_set_members(&state, &uuid.to_string(), &[], &[pubkey]).await;
+    }
     let builder = events::build_remove_member(uuid, &pubkey)?;
     submit_event(builder, &state).await?;
     Ok(())
@@ -482,6 +565,10 @@ pub async fn change_channel_member_role(
         "owner" => return Err("cannot assign owner role — use transfer ownership".into()),
         other => return Err(format!("invalid role: {other}")),
     };
+    if state.is_serverless() {
+        // Roles aren't enforced on a generic relay; just ensure membership.
+        return serverless_set_members(&state, &uuid.to_string(), &[pubkey], &[]).await;
+    }
     let builder = events::build_add_member(uuid, &pubkey, Some(role_str))?;
     submit_event(builder, &state).await?;
     Ok(())
@@ -490,6 +577,13 @@ pub async fn change_channel_member_role(
 #[tauri::command]
 pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
+    if state.is_serverless() {
+        let me = {
+            let keys = state.keys.lock().map_err(|e| e.to_string())?;
+            keys.public_key().to_hex()
+        };
+        return serverless_set_members(&state, &uuid.to_string(), &[me], &[]).await;
+    }
     let builder = events::build_join(uuid)?;
     submit_event(builder, &state).await?;
     Ok(())
@@ -498,6 +592,13 @@ pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn leave_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
+    if state.is_serverless() {
+        let me = {
+            let keys = state.keys.lock().map_err(|e| e.to_string())?;
+            keys.public_key().to_hex()
+        };
+        return serverless_set_members(&state, &uuid.to_string(), &[], &[me]).await;
+    }
     let builder = events::build_leave(uuid)?;
     submit_event(builder, &state).await?;
     Ok(())

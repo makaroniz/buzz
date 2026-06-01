@@ -171,6 +171,11 @@ impl SproutClient {
         &self.relay_url
     }
 
+    /// Whether this client is in serverless mode (generic relay, plain WS).
+    pub fn is_serverless(&self) -> bool {
+        self.serverless
+    }
+
     /// Return the owner pubkey carried by the NIP-OA auth tag, if any.
     ///
     /// The auth tag is `["auth", owner_pubkey, conditions, sig]`; the

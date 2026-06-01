@@ -499,6 +499,69 @@ pub fn build_create_channel(
     Ok(EventBuilder::new(Kind::Custom(9007), "").tags(tags))
 }
 
+// ── Serverless mode: direct addressable-event builders ──────────────────────
+//
+// In serverless mode there is no Sprout relay to process command events
+// (kind 9007 create-channel, 9021 join, 9000 add-member) and materialize the
+// resulting addressable metadata. The client builds those addressable events
+// itself and publishes them straight to a generic relay. Shapes must match
+// what channel parsers expect (see desktop `nostr_convert::channel_info_from_event`).
+
+/// Kind 39000 — channel metadata, published directly (serverless mode).
+///
+/// `participants` are p-tagged (used for DM-type channels). `visibility` must
+/// be `"open"` or `"private"`; DM-type channels also get a `hidden` tag.
+pub fn build_channel_metadata_serverless(
+    channel_id: &str,
+    name: &str,
+    visibility: &str,
+    channel_type: &str,
+    about: Option<&str>,
+    participants: &[String],
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![
+        tag(&["d", channel_id])?,
+        tag(&["name", name])?,
+        tag(&["t", channel_type])?,
+    ];
+    match visibility {
+        "open" => tags.push(tag(&["public"])?),
+        "private" => tags.push(tag(&["private"])?),
+        other => {
+            return Err(SdkError::InvalidInput(format!(
+                "invalid visibility: {other}"
+            )))
+        }
+    }
+    if channel_type == "dm" {
+        tags.push(tag(&["hidden"])?);
+    }
+    if let Some(a) = about {
+        if !a.is_empty() {
+            tags.push(tag(&["about", a])?);
+        }
+    }
+    for pk in participants {
+        tags.push(tag(&["p", &pk.to_ascii_lowercase()])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(39000), "").tags(tags))
+}
+
+/// Kind 39002 — channel membership, published directly (serverless mode).
+///
+/// One addressable event per channel (`d`=channel_id) listing all members as
+/// `p` tags. Replaceable: re-publishing supersedes the previous member list.
+pub fn build_channel_members_serverless(
+    channel_id: &str,
+    member_pubkeys: &[String],
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![tag(&["d", channel_id])?];
+    for pk in member_pubkeys {
+        tags.push(tag(&["p", &pk.to_ascii_lowercase()])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(39002), "").tags(tags))
+}
+
 // ── Builder 20: build_join ───────────────────────────────────────────────────
 
 /// Build a NIP-29 join-request event (kind 9021).
