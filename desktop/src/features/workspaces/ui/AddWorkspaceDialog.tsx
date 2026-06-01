@@ -3,6 +3,9 @@ import * as React from "react";
 import {
   DEFAULT_PUBLIC_RELAYS,
   DEFAULT_SERVERLESS_RELAY,
+  normalizeRelayList,
+  relayListIncludes,
+  toggleRelayInList,
 } from "@/features/workspaces/defaultRelays";
 import type { Workspace } from "@/features/workspaces/types";
 import {
@@ -53,7 +56,9 @@ export function AddWorkspaceDialog({
       const workspace: Workspace = {
         id: crypto.randomUUID(),
         name: name.trim() || deriveWorkspaceName(relayUrl.trim()),
-        relayUrl: normalizeRelayUrl(relayUrl.trim()),
+        relayUrl: serverless
+          ? normalizeRelayList(relayUrl.trim())
+          : normalizeRelayUrl(relayUrl.trim()),
         // Serverless workspaces never use a Sprout API token.
         token: serverless ? undefined : token.trim() || undefined,
         mode: serverless ? "serverless" : "sprout",
@@ -101,7 +106,7 @@ export function AddWorkspaceDialog({
               className="text-sm font-medium text-foreground"
               htmlFor="ws-relay-url"
             >
-              Relay URL
+              {serverless ? "Relay URLs" : "Relay URL"}
             </label>
             <Input
               autoFocus
@@ -116,18 +121,33 @@ export function AddWorkspaceDialog({
               value={relayUrl}
             />
             {serverless ? (
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {DEFAULT_PUBLIC_RELAYS.map((relay) => (
-                  <button
-                    className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
-                    key={relay}
-                    onClick={() => setRelayUrl(relay)}
-                    type="button"
-                  >
-                    {relay.replace("wss://", "")}
-                  </button>
-                ))}
-              </div>
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Connects to all listed relays for redundancy. Tap to
+                  add/remove.
+                </p>
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {DEFAULT_PUBLIC_RELAYS.map((relay) => {
+                    const selected = relayListIncludes(relayUrl, relay);
+                    return (
+                      <button
+                        className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                          selected
+                            ? "border-primary bg-primary/15 text-foreground"
+                            : "border-border bg-muted/40 text-muted-foreground hover:border-primary/60 hover:text-foreground"
+                        }`}
+                        key={relay}
+                        onClick={() =>
+                          setRelayUrl(toggleRelayInList(relayUrl, relay))
+                        }
+                        type="button"
+                      >
+                        {relay.replace("wss://", "")}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
             ) : null}
           </div>
           <div className="flex flex-col gap-1.5">

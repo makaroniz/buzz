@@ -148,8 +148,9 @@ async fn serverless_create_join_roundtrip() {
         .expect("publish 39000");
     eprintln!("39000 publish: accepted={} msg={}", r1.accepted, r1.message);
 
-    let members = events::build_channel_members_serverless(&channel_id, &[creator_pk.clone()])
-        .expect("build members");
+    let members =
+        events::build_channel_members_serverless(&channel_id, std::slice::from_ref(&creator_pk))
+            .expect("build members");
     let r2 = submit_event(members, &creator_state)
         .await
         .expect("publish 39002");
@@ -218,9 +219,14 @@ async fn serverless_create_join_roundtrip() {
     joiner_state.serverless.store(true, Ordering::Relaxed);
 
     // This is exactly what join_channel does in serverless mode.
-    serverless_set_members(&joiner_state, &channel_id, &[joiner_pk.clone()], &[])
-        .await
-        .expect("join (set members)");
+    serverless_set_members(
+        &joiner_state,
+        &channel_id,
+        std::slice::from_ref(&joiner_pk),
+        &[],
+    )
+    .await
+    .expect("join (set members)");
     eprintln!("joiner published updated membership");
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -262,4 +268,72 @@ async fn serverless_create_join_roundtrip() {
     );
 
     eprintln!("✅ roundtrip OK: create → join → both members visible");
+}
+
+#[tokio::test]
+#[ignore = "network: hits multiple public relays"]
+async fn serverless_multi_relay_fanout() {
+    use crate::app_state::build_app_state;
+    use crate::relay::{query_relay, submit_event};
+    use std::sync::atomic::Ordering;
+
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let keys = nostr::Keys::generate();
+    let pk = keys.public_key().to_hex();
+
+    // Two relays. Publish fans out to both; reads merge+dedup from both.
+    let relays = "wss://relay.damus.io,wss://nos.lol";
+
+    let state = build_app_state();
+    *state.keys.lock().unwrap() = keys.clone();
+    *state.relay_url_override.lock().unwrap() = Some(relays.to_string());
+    state.serverless.store(true, Ordering::Relaxed);
+
+    let channel_id = uuid::Uuid::new_v4().to_string();
+    let name = format!("multi-{}", &channel_id[..8]);
+
+    let meta =
+        events::build_channel_metadata_serverless(&channel_id, &name, "open", "stream", None, &[])
+            .unwrap();
+    let r = submit_event(meta, &state)
+        .await
+        .expect("publish to all relays");
+    eprintln!(
+        "multi-relay publish: accepted={} msg={}",
+        r.accepted, r.message
+    );
+    assert!(r.accepted);
+
+    let members =
+        events::build_channel_members_serverless(&channel_id, std::slice::from_ref(&pk)).unwrap();
+    submit_event(members, &state)
+        .await
+        .expect("publish members");
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Read across both relays — should find the channel, deduped to one event.
+    let metas = query_relay(
+        &state,
+        &[serde_json::json!({"kinds":[39000],"#d":[channel_id],"limit":10})],
+    )
+    .await
+    .expect("query metadata");
+    eprintln!("39000 (deduped across 2 relays): {} event(s)", metas.len());
+    assert_eq!(
+        metas.len(),
+        1,
+        "expected exactly one deduped metadata event"
+    );
+
+    let mems = serverless_current_members(&state, &channel_id)
+        .await
+        .expect("read members");
+    assert!(
+        mems.contains(&pk.to_ascii_lowercase()),
+        "membership not found across relays"
+    );
+
+    eprintln!("✅ multi-relay fanout OK: published to 2, read+deduped from 2");
 }

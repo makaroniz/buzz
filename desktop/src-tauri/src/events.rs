@@ -962,7 +962,7 @@ mod tests {
         // UI stuck on "join to participate". This guards that fix.
         let keys = Keys::generate();
         let me = keys.public_key().to_hex();
-        let event = build_channel_members_serverless("chan-self", &[me.clone()])
+        let event = build_channel_members_serverless("chan-self", std::slice::from_ref(&me))
             .unwrap()
             .sign_with_keys(&keys)
             .unwrap();
@@ -984,7 +984,7 @@ mod tests {
             "private",
             "dm",
             None,
-            &[me.clone()],
+            std::slice::from_ref(&me),
         )
         .unwrap()
         .sign_with_keys(&keys)

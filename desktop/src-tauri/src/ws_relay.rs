@@ -29,7 +29,40 @@ const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Execute one or more filters as a single `REQ` and collect matching events
 /// until the relay sends `EOSE`. Mirrors `relay::query_relay` but over a plain
 /// WebSocket against a generic relay.
+/// Query a set of relays concurrently and merge results, deduplicating events
+/// by id. Succeeds if any relay responds; errors only if all fail.
 pub async fn query_relay_ws(
+    state: &AppState,
+    relay_urls: &[String],
+    filters: &[serde_json::Value],
+) -> Result<Vec<nostr::Event>, String> {
+    let futures = relay_urls
+        .iter()
+        .map(|url| query_relay_ws_one(state, url, filters));
+    let results = futures_util::future::join_all(futures).await;
+
+    let mut by_id: std::collections::HashMap<String, nostr::Event> =
+        std::collections::HashMap::new();
+    let mut last_err = None;
+    let mut any_ok = false;
+    for r in results {
+        match r {
+            Ok(events) => {
+                any_ok = true;
+                for ev in events {
+                    by_id.entry(ev.id.to_hex()).or_insert(ev);
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    if !any_ok {
+        return Err(last_err.unwrap_or_else(|| "all relays failed".to_string()));
+    }
+    Ok(by_id.into_values().collect())
+}
+
+async fn query_relay_ws_one(
     state: &AppState,
     relay_url: &str,
     filters: &[serde_json::Value],
@@ -137,19 +170,41 @@ pub async fn query_relay_ws(
 
 /// Publish a signed event over a plain WebSocket and wait for the relay's
 /// `OK` acknowledgement. Mirrors `relay::submit_event`.
+/// Sign once, then publish to all relays. Succeeds if any relay accepts.
 pub async fn submit_event_ws(
     builder: EventBuilder,
     state: &AppState,
-    relay_url: &str,
+    relay_urls: &[String],
 ) -> Result<SubmitEventResponse, String> {
     let keys = {
         let guard = state.keys.lock().map_err(|e| e.to_string())?;
         guard.clone()
     };
-
     let event = builder
         .sign_with_keys(&keys)
         .map_err(|e| format!("failed to sign event: {e}"))?;
+
+    let futures = relay_urls
+        .iter()
+        .map(|url| submit_event_ws_one(&event, &keys, url));
+    let results = futures_util::future::join_all(futures).await;
+
+    let mut last_err = None;
+    for r in results {
+        match r {
+            Ok(resp) if resp.accepted => return Ok(resp),
+            Ok(resp) => last_err = Some(format!("relay rejected event: {}", resp.message)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "all relays failed".to_string()))
+}
+
+async fn submit_event_ws_one(
+    event: &nostr::Event,
+    keys: &nostr::Keys,
+    relay_url: &str,
+) -> Result<SubmitEventResponse, String> {
     let event_id = event.id.to_hex();
     let event_json = serde_json::json!(["EVENT", event]).to_string();
 
@@ -196,7 +251,7 @@ pub async fn submit_event_ws(
                 }
                 "AUTH" => {
                     if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                        if let Ok(auth_json) = build_auth_message(&keys, relay_url, challenge) {
+                        if let Ok(auth_json) = build_auth_message(keys, relay_url, challenge) {
                             let _ = write.send(Message::Text(auth_json.into())).await;
                             // Re-send the event after authenticating.
                             let _ = write.send(Message::Text(event_json.clone().into())).await;
@@ -238,6 +293,25 @@ pub async fn submit_event_ws(
 /// agent-profile sync, where the event is signed by the agent's keys rather
 /// than the user's identity key.
 pub async fn publish_signed_event_ws(
+    event: &nostr::Event,
+    keys: &nostr::Keys,
+    relay_urls: &[String],
+) -> Result<(), String> {
+    let futures = relay_urls
+        .iter()
+        .map(|url| publish_signed_event_ws_one(event, keys, url));
+    let results = futures_util::future::join_all(futures).await;
+    let mut last_err = None;
+    for r in results {
+        match r {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "all relays failed".to_string()))
+}
+
+async fn publish_signed_event_ws_one(
     event: &nostr::Event,
     keys: &nostr::Keys,
     relay_url: &str,

@@ -7,6 +7,9 @@ import { Input } from "@/shared/ui/input";
 import {
   DEFAULT_PUBLIC_RELAYS,
   DEFAULT_SERVERLESS_RELAY,
+  normalizeRelayList,
+  relayListIncludes,
+  toggleRelayInList,
 } from "../defaultRelays";
 import { initFirstWorkspace, deriveWorkspaceName } from "../workspaceStorage";
 
@@ -55,7 +58,7 @@ export function WelcomeSetup({
       // is the single source of truth — never copied into localStorage.
       const identity = await getIdentity();
       initFirstWorkspace(
-        trimmedUrl,
+        serverless ? normalizeRelayList(trimmedUrl) : trimmedUrl,
         identity.pubkey,
         serverless ? "serverless" : "sprout",
       );
@@ -130,21 +133,34 @@ export function WelcomeSetup({
                 value={relayUrl}
               />
               {serverless ? (
-                <div className="flex flex-wrap gap-1.5 pt-0.5">
-                  {DEFAULT_PUBLIC_RELAYS.map((relay) => (
-                    <button
-                      className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
-                      key={relay}
-                      onClick={() => {
-                        setRelayUrl(relay);
-                        setError(null);
-                      }}
-                      type="button"
-                    >
-                      {relay.replace("wss://", "")}
-                    </button>
-                  ))}
-                </div>
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Connects to all listed relays for redundancy. Tap to
+                    add/remove.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {DEFAULT_PUBLIC_RELAYS.map((relay) => {
+                      const selected = relayListIncludes(relayUrl, relay);
+                      return (
+                        <button
+                          className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                            selected
+                              ? "border-primary bg-primary/15 text-foreground"
+                              : "border-border bg-muted/40 text-muted-foreground hover:border-primary/60 hover:text-foreground"
+                          }`}
+                          key={relay}
+                          onClick={() => {
+                            setRelayUrl(toggleRelayInList(relayUrl, relay));
+                            setError(null);
+                          }}
+                          type="button"
+                        >
+                          {relay.replace("wss://", "")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
               ) : null}
             </div>
           ) : null}
