@@ -255,7 +255,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message rounded-2xl px-2 py-1.5 transition-colors",
+            "group/message animate-in fade-in-0 slide-in-from-bottom-1 rounded-2xl px-2 py-1.5 transition-colors",
             isThreadReplyLayout ? "space-y-1.5" : "flex items-start gap-2.5",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
           )}
