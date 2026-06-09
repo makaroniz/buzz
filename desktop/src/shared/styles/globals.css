@@ -230,7 +230,7 @@
  * composer height stays static until additional items are added.
  */
 .rich-text-composer .tiptap {
-  @apply text-sm leading-7 outline-none;
+  @apply text-sm leading-7 text-foreground/90 outline-none;
   min-height: 1.75rem; /* one line at leading-7 (28px) */
 }
 
@@ -271,9 +271,11 @@
   @apply mt-4;
 }
 
-/* Lists immediately after a paragraph hug a little tighter. */
+/* Lists immediately after a paragraph or block-media div hug a little tighter. */
 .rich-text-composer .tiptap > p + ul,
-.rich-text-composer .tiptap > p + ol {
+.rich-text-composer .tiptap > p + ol,
+.rich-text-composer .tiptap > div + ul,
+.rich-text-composer .tiptap > div + ol {
   @apply mt-1.5;
 }
 
@@ -330,8 +332,13 @@
 }
 .rich-text-composer .tiptap pre code {
   /* Mirrors CODE_BLOCK_CLASS in markdown.tsx so a pasted/markdown-rendered
-   * code block looks identical in the composer and in the timeline. */
-  @apply block min-w-full whitespace-pre rounded-none bg-transparent p-0 font-mono text-[13px] leading-6 text-foreground;
+   * code block looks identical in the composer and in the timeline. The
+   * `code-block-lines` marker class from CODE_BLOCK_CLASS is intentionally
+   * omitted — its rules (lines ~478-498 of this file) only target
+   * `[data-line]` children produced by Shiki tokenization, which the
+   * composer never has. The class is also a custom CSS class, not a
+   * Tailwind utility, so `@apply code-block-lines` won't compile. */
+  @apply block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground;
 }
 
 /* Blockquote. */
@@ -378,6 +385,26 @@
 /* Horizontal rule. */
 .rich-text-composer .tiptap hr {
   @apply border-border/80;
+}
+
+/* Tables. Timeline wraps the <table> in a `data-table-block` div with the
+ * overflow/border/rounded chrome; TipTap's StarterKit has no table extension,
+ * so a real table would only appear via raw HTML paste. We mirror the
+ * timeline tokens defensively — chrome applied directly to the <table>
+ * (overflow-x-auto requires a block-display container we can't add here
+ * without a NodeView, so it's intentionally omitted). */
+.rich-text-composer .tiptap table {
+  @apply w-full border-collapse rounded-2xl border border-border/70 text-left text-sm;
+}
+.rich-text-composer .tiptap td {
+  @apply border-t border-border/70 px-3 py-2 align-top;
+}
+.rich-text-composer .tiptap th {
+  @apply bg-muted/60 px-3 py-2 font-semibold text-foreground;
+}
+.rich-text-composer .tiptap > * + table,
+.rich-text-composer .tiptap > table + * {
+  @apply mt-3.5;
 }
 
 .rich-text-composer .tiptap .mention-highlight {
