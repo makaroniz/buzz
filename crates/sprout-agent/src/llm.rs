@@ -36,13 +36,17 @@ pub struct Llm {
     /// Databricks otherwise. Anthropic doesn't use this — it always
     /// reads `cfg.api_key` directly because the API expects `x-api-key`.
     auth: Arc<dyn TokenSource>,
+    /// Max gap allowed between response-body chunks. Enforced per
+    /// `chunk()` poll rather than as a total request deadline, so a
+    /// slow-but-progressing completion survives arbitrarily long while a
+    /// connection that goes silent mid-body is torn down promptly.
+    chunk_timeout: std::time::Duration,
 }
 
 impl Llm {
     pub fn new(cfg: &Config) -> Result<Self, AgentError> {
         let http = Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(cfg.llm_timeout)
+            .connect_timeout(cfg.llm_timeout)
             .build()
             .map_err(|e| AgentError::Llm(format!("http: {e}")))?;
         let auth = build_token_source(cfg)?;
@@ -50,6 +54,7 @@ impl Llm {
             http,
             auto_upgraded: AtomicBool::new(false),
             auth,
+            chunk_timeout: cfg.llm_stream_chunk_timeout,
         })
     }
 
@@ -142,7 +147,7 @@ impl Llm {
 
     async fn post_anthropic(&self, cfg: &Config, body: &Value) -> Result<Value, AgentError> {
         let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-        post(&self.http, &url, body, |r| {
+        post(&self.http, &url, body, self.chunk_timeout, |r| {
             r.header("x-api-key", &cfg.api_key)
                 .header("anthropic-version", &cfg.anthropic_api_version)
         })
@@ -204,7 +209,10 @@ impl Llm {
                 body
             }
         };
-        post(&self.http, &url, body_ref, |r| r.bearer_auth(&bearer)).await
+        post(&self.http, &url, body_ref, self.chunk_timeout, |r| {
+            r.bearer_auth(&bearer)
+        })
+        .await
     }
 
     /// If `err` names `/v1/responses` / "use the Responses API", latch a
@@ -772,7 +780,13 @@ fn is_retryable_transport_error(e: &reqwest::Error) -> bool {
     e.is_timeout() || e.is_connect() || e.is_request()
 }
 
-async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
+async fn post<F>(
+    http: &Client,
+    url: &str,
+    body: &Value,
+    chunk_timeout: std::time::Duration,
+    apply: F,
+) -> Result<Value, AgentError>
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
@@ -832,7 +846,32 @@ where
         let mut buf: Vec<u8> = Vec::new();
         let mut stream = resp;
         loop {
-            match stream.chunk().await {
+            // Per-chunk deadline: a stall between body chunks means the
+            // provider connection went silent mid-response. Bounding each
+            // poll (instead of the whole request) lets a slow-but-progressing
+            // completion run arbitrarily long while still tearing down a
+            // dead connection. A stall is transport-class, so retry the whole
+            // request when attempts remain, then surface a clear error.
+            let next = match tokio::time::timeout(chunk_timeout, stream.chunk()).await {
+                Ok(r) => r,
+                Err(_) => {
+                    if attempt + 1 < MAX_RETRIES {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRIES,
+                            timeout_secs = chunk_timeout.as_secs(),
+                            "llm: response body stalled between chunks, retrying"
+                        );
+                        backoff_with_jitter(attempt).await;
+                        break;
+                    }
+                    return Err(AgentError::Llm(format!(
+                        "response body stalled: no chunk within {}s",
+                        chunk_timeout.as_secs()
+                    )));
+                }
+            };
+            match next {
                 Ok(Some(chunk)) => {
                     if buf.len() + chunk.len() > MAX_LLM_RESPONSE_BYTES {
                         return Err(AgentError::Llm(format!(
@@ -841,11 +880,13 @@ where
                     }
                     buf.extend_from_slice(&chunk);
                 }
-                Ok(None) => break,
+                Ok(None) => {
+                    return serde_json::from_slice(&buf)
+                        .map_err(|e| AgentError::Llm(format!("json: {e}")));
+                }
                 Err(e) => return Err(AgentError::Llm(format!("read: {e}"))),
             }
         }
-        return serde_json::from_slice(&buf).map_err(|e| AgentError::Llm(format!("json: {e}")));
     }
     Err(AgentError::Llm("exhausted retries".into()))
 }
@@ -916,6 +957,7 @@ mod tests {
             max_rounds: 10,
             max_output_tokens: 1024,
             llm_timeout: Duration::from_secs(10),
+            llm_stream_chunk_timeout: Duration::from_secs(120),
             tool_timeout: Duration::from_secs(10),
             mcp_init_timeout: Duration::from_secs(10),
             mcp_max_restart_attempts: 1,
@@ -1342,15 +1384,138 @@ mod tests {
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        let out = post(&client, &url, &serde_json::json!({}), |b| b)
-            .await
-            .expect("post should succeed after retry");
+        let out = post(
+            &client,
+            &url,
+            &serde_json::json!({}),
+            Duration::from_secs(5),
+            |b| b,
+        )
+        .await
+        .expect("post should succeed after retry");
         assert_eq!(out, serde_json::json!({ "ok": true }));
         assert!(
             accepts.load(Ordering::SeqCst) >= 2,
             "server should have seen at least 2 connection attempts, saw {}",
             accepts.load(Ordering::SeqCst)
         );
+    }
+
+    /// A response that stops sending chunks mid-body (stalls longer than the
+    /// chunk timeout) should be retried and eventually surface a clear error
+    /// if all retries exhaust.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_times_out_on_stalled_response_body() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                accepts_srv.fetch_add(1, Ordering::SeqCst);
+                // Handle each connection in its own task so a stalled
+                // response never blocks accepting the next retry.
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                        }
+                    }
+                    // Send headers with chunked encoding, write one chunk, then stall.
+                    let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                   Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                    let _ = sock.write_all(headers.as_bytes()).await;
+                    // Send a partial chunk then go silent.
+                    let _ = sock.write_all(b"4\r\n{\"ok\r\n").await;
+                    let _ = sock.flush().await;
+                    // Hold the connection open but never send more data. Just
+                    // longer than the chunk timeout so the client's per-chunk
+                    // deadline fires; no need to outlast the whole retry budget.
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                });
+            }
+        });
+
+        // Disable idle-connection reuse so each retry opens a fresh socket
+        // instead of waiting on the stalled one still draining in the pool.
+        let client = Client::builder().pool_max_idle_per_host(0).build().unwrap();
+        // Very short chunk timeout so the test runs fast.
+        let chunk_timeout = Duration::from_millis(100);
+        let err = post(&client, &url, &serde_json::json!({}), chunk_timeout, |b| b)
+            .await
+            .unwrap_err();
+        // Should surface a stall error after exhausting retries.
+        match err {
+            AgentError::Llm(msg) => {
+                assert!(msg.contains("stalled"), "expected stall error, got: {msg}")
+            }
+            other => panic!("expected AgentError::Llm, got: {other:?}"),
+        }
+        // All retry attempts should have been used.
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            MAX_RETRIES,
+            "should have attempted all retries"
+        );
+    }
+
+    /// A slow-but-progressing response (chunks arrive within the timeout)
+    /// should succeed regardless of total elapsed time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_succeeds_with_slow_but_progressing_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match sock.read(&mut tmp).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                }
+            }
+            // Chunked response: send the JSON body in small pieces with delays
+            // that are within the chunk timeout.
+            let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                           Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+            let _ = sock.write_all(headers.as_bytes()).await;
+            // Split `{"ok":true}` across multiple chunks with delays.
+            for piece in ["{\"ok\"", ":tru", "e}"] {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                let chunk = format!("{:x}\r\n{}\r\n", piece.len(), piece);
+                let _ = sock.write_all(chunk.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+            // Terminating chunk.
+            let _ = sock.write_all(b"0\r\n\r\n").await;
+            let _ = sock.shutdown().await;
+        });
+
+        let client = Client::builder().build().unwrap();
+        // Chunk timeout is longer than the inter-chunk delay, so this should succeed.
+        let chunk_timeout = Duration::from_millis(200);
+        let out = post(&client, &url, &serde_json::json!({}), chunk_timeout, |b| b)
+            .await
+            .expect("slow-but-progressing response should succeed");
+        assert_eq!(out, serde_json::json!({ "ok": true }));
     }
 
     // ---- usage / input-token extraction -------------------------------------
