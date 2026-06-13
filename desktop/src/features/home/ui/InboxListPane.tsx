@@ -1,11 +1,15 @@
 import { ChevronDown, Inbox } from "lucide-react";
+import type * as React from "react";
 
 import {
   formatInboxTypeLabel,
   type InboxFilter,
   type InboxItem,
 } from "@/features/home/lib/inbox";
-import { topChromeInset } from "@/shared/layout/chromeLayout";
+import {
+  insetHeaderOverlay,
+  topChromeInset,
+} from "@/shared/layout/chromeLayout";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -30,6 +34,8 @@ const FILTER_OPTIONS: Array<{ label: string; value: InboxFilter }> = [
 type InboxListPaneProps = {
   doneSet: ReadonlySet<string>;
   filter: InboxFilter;
+  /** Measured ref wiring the header height to the shared backdrop strip. */
+  headerChromeRef?: React.Ref<HTMLDivElement>;
   items: InboxItem[];
   onFilterChange: (filter: InboxFilter) => void;
   onSelect: (itemId: string) => void;
@@ -40,6 +46,7 @@ type InboxListPaneProps = {
 export function InboxListPane({
   doneSet,
   filter,
+  headerChromeRef,
   items,
   onFilterChange,
   onSelect,
@@ -55,7 +62,11 @@ export function InboxListPane({
         showRightDivider && topChromeInset.verticalDivider,
       )}
     >
-      <TopChromeInsetHeader>
+      <TopChromeInsetHeader
+        className={insetHeaderOverlay.negativeMargin}
+        ref={headerChromeRef}
+        transparent
+      >
         <div className="px-5 py-1">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-[6px]">
@@ -99,7 +110,10 @@ export function InboxListPane({
       </TopChromeInsetHeader>
 
       <div
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto overscroll-contain",
+          insetHeaderOverlay.contentPadding,
+        )}
         data-testid="home-inbox-list"
       >
         {items.length === 0 ? (

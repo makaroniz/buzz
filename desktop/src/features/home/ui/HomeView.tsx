@@ -40,7 +40,12 @@ import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
 import type { HomeFeedResponse } from "@/shared/api/types";
 import { KIND_REACTION } from "@/shared/constants/kinds";
-import { topChromeInset } from "@/shared/layout/chromeLayout";
+import {
+  insetHeaderHeightMeasurement,
+  insetHeaderOverlay,
+  topChromeInset,
+} from "@/shared/layout/chromeLayout";
+import { useMeasuredCssVariable } from "@/shared/layout/useMeasuredCssVariable";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { useElementWidth } from "@/shared/hooks/use-mobile";
@@ -68,6 +73,12 @@ export function HomeView({
   onRefresh,
 }: HomeViewProps) {
   const [homeInboxRef, homeInboxWidthPx] = useElementWidth<HTMLDivElement>();
+  // One pane header drives the shared backdrop strip height so the blur is a
+  // single element spanning both columns instead of clipping per pane.
+  const headerChromeRef = useMeasuredCssVariable({
+    targetRef: homeInboxRef,
+    ...insetHeaderHeightMeasurement,
+  });
   const isNarrowHomeViewport =
     homeInboxWidthPx > 0 &&
     homeInboxWidthPx < INBOX_SINGLE_COLUMN_BREAKPOINT_PX;
@@ -348,10 +359,13 @@ export function HomeView({
           } as React.CSSProperties
         }
       >
+        <div aria-hidden className={insetHeaderOverlay.backdrop} />
+
         {showListPane ? (
           <InboxListPane
             doneSet={effectiveDoneSet}
             filter={filter}
+            headerChromeRef={headerChromeRef}
             items={filteredItems}
             onFilterChange={setFilter}
             onSelect={(itemId) => {
@@ -398,6 +412,7 @@ export function HomeView({
             contextChannelName={selectedChannel?.name ?? null}
             currentPubkey={currentPubkey}
             disabledReplyReason={disabledReplyReason}
+            headerChromeRef={showListPane ? undefined : headerChromeRef}
             isDeletingMessage={isDeletingMessage}
             isDone={
               selectedItem ? effectiveDoneSet.has(selectedItem.id) : false

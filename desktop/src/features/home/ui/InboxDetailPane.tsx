@@ -24,6 +24,7 @@ import type { TimelineMessage } from "@/features/messages/types";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import type { Channel } from "@/shared/api/types";
+import { insetHeaderOverlay } from "@/shared/layout/chromeLayout";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -46,6 +47,8 @@ type InboxDetailPaneProps = {
   canOpenChannel: boolean;
   canReply: boolean;
   disabledReplyReason?: string | null;
+  /** Measured ref wiring the header height to the shared backdrop strip. */
+  headerChromeRef?: React.Ref<HTMLDivElement>;
   isDone: boolean;
   isDeletingMessage?: boolean;
   isSendingReply?: boolean;
@@ -80,6 +83,7 @@ export function InboxDetailPane({
   canOpenChannel,
   canReply,
   disabledReplyReason,
+  headerChromeRef,
   isDone,
   isDeletingMessage = false,
   isSendingReply = false,
@@ -234,7 +238,11 @@ export function InboxDetailPane({
       ref={detailPaneRef}
     >
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        <TopChromeInsetHeader>
+        <TopChromeInsetHeader
+          className={insetHeaderOverlay.negativeMargin}
+          ref={headerChromeRef}
+          transparent
+        >
           <div className="px-5 py-1 pr-3">
             <div className="flex min-w-0 items-center justify-between gap-3">
               <div
@@ -316,7 +324,12 @@ export function InboxDetailPane({
           </div>
         </TopChromeInsetHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-32">
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto overscroll-contain pb-32",
+            insetHeaderOverlay.contentPadding,
+          )}
+        >
           <div>
             {isThreadContextLoading ? (
               <div className="px-6 pb-3 text-[11px] text-muted-foreground">
