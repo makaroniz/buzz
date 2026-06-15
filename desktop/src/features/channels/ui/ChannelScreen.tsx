@@ -58,7 +58,10 @@ import {
   mergeAgentNamesIntoProfiles,
   useChannelActivityTyping,
 } from "./useChannelActivityTyping";
-import { useChannelAgentSessions } from "./useChannelAgentSessions";
+import {
+  buildChannelAgentSessionCandidates,
+  useChannelAgentSessions,
+} from "./useChannelAgentSessions";
 import { useChannelProfilePanel } from "./useChannelProfilePanel";
 import { useChannelRouteTarget } from "./useChannelRouteTarget";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
@@ -218,6 +221,15 @@ export function ChannelScreen({
     }
     return pubkeys;
   }, [channelMembers, managedAgents, relayAgents]);
+  const allAgentSessionCandidates = React.useMemo(
+    () =>
+      buildChannelAgentSessionCandidates({
+        channelMembers,
+        managedAgents,
+        relayAgents,
+      }),
+    [channelMembers, managedAgents, relayAgents],
+  );
   const {
     botTypingEntries,
     channelAgentSessionAgents: activeChannelAgentSessionAgents,
@@ -406,14 +418,15 @@ export function ChannelScreen({
     channelAgentSessionAgents,
     closeAgentSession: handleCloseAgentSession,
     openAgentSession: handleOpenAgentSession,
+    openAgentSessionAgent,
     openAgentSessionPubkey,
     openThreadAndCloseAgentSession: handleOpenThreadAndCloseAgentSession,
   } = useChannelAgentSessions({
     activeChannel,
     activeChannelId,
+    agentCandidates: allAgentSessionCandidates,
     channelMembers,
     handleOpenThread,
-    managedAgents: activeChannelAgentSessionAgents,
     setExpandedThreadReplyIds,
     setOpenThreadHeadId,
     setProfilePanelPubkey,
@@ -638,6 +651,7 @@ export function ChannelScreen({
                   }
                   onThreadPanelResizeStart={handleThreadPanelResizeStart}
                   onToggleReaction={effectiveToggleReaction}
+                  openAgentSessionAgent={openAgentSessionAgent}
                   openAgentSessionPubkey={openAgentSessionPubkey}
                   openThreadHeadId={openThreadHeadId}
                   profilePanelPubkey={profilePanelPubkey}

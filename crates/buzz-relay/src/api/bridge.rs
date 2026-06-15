@@ -24,7 +24,7 @@ use super::{api_error, internal_error, not_found};
 ///
 /// Returns the authenticated public key and an event ID for replay detection.
 /// For X-Pubkey dev mode, the event ID is a zero hash (no replay concern).
-fn verify_bridge_auth(
+pub(crate) fn verify_bridge_auth(
     headers: &HeaderMap,
     method: &str,
     url: &str,
@@ -73,7 +73,7 @@ fn verify_bridge_auth(
 ///
 /// Uses moka's `entry` API for atomic insert-if-absent — no race window
 /// between "check if seen" and "mark as seen".
-fn check_nip98_replay(
+pub(crate) fn check_nip98_replay(
     state: &AppState,
     event_id_bytes: [u8; 32],
 ) -> Result<(), (StatusCode, Json<Value>)> {
@@ -95,7 +95,7 @@ fn check_nip98_replay(
 }
 
 /// Reconstruct the canonical URL for NIP-98 verification from the relay config.
-fn canonical_url(relay_url: &str, path: &str) -> String {
+pub(crate) fn canonical_url(relay_url: &str, path: &str) -> String {
     let base = relay_url
         .trim()
         .trim_end_matches('/')

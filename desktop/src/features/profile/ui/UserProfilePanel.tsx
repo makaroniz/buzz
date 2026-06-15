@@ -6,6 +6,7 @@ import {
   useAgentMemoryQuery,
   useIsManagedAgent,
 } from "@/features/agent-memory/hooks";
+import { useCanViewAgentActivity } from "@/features/agents/hooks/useCanViewAgentActivity";
 import { MemoryRefreshButton } from "@/features/agent-memory/ui/MemorySection";
 import {
   useRelayAgentsQuery,
@@ -178,6 +179,9 @@ export function UserProfilePanel({
   );
   const isBot = Boolean(relayAgent || managedAgent);
   const isOwner = useIsManagedAgent(isBot ? pubkey : null);
+  const { canView: canViewActivity } = useCanViewAgentActivity(pubkey, {
+    enabled: Boolean(onOpenAgentSession),
+  });
 
   // Populate the active-turns store for this agent so useActiveAgentTurns works
   // even if the Agents page hasn't been visited yet.
@@ -196,7 +200,6 @@ export function UserProfilePanel({
   });
   const isSelf =
     currentPubkey !== undefined && pubkeyLower === currentPubkey.toLowerCase();
-  const canViewActivity = isOwner === true && Boolean(onOpenAgentSession);
   const isFollowing =
     !isSelf &&
     (contactListQuery.data?.contacts.some(
@@ -317,7 +320,7 @@ export function UserProfilePanel({
       {view === "summary" ? (
         <ProfileSummaryView
           canEditAgent={canEditAgent}
-          canViewActivity={canViewActivity}
+          canViewActivity={canViewActivity && Boolean(onOpenAgentSession)}
           channelCount={profileChannels.length}
           channelIdToName={channelIdToName}
           channelsLoading={channelsQuery.isLoading}

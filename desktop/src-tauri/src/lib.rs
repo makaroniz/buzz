@@ -749,6 +749,7 @@ pub fn run() {
             unarchive_identity,
             list_archived_identities,
             resolve_oa_owner,
+            resolve_agent_ownership,
             list_relay_agents,
             list_managed_agents,
             create_managed_agent,

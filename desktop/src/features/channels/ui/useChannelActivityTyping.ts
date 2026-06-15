@@ -12,7 +12,7 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   buildChannelAgentSessionCandidates,
   getChannelAgentSessionAgents,
-} from "./useChannelAgentSessions";
+} from "../lib/agentSessionCandidates";
 
 export function useChannelActivityTyping({
   activeChannel,

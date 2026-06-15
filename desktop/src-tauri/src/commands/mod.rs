@@ -1,5 +1,6 @@
 mod agent_discovery;
 mod agent_models;
+mod agent_ownership;
 mod agent_settings;
 mod agents;
 mod canvas;
@@ -29,6 +30,7 @@ mod workspace;
 
 pub use agent_discovery::*;
 pub use agent_models::*;
+pub use agent_ownership::*;
 pub use agent_settings::*;
 pub use agents::*;
 pub use canvas::*;

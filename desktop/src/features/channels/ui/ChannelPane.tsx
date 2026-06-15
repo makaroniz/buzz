@@ -119,6 +119,7 @@ type ChannelPaneProps = {
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
   openThreadHeadId: string | null;
+  openAgentSessionAgent: ChannelAgentSessionAgent | null;
   openAgentSessionPubkey: string | null;
   profilePanelPubkey?: string | null;
   threadHeadMessage: TimelineMessage | null;
@@ -241,6 +242,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   personaLookup,
   profiles,
   openThreadHeadId,
+  openAgentSessionAgent,
   openAgentSessionPubkey,
   profilePanelPubkey,
   targetMessageId,
@@ -597,16 +599,7 @@ export const ChannelPane = React.memo(function ChannelPane({
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
-
-  const selectedAgent = React.useMemo(
-    () =>
-      openAgentSessionPubkey
-        ? (agentSessionAgents.find(
-            (agent) => agent.pubkey === openAgentSessionPubkey,
-          ) ?? null)
-        : null,
-    [agentSessionAgents, openAgentSessionPubkey],
-  );
+  const selectedAgent = openAgentSessionAgent;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       {!isSinglePanelView ? (

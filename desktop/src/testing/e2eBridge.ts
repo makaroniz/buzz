@@ -85,6 +85,8 @@ type E2eConfig = {
     // - `resetMockRelayMembers` (relayRole)
     archivedIdentities?: string[];
     oaOwnerIsMe?: boolean;
+    /** Drives `resolve_agent_ownership` for activity visibility gates. */
+    agentOwnerIsMe?: boolean;
     relayRole?: "owner" | "admin" | "member" | null;
     // Descriptors returned by the mocked `pick_and_upload_media` /
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
@@ -6561,6 +6563,20 @@ export function maybeInstallE2eTauriMocks() {
           ? (identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey)
           : "ff".repeat(32);
         return { owner, is_me: isMe };
+      }
+      case "resolve_agent_ownership": {
+        const agentPubkey =
+          (payload as { agentPubkey?: string }).agentPubkey?.toLowerCase() ??
+          "aa".repeat(32);
+        const isOwner = activeConfig?.mock?.agentOwnerIsMe ?? false;
+        const owner = isOwner
+          ? (identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey)
+          : "ff".repeat(32);
+        return {
+          agent_pubkey: agentPubkey,
+          owner_pubkey: owner,
+          is_owner: isOwner,
+        };
       }
       case "list_archived_identities": {
         const archived = activeConfig?.mock?.archivedIdentities ?? [];

@@ -281,6 +281,32 @@ pub async fn query_relay_at(
     parse_json_response(response).await
 }
 
+// ── HTTP bridge: GET (JSON) ─────────────────────────────────────────────────
+
+/// Execute an authenticated GET against the relay HTTP API and deserialize JSON.
+pub async fn get_relay_json<T: DeserializeOwned>(
+    state: &AppState,
+    method: Method,
+    url: &str,
+    body: &[u8],
+) -> Result<T, String> {
+    let auth = build_nip98_auth_header(&method, url, body, state)?;
+
+    let response = state
+        .http_client
+        .request(method, url)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .map_err(|e| classify_request_error(&e))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    parse_json_response(response).await
+}
+
 // ── Command response parsing ────────────────────────────────────────────────
 
 /// Parse a command-event OK message of the form `"response:<json>"`.

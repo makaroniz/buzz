@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Activity } from "lucide-react";
 
+import { useCanViewAgentActivity } from "@/features/agents/hooks/useCanViewAgentActivity";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import {
   useRelayAgentsQuery,
@@ -86,11 +87,14 @@ export function UserProfilePopover({
 
   const { onOpenAgentSession } = useAgentSession();
   const { openProfilePanel } = useProfilePanel();
+  const { canView: canViewActivity } = useCanViewAgentActivity(
+    open ? pubkey : null,
+    { enabled: open && Boolean(onOpenAgentSession) },
+  );
   const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
   const managedAgent = managedAgentsQuery.data?.find(
     (a) => a.pubkey === pubkey,
   );
-  const canViewActivity = role === "bot" && Boolean(onOpenAgentSession);
   const profile = profileQuery.data;
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
   const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
@@ -274,7 +278,7 @@ export function UserProfilePopover({
             </p>
           ) : null}
 
-          {canViewActivity ? (
+          {canViewActivity && onOpenAgentSession ? (
             <button
               className="flex w-full items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-muted/50"
               data-testid={`user-profile-view-activity-${pubkey}`}
