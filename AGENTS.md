@@ -412,6 +412,27 @@ just desktop-dev   # web-only dev server (faster iteration)
 just dev           # full Tauri app with native shell
 ```
 
+### Text sizing & zoom (use rem, never px)
+
+The desktop app implements Cmd +/- zoom by scaling the root `<html>`
+font-size (`desktop/src/app/useWebviewZoomShortcuts.ts`) and pinning the native
+webview zoom. **Only rem-based text scales with zoom — hardcoded px text sizes
+are frozen.**
+
+So for any readable text, reach for rem-based Tailwind tokens, never arbitrary
+px:
+
+- ✅ `text-chat` (chat body/author, 15px in rem), `text-code` (inline/block
+  code, 13px in rem), or a stock token (`text-sm`, `text-base`, …). Tokens live
+  in `desktop/tailwind.config.js` under `theme.extend.fontSize`.
+- ❌ `text-[15px]`, `text-[13px]`, or CSS `font-size: 15px`. These opted out of
+  zoom and caused the message-timeline regression (PR #891).
+
+If a design needs a size between stock tokens (e.g. 15px sits between `text-sm`
+14px and `text-base` 16px), **add a rem-based token** rather than an arbitrary
+px value. A CI guard (`pnpm check:px-text`, in `desktop/scripts/check-px-text.mjs`)
+fails on new px text in the message-timeline / thread render path.
+
 ### Workspace Switching
 
 The desktop app supports multiple workspaces (each backed by a different relay).

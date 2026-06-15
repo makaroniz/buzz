@@ -615,7 +615,8 @@
   border-radius: 4px;
   background: hsl(var(--primary) / 0.15);
   padding: 3px 4px 2px;
-  font-size: 15px;
+  /* 0.9375rem === 15px; rem so it scales with the root-font-size zoom. */
+  font-size: 0.9375rem;
   line-height: 1;
   color: hsl(var(--primary));
   font-weight: 500;
