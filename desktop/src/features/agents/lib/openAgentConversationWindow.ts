@@ -1,5 +1,6 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
+import type { ObserverEvent } from "@/features/agents/ui/agentSessionTypes";
 import type { ChannelType, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -10,6 +11,7 @@ export type OpenAgentConversationWindowInput = {
   channelId: string;
   channelName: string;
   channelType: ChannelType | null;
+  observerEvents?: readonly ObserverEvent[];
 };
 
 const DEFAULT_WIDTH = 460;
@@ -29,6 +31,28 @@ function windowLabel(channelId: string, agentPubkey: string): string {
   );
 }
 
+export function agentConversationSeedStorageKey(
+  channelId: string,
+  agentPubkey: string,
+): string {
+  return `buzz:agent-window-seed:${windowLabel(channelId, agentPubkey)}`;
+}
+
+function writeObserverSeed(input: OpenAgentConversationWindowInput) {
+  if (!input.observerEvents?.length) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    agentConversationSeedStorageKey(input.channelId, input.agentPubkey),
+    JSON.stringify({
+      agentPubkey: input.agentPubkey,
+      events: input.observerEvents,
+      writtenAt: Date.now(),
+    }),
+  );
+}
+
 /**
  * Open (or focus) a real OS window hosting the agent's live activity log and a
  * composer to chat with it. The window loads the same frontend at the
@@ -39,6 +63,7 @@ export async function openAgentConversationWindow(
   input: OpenAgentConversationWindowInput,
 ): Promise<void> {
   const label = windowLabel(input.channelId, input.agentPubkey);
+  writeObserverSeed(input);
 
   const existing = await WebviewWindow.getByLabel(label);
   if (existing) {

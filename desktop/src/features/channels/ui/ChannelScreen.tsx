@@ -18,7 +18,10 @@ import {
   usePersonasQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
-import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
+import {
+  getAgentObserverSnapshot,
+  useManagedAgentObserverBridge,
+} from "@/features/agents/observerRelayStore";
 import { openAgentConversationWindow } from "@/features/agents/lib/openAgentConversationWindow";
 import {
   mergeMessages,
@@ -440,6 +443,7 @@ export function ChannelScreen({
         channelId: activeChannel.id,
         channelName: activeChannel.name,
         channelType: activeChannel.channelType,
+        observerEvents: getAgentObserverSnapshot(agent.pubkey, true).events,
       });
     },
     [activeChannel, channelAgentSessionAgents],

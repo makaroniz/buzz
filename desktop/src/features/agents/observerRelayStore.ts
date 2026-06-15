@@ -272,6 +272,15 @@ export function getAgentTranscript(
   return state?.items ?? EMPTY_TRANSCRIPT;
 }
 
+export function seedAgentObserverEvents(
+  agentPubkey: string,
+  events: readonly ObserverEvent[],
+) {
+  for (const event of events) {
+    appendAgentEvent(agentPubkey, event);
+  }
+}
+
 export function useManagedAgentObserverBridge(
   agents: readonly Pick<ManagedAgent, "pubkey" | "status">[],
 ) {

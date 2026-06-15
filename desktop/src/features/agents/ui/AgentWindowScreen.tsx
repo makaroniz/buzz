@@ -11,7 +11,11 @@ import {
   useActiveAgentTurnsBridge,
 } from "@/features/agents/activeAgentTurnsStore";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
+import { agentConversationSeedStorageKey } from "@/features/agents/lib/openAgentConversationWindow";
+import {
+  seedAgentObserverEvents,
+  useManagedAgentObserverBridge,
+} from "@/features/agents/observerRelayStore";
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { mergeAgentNamesIntoProfiles } from "@/features/channels/ui/useChannelActivityTyping";
@@ -27,6 +31,7 @@ import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import type { ObserverEvent } from "./agentSessionTypes";
 
 type AgentWindowScreenProps = {
   channelId: string;
@@ -35,6 +40,22 @@ type AgentWindowScreenProps = {
   initialChannelName: string;
   channelType: ChannelType | null;
 };
+
+type ObserverSeedPayload = {
+  agentPubkey?: unknown;
+  events?: unknown;
+};
+
+function parseObserverSeed(raw: string): ObserverEvent[] | null {
+  try {
+    const parsed = JSON.parse(raw) as ObserverSeedPayload;
+    return Array.isArray(parsed.events)
+      ? (parsed.events as ObserverEvent[])
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Chrome-less conversation view that fills its own OS window (opened via
@@ -50,6 +71,43 @@ export function AgentWindowScreen({
   channelType,
 }: AgentWindowScreenProps) {
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
+  const seedStorageKey = React.useMemo(
+    () => agentConversationSeedStorageKey(channelId, agentPubkey),
+    [channelId, agentPubkey],
+  );
+
+  const applyObserverSeed = React.useCallback(
+    (raw: string | null) => {
+      if (!raw) {
+        return;
+      }
+      const events = parseObserverSeed(raw);
+      if (!events?.length) {
+        return;
+      }
+      seedAgentObserverEvents(agentPubkey, events);
+    },
+    [agentPubkey],
+  );
+
+  React.useEffect(() => {
+    applyObserverSeed(window.localStorage.getItem(seedStorageKey));
+    window.localStorage.removeItem(seedStorageKey);
+
+    function handleStorage(event: StorageEvent) {
+      if (
+        event.storageArea !== window.localStorage ||
+        event.key !== seedStorageKey
+      ) {
+        return;
+      }
+      applyObserverSeed(event.newValue);
+      window.localStorage.removeItem(seedStorageKey);
+    }
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [applyObserverSeed, seedStorageKey]);
 
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
