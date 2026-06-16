@@ -1,10 +1,19 @@
 import * as React from "react";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   formatDayHeading,
   isSameDay,
   startOfLocalDaySeconds,
 } from "@/features/messages/lib/dateFormatters";
+import { collapseSurfacedReplies } from "@/features/messages/lib/collapseSurfacedReplies.mjs";
+import { surfaceReplies } from "@/features/messages/lib/surfaceReplies.mjs";
+import { buildSurfacedByRoot } from "@/features/messages/lib/surfacedByRoot.mjs";
+import {
+  getThreadReplyIndentRem,
+  THREAD_REPLY_BODY_OFFSET_REM,
+  threadReplyLength,
+} from "@/features/messages/lib/threadTreeLayout";
 import {
   buildMainTimelineEntries,
   shouldRenderUnreadDivider,
@@ -22,6 +31,7 @@ import { cn } from "@/shared/lib/cn";
 import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
+import { SurfacedReplyRow } from "./SurfacedReplyRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 import { UnreadDivider } from "./UnreadDivider";
 
@@ -87,6 +97,8 @@ type TimelineMessageRowModel = {
   key: string;
   message: TimelineMessage;
   summary: ReturnType<typeof buildMainTimelineEntries>[number]["summary"];
+  /** Buried replies-to-viewer in this root's thread, surfaced as an attached pill. */
+  surfaced?: { message: TimelineMessage; count: number };
   type: "message";
 };
 
@@ -104,20 +116,40 @@ type TimelineDayGroup = {
 };
 
 function buildTimelineRenderRows({
+  agentPubkeys,
+  currentPubkey,
   entries,
   firstUnreadMessageId,
   messages,
 }: {
+  agentPubkeys?: ReadonlySet<string>;
+  currentPubkey?: string;
   entries?: ReturnType<typeof buildMainTimelineEntries>;
   firstUnreadMessageId: string | null;
   messages: TimelineMessage[];
 }): TimelineRenderRow[] {
+  // The timeline renders only root entries. `isHuman` resolves unknown/undefined
+  // pubkeys to human so unrecognized authors under-surface (the fail-safe
+  // matching the pure-core contract); `surfaceReplies` keeps only replies
+  // p-tagging the viewer, then `collapseSurfacedReplies` folds each thread's
+  // buried replies into one representative carrying the group count. Each
+  // collapsed entry is ATTACHED to its thread-root entry (keyed by the root's
+  // own id) and renders as a pill below that root — never as a standalone row.
+  // Driving the attach from the entry side means a surfaced thread whose root
+  // is not a rendered entry (off-window, or a broadcast-rooted subthread whose
+  // root marker points elsewhere) simply contributes no pill: no orphan.
   entries ??= buildMainTimelineEntries(messages);
+  const isHuman = (pubkey?: string) =>
+    pubkey == null || !agentPubkeys?.has(pubkey);
+  const surfacedByRoot = buildSurfacedByRoot(
+    collapseSurfacedReplies(surfaceReplies(messages, isHuman, currentPubkey)),
+  );
   const rows: TimelineRenderRow[] = [];
   let previousMessage: TimelineMessage | null = null;
 
   for (let i = 0; i < entries.length; i++) {
-    const { message, summary } = entries[i];
+    const entry = entries[i];
+    const message = entry.message;
     const messageRenderKey = message.renderKey ?? message.id;
 
     if (
@@ -130,6 +162,7 @@ function buildTimelineRenderRows({
         type: "day",
       });
     }
+    previousMessage = message;
 
     // The unread "New" divider only marks a read/unread boundary when there is
     // a message above the first unread. When the first unread is the first
@@ -142,11 +175,10 @@ function buildTimelineRenderRows({
     rows.push({
       key: `msg:${messageRenderKey}`,
       message,
-      summary,
+      summary: entry.summary,
+      surfaced: surfacedByRoot.get(message.id),
       type: "message",
     });
-
-    previousMessage = message;
   }
 
   return rows;
@@ -211,14 +243,17 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   threadUnreadCounts,
   unfollowThreadById,
 }: TimelineMessageListProps) {
+  const { goChannel } = useAppNavigation();
   const rows = React.useMemo(
     () =>
       buildTimelineRenderRows({
+        agentPubkeys,
+        currentPubkey,
         entries: mainEntries,
         firstUnreadMessageId,
         messages,
       }),
-    [firstUnreadMessageId, mainEntries, messages],
+    [agentPubkeys, currentPubkey, firstUnreadMessageId, mainEntries, messages],
   );
   const dayGroups = React.useMemo(() => buildTimelineDayGroups(rows), [rows]);
 
@@ -245,6 +280,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               channelType={channelType}
               currentPubkey={currentPubkey}
               followThreadById={followThreadById}
+              goChannel={goChannel}
               highlightedMessageId={highlightedMessageId}
               isFollowingThreadById={isFollowingThreadById}
               isMessageUnreadById={isMessageUnreadById}
@@ -278,6 +314,7 @@ type TimelineRenderRowViewProps = Omit<
   "firstUnreadMessageId" | "messages" | "personaLookup"
 > & {
   allMessages?: TimelineMessage[];
+  goChannel: ReturnType<typeof useAppNavigation>["goChannel"];
   row: TimelineRenderRow;
 };
 
@@ -289,6 +326,7 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
   channelType,
   currentPubkey,
   followThreadById,
+  goChannel,
   highlightedMessageId = null,
   isFollowingThreadById,
   isMessageUnreadById,
@@ -351,6 +389,37 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
 
   const { message, summary } = row;
 
+  // The buried-replies-to-viewer pill, attached below this root message. It is
+  // indented to the root's body gutter with the SAME source the thread-summary
+  // row uses (`getThreadReplyIndentRem(depth) + THREAD_REPLY_BODY_OFFSET_REM`),
+  // so the two pills share one indent definition and stay aligned under the
+  // message body — never drifting to the channel margin. Extracted once so all
+  // three root-render branches share it. Click navigates DOWN to the most-recent
+  // surfaced reply; `threadRootId` prefetches the thread root in
+  // ChannelRouteScreen so the open finds the head even when the root is outside
+  // the loaded window — the same mechanism search hits use.
+  const surfacedPill = row.surfaced ? (
+    <div
+      style={{
+        marginLeft: threadReplyLength(
+          getThreadReplyIndentRem(message.depth) + THREAD_REPLY_BODY_OFFSET_REM,
+        ),
+      }}
+    >
+      <SurfacedReplyRow
+        count={row.surfaced.count}
+        message={row.surfaced.message}
+        onNavigate={(target) => {
+          if (!channelId) return;
+          void goChannel(channelId, {
+            messageId: target.id,
+            threadRootId: target.rootId,
+          });
+        }}
+      />
+    </div>
+  ) : null;
+
   if (message.kind === KIND_SYSTEM_MESSAGE) {
     const footer = messageFooters?.[message.id] ?? null;
     return (
@@ -361,6 +430,7 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
           onToggleReaction={onToggleReaction}
           profiles={profiles}
         />
+        {surfacedPill}
         {footer}
       </div>
     );
@@ -423,6 +493,7 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
           summary={summary}
           unreadCount={threadUnreadCounts?.get(message.id)}
         />
+        {surfacedPill}
         {footer}
       </div>
     );
@@ -459,6 +530,7 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
         showDepthGuides={false}
         videoReviewContext={videoReviewContext}
       />
+      {surfacedPill}
       {footer}
     </div>
   );
