@@ -117,15 +117,8 @@ export function ChannelCanvas({
   return (
     <div className="space-y-3">
       {canvasContent ? (
-        <div
-          className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3"
-          data-testid="channel-canvas-content"
-        >
-          <Markdown
-            channelNames={channelNames}
-            compact
-            content={canvasContent}
-          />
+        <div className="px-1 py-1" data-testid="channel-canvas-content">
+          <Markdown channelNames={channelNames} content={canvasContent} />
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
