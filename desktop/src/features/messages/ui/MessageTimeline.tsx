@@ -247,7 +247,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     overscan,
     // Account for the sentinel/spinner/intro above the list inside the same
     // scroll container, so item offsets line up with where they actually paint.
-    scrollMargin,
+    scrollMargin: scrollMargin.value,
   });
 
   const {
@@ -263,6 +263,11 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     rows,
     scrollContainerRef,
     virtualizer,
+    // The init bottom pin must wait until the list's scroll margin is measured;
+    // pinning against the pre-mount stale `0` lands `scrollMargin` px short of
+    // true bottom and paints the rows out of place for a beat (the first-load
+    // flash) before re-anchoring. `measured` gates that first pin.
+    scrollMarginReady: scrollMargin.measured,
     targetMessageId,
     onTargetReached,
     searchActiveMessageId,
@@ -540,7 +545,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                     entries={entries}
                     renderEntry={renderEntry}
                     rows={rows}
-                    scrollMargin={scrollMargin}
+                    scrollMargin={scrollMargin.value}
                     virtualizer={virtualizer}
                   />
                 </div>

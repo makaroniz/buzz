@@ -21,6 +21,13 @@ type UseVirtualTimelineScrollOptions = {
   rows: VirtualTimelineRow[];
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   virtualizer: Virtualizer<HTMLDivElement, Element>;
+  /**
+   * True once the list's `scrollMargin` has been measured against a mounted
+   * list. The first-load bottom pin waits on this: pinning while the margin is
+   * still the pre-mount stale `0` lands `scrollMargin` px short of true bottom
+   * and paints the rows out of place for a beat before re-anchoring.
+   */
+  scrollMarginReady: boolean;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
   /** The currently active find-in-channel match, drives scroll-to-row. */
@@ -50,6 +57,7 @@ export function useVirtualTimelineScroll({
   rows,
   scrollContainerRef,
   virtualizer,
+  scrollMarginReady,
   targetMessageId,
   onTargetReached,
   searchActiveMessageId,
@@ -128,7 +136,14 @@ export function useVirtualTimelineScroll({
   // autoscroll if pinned or accented, otherwise bump the "N new messages" pill.
   React.useLayoutEffect(() => {
     if (!hasInitializedRef.current) {
-      if (isLoading) {
+      // Wait for the first paint to settle: `isLoading` clearing means the rows
+      // are mounting, but the list's `scrollMargin` is measured in a SIBLING
+      // layout effect that races this one in the same commit. Pinning before
+      // the margin lands anchors against the stale pre-mount `0`, landing
+      // `scrollMargin` px short of true bottom — the out-of-place first-load
+      // flash. Hold the init pin (without marking initialized) until the margin
+      // is measured, so the very first pin lands against a trustworthy offset.
+      if (isLoading || !scrollMarginReady) {
         return;
       }
       if (!targetMessageId) {
@@ -174,6 +189,7 @@ export function useVirtualTimelineScroll({
     latestMessage,
     latestMessageKey,
     messages.length,
+    scrollMarginReady,
     scrollToBottom,
     targetMessageId,
   ]);

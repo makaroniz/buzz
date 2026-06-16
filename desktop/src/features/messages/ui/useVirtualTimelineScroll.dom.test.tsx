@@ -72,6 +72,7 @@ test("on init with no deep-link target, scrolls to the last row (sticky bottom)"
       rows,
       scrollContainerRef: makeContainerRef(true),
       virtualizer,
+      scrollMarginReady: true,
     }),
   );
 
@@ -96,6 +97,7 @@ test("a new latest message while pinned autoscrolls; accent uses smooth", () => 
         rows,
         scrollContainerRef: makeContainerRef(true),
         virtualizer,
+        scrollMarginReady: true,
       }),
     { initialProps: { messages: initial, rows: rows1 } },
   );
@@ -132,6 +134,7 @@ test("a deep-link target scrolls to that message's flat row and centers it", () 
       rows,
       scrollContainerRef: makeContainerRef(false),
       virtualizer,
+      scrollMarginReady: true,
       targetMessageId: "b",
       onTargetReached,
     }),
@@ -165,6 +168,7 @@ test("first-load settle: re-pins to bottom as total size grows while pinned", ()
         // Pinned at bottom (default scroll metrics read as at-bottom).
         scrollContainerRef: makeContainerRef(true),
         virtualizer: harness.virtualizer,
+        scrollMarginReady: true,
         // totalSizeTick is unused by the hook — it just forces a re-render after
         // we bump the fake's total size, mirroring react-virtual's onChange.
         ...({ totalSizeTick } as Record<string, never>),
@@ -212,6 +216,7 @@ test("first-load settle: does NOT re-pin after the user scrolls away", () => {
         rows,
         scrollContainerRef: containerRef,
         virtualizer: harness.virtualizer,
+        scrollMarginReady: true,
         ...({ totalSizeTick } as Record<string, never>),
       }),
     { initialProps: { totalSizeTick: 0 } },
@@ -238,4 +243,53 @@ test("first-load settle: does NOT re-pin after the user scrolls away", () => {
     endPinsBefore,
     "must not re-pin to bottom once the user has scrolled away",
   );
+});
+
+test("init pin waits for scrollMarginReady, then pins once the margin lands", () => {
+  // The first-load flash (step 5): the init bottom pin and the scrollMargin
+  // re-measure are sibling layout effects racing in the same `isLoading→false`
+  // commit. If the pin fires while the margin is still the stale pre-mount `0`,
+  // it lands `scrollMargin` px short of true bottom and paints rows out of
+  // place before re-anchoring. Gate: while `scrollMarginReady` is false, the
+  // init pin must NOT fire; once it flips true, it pins exactly once.
+  const messages = [message({ id: "a" }), message({ id: "b" })];
+  const rows = buildVirtualTimelineRows(messages);
+  const { scrollToIndex, virtualizer } = makeVirtualizer();
+
+  const { rerender } = renderHook(
+    ({ scrollMarginReady }: { scrollMarginReady: boolean }) =>
+      useVirtualTimelineScroll({
+        channelId: "c1",
+        isLoading: false,
+        messages,
+        rows,
+        scrollContainerRef: makeContainerRef(true),
+        virtualizer,
+        scrollMarginReady,
+      }),
+    { initialProps: { scrollMarginReady: false } },
+  );
+
+  // Margin not yet measured — the init pin must hold.
+  assert.equal(
+    scrollToIndex.mock.calls.filter((c) => c.arguments[1]?.align === "end")
+      .length,
+    0,
+    "init pin must not fire before the scroll margin is measured",
+  );
+
+  // Margin lands — the init pin fires now, against a trustworthy offset.
+  act(() => {
+    rerender({ scrollMarginReady: true });
+  });
+
+  const endPins = scrollToIndex.mock.calls.filter(
+    (c) => c.arguments[1]?.align === "end",
+  );
+  assert.equal(
+    endPins.length,
+    1,
+    "init pin must fire exactly once after the margin is measured",
+  );
+  assert.equal(endPins[0]?.arguments[0], rows.length - 1);
 });
