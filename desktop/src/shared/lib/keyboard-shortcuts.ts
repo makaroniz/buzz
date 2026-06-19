@@ -28,7 +28,7 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   {
     id: "browse-channels",
     label: "Browse channels",
-    description: "Open the channel browser",
+    description: "Open the channel dialog on Browse",
     keys: "⇧⌘O",
     keysWindows: "Shift+Ctrl+O",
     category: "Navigation",
@@ -44,7 +44,7 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   {
     id: "new-channel",
     label: "New channel",
-    description: "Open the create channel dialog",
+    description: "Open the channel dialog on Create",
     keys: "⇧⌘N",
     keysWindows: "Shift+Ctrl+N",
     category: "Navigation",

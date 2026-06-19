@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import { installMockBridge, openChannelBrowser } from "../helpers/bridge";
 
@@ -6,30 +6,71 @@ test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
 
-test("keyboard shortcut opens the channel browser dialog", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.getByTestId("app-sidebar")).toBeVisible();
-
+async function pressPrimaryShiftShortcut(page: Page, key: string) {
   const isMacBrowser = await page.evaluate(() =>
     /mac|iphone|ipad|ipod/i.test(navigator.platform),
   );
 
-  if (isMacBrowser) {
-    await page.evaluate(() => {
+  await page.evaluate(
+    ({ isMac, shortcutKey }) => {
       window.dispatchEvent(
         new KeyboardEvent("keydown", {
           bubbles: true,
           cancelable: true,
-          key: "O",
-          metaKey: true,
+          ctrlKey: !isMac,
+          key: shortcutKey,
+          metaKey: isMac,
           shiftKey: true,
         }),
       );
-    });
-  } else {
-    await page.keyboard.press("Control+Shift+O");
-  }
+    },
+    { isMac: isMacBrowser, shortcutKey: key },
+  );
+}
+
+test("keyboard shortcut opens the channel browser dialog", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+
+  await pressPrimaryShiftShortcut(page, "O");
+
   await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await expect(page.getByTestId("channel-dialog-browse-tab")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(page.getByTestId("channel-browser-search")).toBeVisible();
+});
+
+test("new channel shortcut opens the combined dialog on create", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+
+  await pressPrimaryShiftShortcut(page, "N");
+
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await expect(page.getByTestId("channel-dialog-create-tab")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(page.getByTestId("create-channel-name")).toBeVisible();
+});
+
+test("sidebar create button opens the combined dialog on create", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Create a channel" }).click();
+
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+  await expect(page.getByTestId("channel-dialog-create-tab")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(page.getByTestId("create-channel-name")).toBeVisible();
 });
 
 test("channel browser shows channels not yet joined", async ({ page }) => {

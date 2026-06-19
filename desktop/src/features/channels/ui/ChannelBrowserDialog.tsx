@@ -1,5 +1,5 @@
-import * as React from "react";
 import { Compass, Search, X, type LucideIcon } from "lucide-react";
+import * as React from "react";
 
 import type { Channel } from "@/shared/api/types";
 import {
@@ -16,8 +16,13 @@ import {
   MODAL_SEARCH_SHELL_CLASS,
 } from "@/shared/ui/modalSearchStyles";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import {
+  ChannelCreateForm,
+  type ChannelCreateInput,
+} from "@/features/channels/ui/ChannelCreateForm";
 
 const BROWSE_CHANNELS_SHORTCUT_HINT = "\u21E7\u2318O";
+export type ChannelBrowserInitialTab = "browse" | "create";
 type BrowserTab = "all" | "joined" | "archived";
 
 function BrowseState({
@@ -45,7 +50,10 @@ function BrowseState({
 type ChannelBrowserDialogProps = {
   channels: Channel[];
   channelTypeFilter?: "stream" | "forum";
+  initialTab?: ChannelBrowserInitialTab;
+  isCreating: boolean;
   open: boolean;
+  onCreate: (input: ChannelCreateInput) => Promise<void>;
   onOpenChange: (open: boolean) => void;
   onJoinChannel: (channelId: string) => Promise<void>;
   onSelectChannel: (channelId: string) => void;
@@ -54,13 +62,18 @@ type ChannelBrowserDialogProps = {
 export function ChannelBrowserDialog({
   channels,
   channelTypeFilter,
+  initialTab = "browse",
+  isCreating,
   open,
+  onCreate,
   onOpenChange,
   onJoinChannel,
   onSelectChannel,
 }: ChannelBrowserDialogProps) {
+  const [activeDialogTab, setActiveDialogTab] =
+    React.useState<ChannelBrowserInitialTab>(initialTab);
   const [query, setQuery] = React.useState("");
-  const [activeTab, setActiveTab] = React.useState<BrowserTab>("all");
+  const [browseTab, setBrowseTab] = React.useState<BrowserTab>("all");
   const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
   const [joiningChannelId, setJoiningChannelId] = React.useState<string | null>(
     null,
@@ -81,11 +94,14 @@ export function ChannelBrowserDialog({
   const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
 
   const isForumMode = channelTypeFilter === "forum";
-  const browseTitle = isForumMode ? "Browse Forums" : "Browse Channels";
+  const dialogTitle = isForumMode ? "Forums" : "Channels";
   const searchPlaceholder = isForumMode
     ? "Search forums by name or description"
     : "Search channels by name or description";
   const entityLabel = isForumMode ? "forum" : "channel";
+  const createDescription = isForumMode
+    ? "Start a threaded discussion space around a topic."
+    : "Start a real-time stream for team conversation.";
 
   const matchingChannels = React.useMemo(() => {
     const filtered = channels.filter(
@@ -124,9 +140,9 @@ export function ChannelBrowserDialog({
   );
 
   const visibleChannels =
-    activeTab === "archived"
+    browseTab === "archived"
       ? archivedChannels
-      : activeTab === "joined"
+      : browseTab === "joined"
         ? joinedChannels
         : matchingChannels;
 
@@ -142,9 +158,9 @@ export function ChannelBrowserDialog({
 
   const updateTabIndicator = React.useCallback(() => {
     const list = tabListRef.current;
-    const trigger = tabTriggerRefs.current[activeTab];
+    const trigger = tabTriggerRefs.current[browseTab];
 
-    if (!open || !list || !trigger) {
+    if (!open || activeDialogTab !== "browse" || !list || !trigger) {
       return;
     }
 
@@ -159,7 +175,7 @@ export function ChannelBrowserDialog({
         ? current
         : nextIndicator,
     );
-  }, [activeTab, open]);
+  }, [activeDialogTab, browseTab, open]);
 
   React.useLayoutEffect(() => {
     updateTabIndicator();
@@ -200,12 +216,25 @@ export function ChannelBrowserDialog({
   React.useEffect(() => {
     if (!open) {
       setQuery("");
-      setActiveTab("all");
+      setBrowseTab("all");
       setSelectedIndex(null);
       setJoiningChannelId(null);
       return;
     }
-  }, [open]);
+
+    setActiveDialogTab(initialTab);
+  }, [initialTab, open]);
+
+  React.useEffect(() => {
+    if (!open || activeDialogTab !== "browse") {
+      return;
+    }
+
+    const timerId = globalThis.setTimeout(() => {
+      inputRef.current?.focus({ preventScroll: true });
+    }, 50);
+    return () => globalThis.clearTimeout(timerId);
+  }, [activeDialogTab, open]);
 
   React.useEffect(() => {
     setSelectedIndex((current) => {
@@ -239,17 +268,17 @@ export function ChannelBrowserDialog({
   const emptyTitle =
     deferredQuery.length > 0
       ? `No ${entityLabel}s match your search`
-      : activeTab === "archived"
+      : browseTab === "archived"
         ? `No archived ${entityLabel}s`
-        : activeTab === "joined"
+        : browseTab === "joined"
           ? `No joined ${entityLabel}s`
           : `No ${entityLabel}s to browse`;
   const emptyDescription =
     deferredQuery.length > 0
       ? "Try a different name or keyword."
-      : activeTab === "archived"
+      : browseTab === "archived"
         ? `Archived ${entityLabel}s you have joined will appear here.`
-        : activeTab === "joined"
+        : browseTab === "joined"
           ? `${entityLabel[0].toUpperCase()}${entityLabel.slice(1)}s you join will appear here.`
           : `All open ${entityLabel}s are available in the sidebar. Create a new ${entityLabel} to get started.`;
 
@@ -257,177 +286,221 @@ export function ChannelBrowserDialog({
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent
         aria-describedby={undefined}
-        className="gap-0 overflow-hidden border-0 px-6 pb-0 pt-6"
+        className="max-w-2xl gap-0 overflow-hidden border-0 px-6 pb-0 pt-6"
         data-testid={
           isForumMode ? "forum-browser-dialog" : "channel-browser-dialog"
         }
         onOpenAutoFocus={(event) => {
           event.preventDefault();
-          inputRef.current?.focus({ preventScroll: true });
         }}
         showCloseButton={false}
       >
         <DialogHeader className="space-y-0 pb-5">
           <div className="flex items-center justify-between gap-4">
-            <DialogTitle>{browseTitle}</DialogTitle>
+            <div className="min-w-0">
+              <DialogTitle>{dialogTitle}</DialogTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {activeDialogTab === "browse"
+                  ? `Find existing ${entityLabel}s or join open conversations.`
+                  : createDescription}
+              </p>
+            </div>
             <DialogClose className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent hover:text-accent-foreground focus:outline-hidden focus:ring-1 focus:ring-ring">
               <X className="h-4 w-4" />
               <span className="sr-only">Close</span>
             </DialogClose>
           </div>
-          <label
-            className={MODAL_SEARCH_SHELL_CLASS}
-            htmlFor="channel-browser-search"
+          <Tabs
+            className="pt-4"
+            onValueChange={(value) => {
+              setActiveDialogTab(value as ChannelBrowserInitialTab);
+              setSelectedIndex(null);
+            }}
+            value={activeDialogTab}
           >
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-within/search:text-foreground" />
-            <input
-              autoCapitalize="none"
-              autoCorrect="off"
-              className={MODAL_SEARCH_INPUT_CLASS}
-              data-testid="channel-browser-search"
-              id="channel-browser-search"
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setSelectedIndex(null);
-              }}
-              onKeyDown={(event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  orderedVisibleChannels.length > 0
-                ) {
-                  event.preventDefault();
-                  setSelectedIndex((current) =>
-                    current === null
-                      ? 0
-                      : Math.min(
-                          current + 1,
-                          orderedVisibleChannels.length - 1,
-                        ),
-                  );
-                  return;
-                }
-
-                if (
-                  event.key === "ArrowUp" &&
-                  orderedVisibleChannels.length > 0
-                ) {
-                  event.preventDefault();
-                  setSelectedIndex((current) =>
-                    current === null
-                      ? orderedVisibleChannels.length - 1
-                      : Math.max(current - 1, 0),
-                  );
-                  return;
-                }
-
-                if (
-                  event.key === "Enter" &&
-                  !event.nativeEvent.isComposing &&
-                  orderedVisibleChannels.length > 0
-                ) {
-                  event.preventDefault();
-                  handleSelect(selectedItem ?? orderedVisibleChannels[0]);
-                }
-              }}
-              placeholder={searchPlaceholder}
-              ref={inputRef}
-              spellCheck={false}
-              type="text"
-              value={query}
-            />
-            <span
-              className={`hidden shrink-0 text-xs text-muted-foreground/50 transition-opacity duration-150 ease-out group-focus-within/search:opacity-0 sm:block ${
-                query.length > 0 ? "opacity-0" : "opacity-100"
-              }`}
+            <TabsList className="h-auto w-full justify-start gap-2 rounded-xl bg-muted/45 p-1">
+              <TabsTrigger
+                className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground/65 shadow-none transition-colors hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border/70"
+                data-testid="channel-dialog-create-tab"
+                value="create"
+              >
+                Create
+              </TabsTrigger>
+              <TabsTrigger
+                className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground/65 shadow-none transition-colors hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border/70"
+                data-testid="channel-dialog-browse-tab"
+                value="browse"
+              >
+                Browse
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {activeDialogTab === "browse" ? (
+            <label
+              className={MODAL_SEARCH_SHELL_CLASS}
+              htmlFor="channel-browser-search"
             >
-              {BROWSE_CHANNELS_SHORTCUT_HINT}
-            </span>
-          </label>
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-within/search:text-foreground" />
+              <input
+                autoCapitalize="none"
+                autoCorrect="off"
+                className={MODAL_SEARCH_INPUT_CLASS}
+                data-testid="channel-browser-search"
+                id="channel-browser-search"
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSelectedIndex(null);
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "ArrowDown" &&
+                    orderedVisibleChannels.length > 0
+                  ) {
+                    event.preventDefault();
+                    setSelectedIndex((current) =>
+                      current === null
+                        ? 0
+                        : Math.min(
+                            current + 1,
+                            orderedVisibleChannels.length - 1,
+                          ),
+                    );
+                    return;
+                  }
+
+                  if (
+                    event.key === "ArrowUp" &&
+                    orderedVisibleChannels.length > 0
+                  ) {
+                    event.preventDefault();
+                    setSelectedIndex((current) =>
+                      current === null
+                        ? orderedVisibleChannels.length - 1
+                        : Math.max(current - 1, 0),
+                    );
+                    return;
+                  }
+
+                  if (
+                    event.key === "Enter" &&
+                    !event.nativeEvent.isComposing &&
+                    orderedVisibleChannels.length > 0
+                  ) {
+                    event.preventDefault();
+                    handleSelect(selectedItem ?? orderedVisibleChannels[0]);
+                  }
+                }}
+                placeholder={searchPlaceholder}
+                ref={inputRef}
+                spellCheck={false}
+                type="text"
+                value={query}
+              />
+              <span
+                className={`hidden shrink-0 text-xs text-muted-foreground/50 transition-opacity duration-150 ease-out group-focus-within/search:opacity-0 sm:block ${
+                  query.length > 0 ? "opacity-0" : "opacity-100"
+                }`}
+              >
+                {BROWSE_CHANNELS_SHORTCUT_HINT}
+              </span>
+            </label>
+          ) : null}
         </DialogHeader>
 
-        <div className="h-[min(60vh,30rem)] overflow-hidden">
-          <div className="flex h-full flex-col">
-            <Tabs
-              className="shrink-0"
-              onValueChange={(value) => {
-                setActiveTab(value as BrowserTab);
-                setSelectedIndex(null);
-              }}
-              value={activeTab}
-            >
-              <TabsList
-                className="relative h-auto w-full justify-start gap-6 rounded-none border-b border-border/70 bg-transparent p-0 text-muted-foreground"
-                ref={tabListRef}
+        {activeDialogTab === "create" ? (
+          <div className="max-h-[min(68vh,34rem)] overflow-y-auto pb-6">
+            <ChannelCreateForm
+              channelKind={channelTypeFilter ?? "stream"}
+              isCreating={isCreating}
+              onCreate={onCreate}
+              onCreated={() => onOpenChange(false)}
+            />
+          </div>
+        ) : (
+          <div className="h-[min(60vh,30rem)] overflow-hidden">
+            <div className="flex h-full flex-col">
+              <Tabs
+                className="shrink-0"
+                onValueChange={(value) => {
+                  setBrowseTab(value as BrowserTab);
+                  setSelectedIndex(null);
+                }}
+                value={browseTab}
               >
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute bottom-[-1px] left-0 h-0.5 w-px origin-left rounded-full bg-foreground opacity-0 transition-[transform,opacity] duration-[180ms] ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none data-[ready=true]:opacity-100"
-                  data-ready={tabIndicator.width > 0}
-                  data-testid="channel-browser-tab-indicator"
-                  style={{
-                    transform: `translate3d(${tabIndicator.left}px, 0, 0) scaleX(${tabIndicator.width})`,
-                  }}
-                />
-                <TabsTrigger
-                  className="rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none transition-colors duration-150 ease-out data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-                  ref={(element) => {
-                    tabTriggerRefs.current.all = element;
-                  }}
-                  value="all"
+                <TabsList
+                  className="relative h-auto w-full justify-start gap-6 rounded-none border-b border-border/70 bg-transparent p-0 text-muted-foreground"
+                  ref={tabListRef}
                 >
-                  {allTabLabel}
-                </TabsTrigger>
-                <TabsTrigger
-                  className="rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none transition-colors duration-150 ease-out data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-                  ref={(element) => {
-                    tabTriggerRefs.current.joined = element;
-                  }}
-                  value="joined"
-                >
-                  Joined
-                </TabsTrigger>
-                <TabsTrigger
-                  className="rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none transition-colors duration-150 ease-out data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-                  ref={(element) => {
-                    tabTriggerRefs.current.archived = element;
-                  }}
-                  value="archived"
-                >
-                  Archived
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute bottom-[-1px] left-0 h-0.5 w-px origin-left rounded-full bg-foreground opacity-0 transition-[transform,opacity] duration-[180ms] ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none data-[ready=true]:opacity-100"
+                    data-ready={tabIndicator.width > 0}
+                    data-testid="channel-browser-tab-indicator"
+                    style={{
+                      transform: `translate3d(${tabIndicator.left}px, 0, 0) scaleX(${tabIndicator.width})`,
+                    }}
+                  />
+                  <TabsTrigger
+                    className="rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none transition-colors duration-150 ease-out data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                    ref={(element) => {
+                      tabTriggerRefs.current.all = element;
+                    }}
+                    value="all"
+                  >
+                    {allTabLabel}
+                  </TabsTrigger>
+                  <TabsTrigger
+                    className="rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none transition-colors duration-150 ease-out data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                    ref={(element) => {
+                      tabTriggerRefs.current.joined = element;
+                    }}
+                    value="joined"
+                  >
+                    Joined
+                  </TabsTrigger>
+                  <TabsTrigger
+                    className="rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-sm font-medium shadow-none transition-colors duration-150 ease-out data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                    ref={(element) => {
+                      tabTriggerRefs.current.archived = element;
+                    }}
+                    value="archived"
+                  >
+                    Archived
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
 
-            <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-4">
-              {orderedVisibleChannels.length === 0 ? (
-                <BrowseState
-                  description={emptyDescription}
-                  icon={deferredQuery.length > 0 ? Search : Compass}
-                  title={emptyTitle}
-                />
-              ) : (
-                <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70 shadow-xs divide-y divide-border/55">
-                  {orderedVisibleChannels.map((channel, index) => (
-                    <ChannelCard
-                      channel={channel}
-                      isJoining={joiningChannelId === channel.id}
-                      isSelected={index === selectedIndex}
-                      key={channel.id}
-                      onJoin={
-                        !channel.isMember
-                          ? () => {
-                              void handleJoin(channel.id);
-                            }
-                          : undefined
-                      }
-                      onSelect={() => handleSelect(channel)}
-                    />
-                  ))}
-                </div>
-              )}
+              <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-4">
+                {orderedVisibleChannels.length === 0 ? (
+                  <BrowseState
+                    description={emptyDescription}
+                    icon={deferredQuery.length > 0 ? Search : Compass}
+                    title={emptyTitle}
+                  />
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70 shadow-xs divide-y divide-border/55">
+                    {orderedVisibleChannels.map((channel, index) => (
+                      <ChannelCard
+                        channel={channel}
+                        isJoining={joiningChannelId === channel.id}
+                        isSelected={index === selectedIndex}
+                        key={channel.id}
+                        onJoin={
+                          !channel.isMember
+                            ? () => {
+                                void handleJoin(channel.id);
+                              }
+                            : undefined
+                        }
+                        onSelect={() => handleSelect(channel)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
   );

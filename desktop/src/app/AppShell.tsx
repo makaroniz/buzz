@@ -106,7 +106,6 @@ export function AppShell() {
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
-  const [isCreateChannelOpen, setIsCreateChannelOpen] = React.useState(false);
   const [isHuddleDrawerOpen, setIsHuddleDrawerOpen] = React.useState(false);
   const mainInsetRef = React.useRef<HTMLElement>(null);
   const location = useLocation();
@@ -404,7 +403,7 @@ export function AppShell() {
   const openDmMutation = useOpenDmMutation();
   const hideDmMutation = useHideDmMutation();
   const handleOpenBrowseChannels = React.useCallback(() => {
-    setBrowseDialogType("stream");
+    setBrowseDialogType({ channelType: "stream", initialTab: "browse" });
     void refetchChannels();
   }, [refetchChannels]);
   const handleOpenSearch = React.useCallback(() => {
@@ -586,8 +585,9 @@ export function AppShell() {
   }, []);
 
   const handleOpenCreateChannel = React.useCallback(() => {
-    setIsCreateChannelOpen(true);
-  }, []);
+    setBrowseDialogType({ channelType: "stream", initialTab: "create" });
+    void refetchChannels();
+  }, [refetchChannels]);
 
   React.useLayoutEffect(() => {
     if (settingsOpen) {
@@ -792,12 +792,9 @@ export function AppShell() {
                           fallbackDisplayName={identityQuery.data?.displayName}
                           homeBadgeCount={homeBadgeCount}
                           isAddWorkspaceOpen={isAddWorkspaceOpen}
-                          isCreatingChannel={createChannelMutation.isPending}
-                          isCreatingForum={createForumMutation.isPending}
                           isLoading={channelsQuery.isLoading}
                           isOpeningDm={openDmMutation.isPending}
                           isNewDmOpen={isNewDmOpen}
-                          isCreateChannelOpen={isCreateChannelOpen}
                           isPresencePending={presenceSession.isPending}
                           onAddWorkspace={(workspace) => {
                             const id = workspacesHook.addWorkspace(workspace);
@@ -805,61 +802,19 @@ export function AppShell() {
                           }}
                           onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                           onNewDmOpenChange={setIsNewDmOpen}
-                          onCreateChannelOpenChange={setIsCreateChannelOpen}
+                          onOpenChannelCreate={(channelType) => {
+                            setBrowseDialogType({
+                              channelType,
+                              initialTab: "create",
+                            });
+                            void refetchChannels();
+                          }}
                           onOpenAddWorkspace={() => setIsAddWorkspaceOpen(true)}
                           onUpdateWorkspace={workspacesHook.updateWorkspace}
                           onRemoveWorkspace={workspacesHook.removeWorkspace}
                           onSwitchWorkspace={workspacesHook.switchWorkspace}
                           selfPresenceStatus={presenceSession.currentStatus}
                           workspaces={workspacesHook.workspaces}
-                          onCreateChannel={async ({
-                            description,
-                            name,
-                            visibility,
-                            ttlSeconds,
-                            templateId,
-                          }) => {
-                            const createdChannel =
-                              await createChannelMutation.mutateAsync({
-                                name,
-                                description,
-                                channelType: "stream",
-                                visibility,
-                                ttlSeconds,
-                              });
-
-                            await applyCanvas(
-                              templateId,
-                              createdChannel.id,
-                              name,
-                            );
-                            await goChannel(createdChannel.id);
-                            void applyAgents(templateId, createdChannel.id);
-                          }}
-                          onCreateForum={async ({
-                            description,
-                            name,
-                            visibility,
-                            ttlSeconds,
-                            templateId,
-                          }) => {
-                            const createdForum =
-                              await createForumMutation.mutateAsync({
-                                name,
-                                description,
-                                channelType: "forum",
-                                visibility,
-                                ttlSeconds,
-                              });
-
-                            await applyCanvas(
-                              templateId,
-                              createdForum.id,
-                              name,
-                            );
-                            await goChannel(createdForum.id);
-                            void applyAgents(templateId, createdForum.id);
-                          }}
                           onHideDm={handleHideDm}
                           onMarkAllChannelsRead={markAllChannelsRead}
                           onMarkChannelRead={markChannelRead}
@@ -933,7 +888,49 @@ export function AppShell() {
                       channels={channels}
                       currentPubkey={identityQuery.data?.pubkey}
                       isChannelManagementOpen={isChannelManagementOpen}
+                      isCreatingChannel={createChannelMutation.isPending}
+                      isCreatingForum={createForumMutation.isPending}
                       onBrowseChannelJoin={handleBrowseChannelJoin}
+                      onCreateChannel={async ({
+                        description,
+                        name,
+                        visibility,
+                        ttlSeconds,
+                        templateId,
+                      }) => {
+                        const createdChannel =
+                          await createChannelMutation.mutateAsync({
+                            name,
+                            description,
+                            channelType: "stream",
+                            visibility,
+                            ttlSeconds,
+                          });
+
+                        await applyCanvas(templateId, createdChannel.id, name);
+                        await goChannel(createdChannel.id);
+                        void applyAgents(templateId, createdChannel.id);
+                      }}
+                      onCreateForum={async ({
+                        description,
+                        name,
+                        visibility,
+                        ttlSeconds,
+                        templateId,
+                      }) => {
+                        const createdForum =
+                          await createForumMutation.mutateAsync({
+                            name,
+                            description,
+                            channelType: "forum",
+                            visibility,
+                            ttlSeconds,
+                          });
+
+                        await applyCanvas(templateId, createdForum.id, name);
+                        await goChannel(createdForum.id);
+                        void applyAgents(templateId, createdForum.id);
+                      }}
                       onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                       onChannelManagementOpenChange={setIsChannelManagementOpen}
                       onDeleteActiveChannel={() => {

@@ -33,7 +33,6 @@ import {
   ChannelGroupSection,
   CustomChannelSection,
 } from "@/features/sidebar/ui/CustomChannelSection";
-import { CreateChannelDialog } from "@/features/sidebar/ui/CreateChannelDialog";
 import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
 import { SidebarProfileCard } from "@/features/sidebar/ui/SidebarProfileCard";
 import { SidebarRelayConnectionCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
@@ -51,7 +50,6 @@ import { useUpdaterContext } from "@/features/settings/hooks/UpdaterProvider";
 import { shouldShowSidebarUpdateCard } from "@/features/settings/sidebarUpdateCardVisibility";
 import type {
   Channel,
-  ChannelVisibility,
   PresenceStatus,
   Profile,
   UserStatus,
@@ -88,8 +86,6 @@ type AppSidebarProps = {
   homeBadgeCount: number;
   isAddWorkspaceOpen?: boolean;
   isLoading: boolean;
-  isCreatingChannel: boolean;
-  isCreatingForum: boolean;
   isOpeningDm: boolean;
   profile?: Profile;
   selfPresenceStatus: PresenceStatus;
@@ -107,20 +103,7 @@ type AppSidebarProps = {
   workspaces: Workspace[];
   onAddWorkspace: (workspace: Workspace) => void;
   onAddWorkspaceOpenChange?: (open: boolean) => void;
-  onCreateChannel: (input: {
-    name: string;
-    description?: string;
-    visibility: ChannelVisibility;
-    ttlSeconds?: number;
-    templateId?: string;
-  }) => Promise<void>;
-  onCreateForum: (input: {
-    name: string;
-    description?: string;
-    visibility: ChannelVisibility;
-    ttlSeconds?: number;
-    templateId?: string;
-  }) => Promise<void>;
+  onOpenChannelCreate: (channelKind: CreateChannelKind) => void;
   onOpenAddWorkspace: () => void;
   onHideDm: (channelId: string) => void;
   onMarkChannelUnread: (channelId: string) => void;
@@ -150,8 +133,6 @@ type AppSidebarProps = {
   isPresencePending?: boolean;
   isNewDmOpen?: boolean;
   onNewDmOpenChange?: (open: boolean) => void;
-  isCreateChannelOpen?: boolean;
-  onCreateChannelOpenChange?: (open: boolean) => void;
   mutedChannelIds?: ReadonlySet<string>;
   onMuteChannel?: (channelId: string) => void;
   onUnmuteChannel?: (channelId: string) => void;
@@ -172,8 +153,6 @@ export function AppSidebar({
   homeBadgeCount,
   isAddWorkspaceOpen,
   isLoading,
-  isCreatingChannel,
-  isCreatingForum,
   isOpeningDm,
   profile,
   selfPresenceStatus,
@@ -185,8 +164,7 @@ export function AppSidebar({
   workspaces,
   onAddWorkspace,
   onAddWorkspaceOpenChange,
-  onCreateChannel,
-  onCreateForum,
+  onOpenChannelCreate,
   onOpenAddWorkspace,
   onHideDm,
   onMarkChannelUnread,
@@ -210,8 +188,6 @@ export function AppSidebar({
   isPresencePending,
   isNewDmOpen: isNewDmOpenProp,
   onNewDmOpenChange,
-  isCreateChannelOpen: isCreateChannelOpenProp,
-  onCreateChannelOpenChange,
   mutedChannelIds,
   onMuteChannel,
   onUnmuteChannel,
@@ -273,25 +249,11 @@ export function AppSidebar({
     };
   }, []);
 
-  const [createDialogKind, setCreateDialogKind] =
-    React.useState<CreateChannelKind | null>(null);
-
   React.useEffect(() => {
     if (!canShowSidebarUpdateCard) {
       setIsSidebarUpdateCardDismissed(false);
     }
   }, [canShowSidebarUpdateCard]);
-
-  // Allow the create-channel dialog to be opened from outside (e.g. the
-  // ⌘⇧N global shortcut in AppShell), mirroring the controlled new-DM lift.
-  // When the external flag flips on, open the "stream" create dialog; the
-  // close direction is reported back via `onCreateChannelOpenChange` in the
-  // dialog's `onOpenChange` below.
-  React.useEffect(() => {
-    if (isCreateChannelOpenProp) {
-      setCreateDialogKind("stream");
-    }
-  }, [isCreateChannelOpenProp]);
   const [collapsedGroups, setCollapsedGroups] = React.useState<
     Record<CollapsibleSidebarGroup, boolean>
   >({
@@ -442,30 +404,6 @@ export function AppSidebar({
     unreadAboveCount,
     unreadBelowCount,
   } = useUnreadOverflow({ scrollRef, unreadChannelIds });
-
-  const isCreatingAny =
-    createDialogKind === "stream"
-      ? isCreatingChannel
-      : createDialogKind === "forum"
-        ? isCreatingForum
-        : false;
-
-  const handleCreateFromDialog = React.useCallback(
-    async (input: {
-      name: string;
-      description?: string;
-      visibility: ChannelVisibility;
-      ttlSeconds?: number;
-      templateId?: string;
-    }) => {
-      if (createDialogKind === "stream") {
-        await onCreateChannel(input);
-      } else if (createDialogKind === "forum") {
-        await onCreateForum(input);
-      }
-    },
-    [createDialogKind, onCreateChannel, onCreateForum],
-  );
 
   return (
     <Sidebar
@@ -672,7 +610,7 @@ export function AppSidebar({
                   isActiveChannel={selectedView === "channel"}
                   items={sectionBuckets.unassigned}
                   listTestId="stream-list"
-                  onCreateClick={() => setCreateDialogKind("stream")}
+                  onCreateClick={() => onOpenChannelCreate("stream")}
                   onMarkAllRead={onMarkAllChannelsRead}
                   onMarkChannelRead={onMarkChannelRead}
                   onMarkChannelUnread={onMarkChannelUnread}
@@ -703,7 +641,7 @@ export function AppSidebar({
                   isActiveChannel={selectedView === "channel"}
                   items={forumChannels}
                   listTestId="forum-list"
-                  onCreateClick={() => setCreateDialogKind("forum")}
+                  onCreateClick={() => onOpenChannelCreate("forum")}
                   onMarkAllRead={onMarkAllChannelsRead}
                   onMarkChannelRead={onMarkChannelRead}
                   onMarkChannelUnread={onMarkChannelUnread}
@@ -828,22 +766,6 @@ export function AppSidebar({
           </SidebarFooter>
         </div>
       </div>
-
-      <CreateChannelDialog
-        channelKind={createDialogKind}
-        isCreating={isCreatingAny}
-        onOpenChange={(open) => {
-          if (!open) {
-            // If a "stream" dialog driven by the external controller is
-            // closing, report it back so AppShell's open state resets.
-            if (createDialogKind === "stream") {
-              onCreateChannelOpenChange?.(false);
-            }
-            setCreateDialogKind(null);
-          }
-        }}
-        onCreate={handleCreateFromDialog}
-      />
 
       <NewDirectMessageDialog
         currentPubkey={currentPubkey}
