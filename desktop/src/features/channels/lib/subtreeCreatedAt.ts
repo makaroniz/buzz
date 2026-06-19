@@ -27,32 +27,6 @@ export function subtreeMaxCreatedAt(
   return maxCreatedAt;
 }
 
-/**
- * Newest `createdAt` across a thread head and its DIRECT replies only — the
- * content visible the instant the panel opens, before any branch is expanded.
- * Opening a thread advances the read frontier to this, mirroring channel-open
- * parity: you see (and thus consume) the top-level replies on open, while
- * deeper collapsed branches stay unread until drilled into. Returns null when
- * the head is absent so the caller can skip the read-state write.
- */
-export function directRepliesMaxCreatedAt(
-  messageId: string,
-  directReplyIdsByParentId: ReadonlyMap<string, string[]>,
-  createdAtByMessageId: ReadonlyMap<string, number>,
-): number | null {
-  const ownCreatedAt = createdAtByMessageId.get(messageId);
-  if (ownCreatedAt === undefined) return null;
-
-  let maxCreatedAt = ownCreatedAt;
-  for (const replyId of directReplyIdsByParentId.get(messageId) ?? []) {
-    const createdAt = createdAtByMessageId.get(replyId);
-    if (createdAt !== undefined && createdAt > maxCreatedAt) {
-      maxCreatedAt = createdAt;
-    }
-  }
-  return maxCreatedAt;
-}
-
 /** Minimal timeline shape the adjacency/createdAt builders read. */
 interface ReplyGraphMessage {
   id: string;
@@ -69,6 +43,24 @@ export function buildDirectReplyIdsByParentId(
     if (!message.parentId) continue;
     const currentReplies = map.get(message.parentId) ?? [];
     currentReplies.push(message.id);
+    map.set(message.parentId, currentReplies);
+  }
+  return map;
+}
+
+/**
+ * Maps each parent message id to its direct-reply objects in timeline order.
+ * Built once so per-thread badge consumers resolve direct replies in O(1)
+ * instead of re-scanning the whole timeline per top-level message.
+ */
+export function buildDirectRepliesByParentId<T extends ReplyGraphMessage>(
+  messages: readonly T[],
+): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const message of messages) {
+    if (!message.parentId) continue;
+    const currentReplies = map.get(message.parentId) ?? [];
+    currentReplies.push(message);
     map.set(message.parentId, currentReplies);
   }
   return map;

@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.3.26
+
+- ci: cache Flutter pub packages in the Mobile job ([#1128](https://github.com/block/buzz/pull/1128)) ([`ceb5eff53`](https://github.com/block/buzz/commit/ceb5eff53717a18afb9ac6cd3f3a93f01394b5bc))
+- Delete RESEARCH directory ([`a1d5570d3`](https://github.com/block/buzz/commit/a1d5570d3136c2c52823f512a5c59429f8995ca0))
+- feat(cli): support ephemeral channels via --ttl on create/update ([#1126](https://github.com/block/buzz/pull/1126)) ([`4f671a255`](https://github.com/block/buzz/commit/4f671a255cb526520151596b01dcf4a50ab2242d))
+- fix(justfile): suppress grep exit code in release changelog formatter ([`d40c86626`](https://github.com/block/buzz/commit/d40c86626a3c2d10eaa647f0e4664b32ef9060a5))
+- fix(desktop): single-owner anchored scroll for dynamic loading ([#1115](https://github.com/block/buzz/pull/1115)) ([`047db4214`](https://github.com/block/buzz/commit/047db4214e6ce79a615b8842e83f9f03c8e10f55))
+- fix(buzz-dev-mcp): resolve non-WSL bash so the MCP shell works on Windows ([#1119](https://github.com/block/buzz/pull/1119)) ([`4d2eb52a6`](https://github.com/block/buzz/commit/4d2eb52a6c89fe71f37c2c5abf3fed9e95d45977))
+- ci: key main-push concurrency group on SHA to stop run eviction ([#1124](https://github.com/block/buzz/pull/1124)) ([`e99105edc`](https://github.com/block/buzz/commit/e99105edc47bf36facbadbc94aeea99c7f15dd38))
+- fix(desktop): seed up agent JSON files in sync_shared_agent_data ([#1121](https://github.com/block/buzz/pull/1121)) ([`065625bb4`](https://github.com/block/buzz/commit/065625bb4f8dc49e1d3d56698c637383f9f82eef))
+- fix(acp): emit per-section prompt blocks so observer counts every section ([#1122](https://github.com/block/buzz/pull/1122)) ([`a1cf1db67`](https://github.com/block/buzz/commit/a1cf1db67faf9728fa1301ece5ef838ff2b2d906))
+- refactor(justfile): rename, relay auto-start, bootstrap, DRY cleanup ([#1117](https://github.com/block/buzz/pull/1117)) ([`1dc4fb5da`](https://github.com/block/buzz/commit/1dc4fb5daf048e5e44af82450b067175c75814c2))
+- fix(desktop): keep active-turn badges through transient relay drops ([#1120](https://github.com/block/buzz/pull/1120)) ([`cf122fcf1`](https://github.com/block/buzz/commit/cf122fcf1406378e5de2e652bd3f66ce5516f56b))
+- Polish desktop sidebar navigation ([#1107](https://github.com/block/buzz/pull/1107)) ([`7072281f6`](https://github.com/block/buzz/commit/7072281f63de5005b9046af58ef3fb38b151ee09))
+- fix(desktop): collapse thread-unread badge on thread-open ([#1118](https://github.com/block/buzz/pull/1118)) ([`0176d5f31`](https://github.com/block/buzz/commit/0176d5f31ec327641444fc89edb8ee1f04638578))
+- feat(desktop): unify unread pills into one shared UnreadPill component ([#1111](https://github.com/block/buzz/pull/1111)) ([`826945e1b`](https://github.com/block/buzz/commit/826945e1bbee2b93a2bc5ec13c2d1c3241bb7754))
+- fix(cli): use relay workflow id on create ([#872](https://github.com/block/buzz/pull/872)) ([`762ca43d2`](https://github.com/block/buzz/commit/762ca43d26be8f5376f96a1376ed7eb6f213e411))
+- Fold agent core memory into the session system prompt ([#1112](https://github.com/block/buzz/pull/1112)) ([`633544788`](https://github.com/block/buzz/commit/6335447887f2d8cc8ea7fa2468f37a287a08e224))
+- feat(cli): add patches and issues commands for NIP-34 git collaboration ([#1073](https://github.com/block/buzz/pull/1073)) ([`cd8292fe9`](https://github.com/block/buzz/commit/cd8292fe9e7941b3b25510c604491041a723cb7a))
+- fix(desktop): stop random timeline message loss + page reconnect replay ([#1105](https://github.com/block/buzz/pull/1105)) ([`0181603eb`](https://github.com/block/buzz/commit/0181603eba2a1a632467105d00fd41ddb96c526a))
+- Update README.md ([`c338d8840`](https://github.com/block/buzz/commit/c338d8840cb21ad27475b1d4b29f6fec539ca663))
+- fix(desktop): keep thread replies from scrolling channel ([#1109](https://github.com/block/buzz/pull/1109)) ([`d24eac61a`](https://github.com/block/buzz/commit/d24eac61a86f0da63e12e2758863b8364b67320d))
+- fix(buzz-acp): accept siblings under allowlist author gate ([#1108](https://github.com/block/buzz/pull/1108)) ([`dd9ce0902`](https://github.com/block/buzz/commit/dd9ce090209c282921c7c0e821795b12ac69796f))
+- feat(deploy): add production Helm chart for Buzz ([#990](https://github.com/block/buzz/pull/990)) ([`629fb57bf`](https://github.com/block/buzz/commit/629fb57bf0802f1b57eaa3068fc6eaad85b9d38f))
+- fix(desktop): keep MembersSidebar input usable while an add is in flight ([#1106](https://github.com/block/buzz/pull/1106)) ([`aadbe6735`](https://github.com/block/buzz/commit/aadbe67354f407a31c913de87b3e3d698fc3dddf))
+
+
+## v0.3.25
+
+- fix(desktop): stop dimming deferred message lists ([#1104](https://github.com/block/buzz/pull/1104)) ([`718b596e5`](https://github.com/block/buzz/commit/718b596e5b696dbe439993c40a16ba39dd862828))
+- Smooth channel loading: single-surface timeline state machine ([#1099](https://github.com/block/buzz/pull/1099)) ([`d47572209`](https://github.com/block/buzz/commit/d47572209dd26ee11cb7d77c85d420fb11947ce8))
+- feat: surface base + persona system prompts in observer feed ([#1103](https://github.com/block/buzz/pull/1103)) ([`5004758fb`](https://github.com/block/buzz/commit/5004758fbfda8ea9c014174b43464b9835952090))
+- ci: move reminder e2e to a dedicated backend-integration job ([#1098](https://github.com/block/buzz/pull/1098)) ([`466bb993c`](https://github.com/block/buzz/commit/466bb993ca5a5bbf99db47ec31356b1a36e9aa86))
+- fix: give agent-observer sub a replay-capable limit ([#1100](https://github.com/block/buzz/pull/1100)) ([`959fc6e9d`](https://github.com/block/buzz/commit/959fc6e9d0a68ff4de1e3b4dc3d731fb8f0b3b03))
+- fix: make managed-agent spawn and teardown portable to Windows ([#1097](https://github.com/block/buzz/pull/1097)) ([`420131182`](https://github.com/block/buzz/commit/42013118215bbeb87a4fed30c5744e99bb0d8ae9))
+- fix(desktop): constrain message timeline width with min-w-0 ([#1092](https://github.com/block/buzz/pull/1092)) ([`7de5517f1`](https://github.com/block/buzz/commit/7de5517f1d3d48e929e49fb8be20e04995428b50))
+- feat(desktop): reminders notifications, snooze, overlay, and inbox view mode ([#1093](https://github.com/block/buzz/pull/1093)) ([`22b47db8e`](https://github.com/block/buzz/commit/22b47db8ecb80fb6deccad8323b38f7cbb1f5cf7))
+- feat(prompt): add memory hygiene and hoist universal engineering discipline to base prompt ([#1085](https://github.com/block/buzz/pull/1085)) ([`010e8022b`](https://github.com/block/buzz/commit/010e8022b0b07b135db652d61afd7250c27e0564))
+- fix(desktop): correct thread-unread badge flicker, stale clear, phantom count, mention gate, and nested count ([#1080](https://github.com/block/buzz/pull/1080)) ([`c8e1120fc`](https://github.com/block/buzz/commit/c8e1120fc2e78424526f49248b5d531a567a97b8))
+- Fix mention chip alignment ([#1094](https://github.com/block/buzz/pull/1094)) ([`4f93d52e1`](https://github.com/block/buzz/commit/4f93d52e156a5683f114897d43f25f75704a292e))
+- perf(desktop): virtualize unbounded lists and warm the emoji index ([#1089](https://github.com/block/buzz/pull/1089)) ([`a4fbebb39`](https://github.com/block/buzz/commit/a4fbebb397c0af4f19b3fc7af531ff067d8dead0))
+- Adjust unread pill spacing ([#1091](https://github.com/block/buzz/pull/1091)) ([`3bf2ac004`](https://github.com/block/buzz/commit/3bf2ac00476440cc454c4d5b2ada87073c808500))
+- Improve image lightbox controls ([#1084](https://github.com/block/buzz/pull/1084)) ([`bb9b6674e`](https://github.com/block/buzz/commit/bb9b6674e36a38d3a6395153930d2fb8ed502f45))
+- Use Inter for app typography ([#899](https://github.com/block/buzz/pull/899)) ([`7b0500c93`](https://github.com/block/buzz/commit/7b0500c93e8923c0826a28af4fee3c88ed688280))
+- fix(desktop): paint thread replies on open without scroll nudge ([#1090](https://github.com/block/buzz/pull/1090)) ([`422a90f5e`](https://github.com/block/buzz/commit/422a90f5e180d066128c51e45991278d39a707de))
+- Polish sidebar update and relay cards ([#1009](https://github.com/block/buzz/pull/1009)) ([`d4cd919b8`](https://github.com/block/buzz/commit/d4cd919b8506469f0bfd68100f13cdf16d3e76bc))
+- Normalize desktop icon sizing ([#1088](https://github.com/block/buzz/pull/1088)) ([`1a37ee395`](https://github.com/block/buzz/commit/1a37ee395119e5e54cb2798346bad4b5c9a5b29c))
+- fix(desktop): normalize loopback host for HTTP writes and stop Reminders nav flicker ([#1086](https://github.com/block/buzz/pull/1086)) ([`771086fd6`](https://github.com/block/buzz/commit/771086fd69243b3bdccf213783190ad119486de9))
+- feat(composer): link editing — inline popover, modal picker, buzz:// in-app nav ([#1045](https://github.com/block/buzz/pull/1045)) ([`770266d2a`](https://github.com/block/buzz/commit/770266d2a99925b92716b8991139f223d8ff5dda))
+- chore(Pulse): gate Follow button behind Pulse feature flag ([#1019](https://github.com/block/buzz/pull/1019)) ([`48994e01b`](https://github.com/block/buzz/commit/48994e01bca2345d56fd0cf72458caa52686e2ec))
+- fix(desktop): wrap long markdown autolinks ([#1081](https://github.com/block/buzz/pull/1081)) ([`b7e22f4b5`](https://github.com/block/buzz/commit/b7e22f4b5c13b995fe26587c2a52bbe0e775e0b9))
+- feat(desktop): add NIP-ER reminder UI — create, view, and manage encrypted reminders ([#963](https://github.com/block/buzz/pull/963)) ([`ff824a365`](https://github.com/block/buzz/commit/ff824a365e95651edc08b7721e81e091734e8664))
+- feat(relay): add NIP-ER push scheduler with cross-pod delivery ([#957](https://github.com/block/buzz/pull/957)) ([`26563968c`](https://github.com/block/buzz/commit/26563968cba232db7b16c0b696273819b5e2c571))
+- feat(relay): implement NIP-ER event reminder support (kind:30300) ([#934](https://github.com/block/buzz/pull/934)) ([`79fcfd82b`](https://github.com/block/buzz/commit/79fcfd82bc3a883e1400449f87779853dc0e575c))
+- feat(desktop): adding ui state into the history stack ([#967](https://github.com/block/buzz/pull/967)) ([`538f33341`](https://github.com/block/buzz/commit/538f33341fbdfa9794728dabd5ce995769dc151c))
+- fix(desktop): restore timeline zoom via rem tokens + chat-as-base type scale ([#1052](https://github.com/block/buzz/pull/1052)) ([`c22c54e7a`](https://github.com/block/buzz/commit/c22c54e7ae4318f9648dc9441a152732cb29d6d5))
+- fix(release): format changelog as linked markdown bullets ([#1075](https://github.com/block/buzz/pull/1075)) ([`d879fac4c`](https://github.com/block/buzz/commit/d879fac4c424550d5fa839861c53583cdf032af5))
+
+
 ## v0.3.24
 
 - feat(desktop): refine thread-unread badge to two-token form ([#1069](https://github.com/block/buzz/pull/1069)) ([`de24b90aa`](https://github.com/block/buzz/commit/de24b90aa1076822c4de184c3bb8b5f6ebc682a2))

@@ -19,6 +19,46 @@ async function setMockWebsocketSendsStalled(
   }, stall);
 }
 
+async function disconnectMockWebsockets(page: import("@playwright/test").Page) {
+  const disconnected = await page.evaluate(() => {
+    const disconnect = (
+      window as Window & {
+        __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
+      }
+    ).__BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__;
+    if (!disconnect) {
+      throw new Error("E2E mock websocket disconnect seam is not installed.");
+    }
+    return disconnect();
+  });
+
+  expect(disconnected).toBeGreaterThan(0);
+}
+
+async function emitMockMessages(
+  page: import("@playwright/test").Page,
+  messages: Array<{ content: string; createdAt: number }>,
+) {
+  await page.evaluate((items) => {
+    const emit = (
+      window as Window & {
+        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          channelName: string;
+          content: string;
+          createdAt: number;
+        }) => unknown;
+      }
+    ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    if (!emit) {
+      throw new Error("E2E mock message emitter is not installed.");
+    }
+
+    for (const item of items) {
+      emit({ channelName: "general", ...item });
+    }
+  }, messages);
+}
+
 async function driveConnectionDegraded(
   page: import("@playwright/test").Page,
   state: "reconnecting" | "stalled" | "disconnected",
@@ -79,12 +119,11 @@ test("sidebar reconnect prompt flips on live relay degradation without a query e
   // Drive ONLY the live connection state degraded — no channelsQuery error is
   // set. Pre-fix the block keyed off `channelsQuery.error` alone, so it stays
   // absent here; post-fix the dual signal surfaces it.
-  await driveConnectionDegraded(page, "disconnected");
+  await driveConnectionDegraded(page, "stalled");
 
-  // `disconnected` reports immediately (reconnecting/stalled debounce ~2s),
-  // but allow margin for the React render to flush.
+  // `stalled` is debounced before surfacing, then React needs a render tick.
   await expect(page.getByTestId("sidebar-relay-unreachable")).toBeVisible({
-    timeout: 5_000,
+    timeout: 10_000,
   });
   await expect(page.getByTestId("sidebar-reconnect")).toBeVisible();
 
@@ -93,25 +132,54 @@ test("sidebar reconnect prompt flips on live relay degradation without a query e
   await expect(page.getByTestId("channel-general")).toBeVisible();
 });
 
-test("profile popover reconnect item is hidden when healthy and shown when degraded", async ({
+test("profile popover does not show relay reconnect controls", async ({
   page,
 }) => {
   await page.goto("/");
 
-  // Healthy boot: open the profile popover and wait for it to mount. The
-  // reconnect item must be ABSENT because the relay is connected. Anchoring on
-  // a stable popover item first ensures the count assertion reflects the gate,
-  // not an un-mounted popover. Pre-fix the item rendered unconditionally, so
-  // this fails before the gate is added.
   await expect(page.getByTestId("channel-general")).toBeVisible();
   await page.getByTestId("sidebar-profile-avatar-button").click();
   await expect(page.getByTestId("profile-popover-settings")).toBeVisible();
   await expect(page.getByTestId("profile-popover-reconnect")).toHaveCount(0);
 
-  // Drive the live connection degraded. The gate reads `useRelayConnection()`,
-  // so the item surfaces reactively while the popover stays open.
-  await driveConnectionDegraded(page, "disconnected");
-  await expect(page.getByTestId("profile-popover-reconnect")).toBeVisible({
-    timeout: 5_000,
+  // The sidebar owns the relay reconnect affordance; the profile popover stays
+  // focused on profile/settings/workspace actions even while the relay is down.
+  await driveConnectionDegraded(page, "stalled");
+  await expect(page.getByTestId("sidebar-relay-unreachable")).toBeVisible({
+    timeout: 10_000,
   });
+  await expect(page.getByTestId("profile-popover-reconnect")).toHaveCount(0);
+});
+
+test("reconnect backfills more missed channel messages than the live subscription limit", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const baseCreatedAt = Math.floor(Date.now() / 1_000) - 300;
+  const seenBeforeDisconnect = "reconnect e2e seen before disconnect";
+  await emitMockMessages(page, [
+    { content: seenBeforeDisconnect, createdAt: baseCreatedAt },
+  ]);
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    seenBeforeDisconnect,
+  );
+
+  await disconnectMockWebsockets(page);
+
+  const missedMessages = Array.from({ length: 260 }, (_, index) => ({
+    content: `reconnect e2e missed ${String(index + 1).padStart(3, "0")}`,
+    createdAt: baseCreatedAt + index + 1,
+  }));
+  await emitMockMessages(page, missedMessages);
+
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "reconnect e2e missed 001",
+    { timeout: 15_000 },
+  );
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "reconnect e2e missed 260",
+  );
 });

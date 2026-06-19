@@ -11,7 +11,7 @@
  */
 
 import type { TimelineMessage } from "@/features/messages/types";
-import { isSameDay } from "./dateFormatters";
+import { isSameDay, startOfLocalDaySeconds } from "./dateFormatters";
 
 /** Distance (px) from the bottom within which the timeline counts as "at bottom". */
 export const BOTTOM_THRESHOLD_PX = 72;
@@ -58,9 +58,41 @@ export function selectLatestMessageKey(
   return latest.renderKey ?? latest.id;
 }
 
+export type LatestMessageAutoScrollBehavior = "auto" | "smooth" | null;
+
+export function selectLatestMessageAutoScrollBehavior({
+  hasExplicitBottomRequest,
+  isAtBottom,
+  shouldStickToBottom,
+  targetMessageId,
+}: {
+  hasExplicitBottomRequest: boolean;
+  isAtBottom: boolean;
+  shouldStickToBottom: boolean;
+  targetMessageId?: string | null;
+}): LatestMessageAutoScrollBehavior {
+  if (targetMessageId) {
+    return null;
+  }
+
+  if (hasExplicitBottomRequest) {
+    return "smooth";
+  }
+
+  if (shouldStickToBottom || isAtBottom) {
+    return "auto";
+  }
+
+  return null;
+}
+
 /** A single day boundary in the timeline: where it starts and how many messages it covers. */
 export type DayGroupBoundary = {
-  /** Stable key for the day section. */
+  /**
+   * Stable key for the day section: the local start-of-day of the messages it
+   * covers, so prepending an older message into an already-rendered day reuses
+   * the same key instead of remounting the whole `<section>`.
+   */
   key: string;
   /** Index into `messages` of the first message in this day. */
   startIndex: number;
@@ -86,7 +118,7 @@ export function buildDayGroupBoundaries(
 
     if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
       boundaries.push({
-        key: `day-${message.createdAt}`,
+        key: `day-${startOfLocalDaySeconds(message.createdAt)}`,
         startIndex: i,
         count: 1,
         headingTimestamp: message.createdAt,
@@ -147,4 +179,52 @@ export function selectDeferredListRenderState(
     return "empty";
   }
   return "pending";
+}
+
+export type TimelineBodySurface = "skeleton" | "empty" | "list";
+
+export function selectTimelineBodySurface({
+  deferredCount,
+  isLoading,
+  liveCount,
+}: {
+  deferredCount: number;
+  isLoading: boolean;
+  liveCount: number;
+}): TimelineBodySurface {
+  if (isLoading) {
+    return "skeleton";
+  }
+
+  const renderState = selectDeferredListRenderState(deferredCount, liveCount);
+  if (renderState === "pending") {
+    return "skeleton";
+  }
+  return renderState;
+}
+
+export type TimelineIntroSurface =
+  | "direct-message-intro"
+  | "channel-intro"
+  | null;
+
+export function selectTimelineIntroSurface({
+  hasChannelIntro,
+  hasDirectMessageIntro,
+  isSkeletonVisible,
+}: {
+  hasChannelIntro: boolean;
+  hasDirectMessageIntro: boolean;
+  isSkeletonVisible: boolean;
+}): TimelineIntroSurface {
+  if (isSkeletonVisible) {
+    return null;
+  }
+  if (hasDirectMessageIntro) {
+    return "direct-message-intro";
+  }
+  if (hasChannelIntro) {
+    return "channel-intro";
+  }
+  return null;
 }

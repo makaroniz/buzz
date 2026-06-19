@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronRight, RefreshCw, Smile } from "lucide-react";
+import { ChevronRight, Smile } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -28,8 +28,6 @@ interface ProfilePopoverProps {
   onSetUserStatus: (text: string, emoji: string) => void;
   onClearUserStatus: () => void;
   onOpenSettings: (section?: "profile" | "appearance") => void;
-  onReconnect?: () => void;
-  isReconnectPending?: boolean;
   children: React.ReactNode;
   // Optional outer container whose clicks should NOT close the popover.
   // Used when auxiliary triggers (avatar, status text) live alongside the
@@ -68,8 +66,6 @@ export function ProfilePopover({
   onSetUserStatus,
   onClearUserStatus,
   onOpenSettings,
-  onReconnect,
-  isReconnectPending,
   children,
   triggerContainerRef,
   workspaceSwitcherSlot,
@@ -188,7 +184,7 @@ export function ProfilePopover({
                   <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-popover-foreground">
                     {userStatusEmoji ? (
                       <StatusEmoji
-                        className="h-3.5 w-3.5 shrink-0"
+                        className="w-5 shrink-0 text-base"
                         value={userStatusEmoji}
                       />
                     ) : null}
@@ -274,27 +270,6 @@ export function ProfilePopover({
                 {settingsShortcutLabel}
               </kbd>
             </button>
-
-            {onReconnect ? (
-              <button
-                className={MENU_ITEM_CLASS}
-                data-testid="profile-popover-reconnect"
-                disabled={isReconnectPending}
-                onClick={() => {
-                  closePopover();
-                  onReconnect();
-                }}
-                role="menuitem"
-                type="button"
-              >
-                <RefreshCw
-                  className={`h-4 w-4 shrink-0 text-muted-foreground${isReconnectPending ? " animate-spin" : ""}`}
-                />
-                <span className="flex-1">
-                  {isReconnectPending ? "Reconnecting…" : "Reconnect to relay"}
-                </span>
-              </button>
-            ) : null}
 
             {workspaceSwitcherSlot ? (
               <>

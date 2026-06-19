@@ -226,6 +226,48 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         return;
     }
 
+    // Seed-up: if canonical is missing a shared file but a sibling instance
+    // holds real (non-symlink) content, migrate it up to canonical before the
+    // symlink loop runs. Mirrors the SHARED_AGENT_DIRS migration below, applied
+    // to individual files. Without this, a fresh write in a worktree is never
+    // promoted to canonical and gets clobbered by the symlink step.
+    for rel in SHARED_AGENT_FILES {
+        let canonical_file = canonical_dir.join(rel);
+        if canonical_file.exists() {
+            continue;
+        }
+        let Some(parent) = canonical_dir.parent() else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let sibling = entry.path();
+            if sibling == canonical_dir {
+                continue;
+            }
+            let sibling_file = sibling.join(rel);
+            if sibling_file.is_file() && !sibling_file.is_symlink() {
+                if let Some(file_parent) = canonical_file.parent() {
+                    if let Err(e) = std::fs::create_dir_all(file_parent) {
+                        eprintln!(
+                            "buzz-desktop: shared-agent-sync: failed to create {}: {e}",
+                            file_parent.display()
+                        );
+                        break;
+                    }
+                }
+                let _ = std::fs::rename(&sibling_file, &canonical_file);
+                eprintln!(
+                    "buzz-desktop: shared-agent-sync: seeded {rel} from {}",
+                    sibling.display()
+                );
+                break;
+            }
+        }
+    }
+
     let mut synced = 0u32;
     for rel in SHARED_AGENT_FILES {
         let src = canonical_dir.join(rel);
@@ -361,7 +403,11 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
 }
 
 fn reconcile_team_dirs_in_file(path: &Path, target_dir: &Path) {
-    let target_teams = target_dir.join("agents/teams");
+    // Build per-component so the persisted value uses native separators on
+    // every platform, matching fresh writes (agents.rs builds the same path as
+    // base.join("teams").join(id)). A single join("agents/teams") would embed a
+    // literal '/' on Windows, persisting a mixed-separator path into the store.
+    let target_teams = target_dir.join("agents").join("teams");
     patch_json_records(path, |obj| {
         // Handle both old field name and new field name
         let field_name = if obj.contains_key("persona_team_dir") {

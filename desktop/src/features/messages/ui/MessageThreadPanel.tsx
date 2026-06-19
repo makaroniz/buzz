@@ -31,7 +31,7 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 import { UnreadDivider } from "./UnreadDivider";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
-import { useTimelineScrollManager } from "./useTimelineScrollManager";
+import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
 
 type MessageThreadPanelProps = {
@@ -306,6 +306,11 @@ export function MessageThreadPanel({
   widthPx,
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
+  const threadContentRef = React.useRef<HTMLDivElement>(null);
+  // Threads don't paginate older history, so this sentinel is never observed
+  // (the hook's older-history effect bails without a `fetchOlder`). It exists
+  // only to satisfy the hook's required ref contract.
+  const threadTopSentinelRef = React.useRef<HTMLDivElement>(null);
   const threadComposerWrapperRef = React.useRef<HTMLDivElement>(null);
   const isOverlay = useIsThreadPanelOverlay();
   const isFloatingOverlay = isOverlay && !isSinglePanelView;
@@ -338,8 +343,7 @@ export function MessageThreadPanel({
   // (`scrollIntoView`), so it must stay consistent with what's actually painted.
   // You can't scroll to a reply that hasn't committed yet. The thread pane gets
   // this no-tearing guarantee for free by routing through the same
-  // `useTimelineScrollManager` (and its `timelineSnapshot` helpers) as the main
-  // timeline.
+  // `useAnchoredScroll` primitive as the main timeline.
   const deferredThreadReplies = React.useDeferredValue(
     threadReplies,
     EMPTY_THREAD_REPLIES,
@@ -359,21 +363,18 @@ export function MessageThreadPanel({
     [deferredThreadReplies],
   );
 
-  const {
-    bottomAnchorRef,
-    contentRef,
-    isAtBottom,
-    newMessageCount,
-    scrollToBottom,
-    syncScrollState,
-  } = useTimelineScrollManager({
-    channelId: threadHeadId,
-    isLoading: false,
-    messages: threadMessages,
-    onTargetReached: onScrollTargetResolved,
-    scrollContainerRef: threadBodyRef,
-    targetMessageId: scrollTargetId,
-  });
+  const { isAtBottom, newMessageCount, onScroll, scrollToBottom } =
+    useAnchoredScroll({
+      channelId: threadHeadId,
+      contentRef: threadContentRef,
+      // Wait for deferred replies to commit before scroll-init (else rows mount un-scrolled).
+      isLoading: repliesRenderState === "pending",
+      messages: threadMessages,
+      onTargetReached: onScrollTargetResolved,
+      scrollContainerRef: threadBodyRef,
+      sentinelRef: threadTopSentinelRef,
+      targetMessageId: scrollTargetId,
+    });
 
   if (!threadHead) {
     return null;
@@ -387,10 +388,11 @@ export function MessageThreadPanel({
         !isSplitLayout && !isFloatingOverlay && "pt-[4.75rem]",
       )}
       data-testid="message-thread-body"
-      onScroll={syncScrollState}
+      onScroll={onScroll}
       ref={threadBodyRef}
     >
-      <div ref={contentRef}>
+      <div ref={threadContentRef}>
+        <div ref={threadTopSentinelRef} aria-hidden className="h-px" />
         <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
           <div className="rounded-2xl">
             <MessageRow
@@ -427,14 +429,7 @@ export function MessageThreadPanel({
         <div className="px-3 pb-3 pt-1" data-testid="message-thread-replies">
           {repliesRenderState === "list" ? (
             <div
-              className={cn(
-                "space-y-2.5",
-                // While a deferred render is in flight the painted reply list
-                // lags the latest `threadReplies`. Dim it slightly so the
-                // streaming-in reads as intentional instead of frozen — mirrors
-                // the main timeline.
-                isRepliesPending && "opacity-60 transition-opacity",
-              )}
+              className="space-y-2.5"
               data-render-pending={isRepliesPending ? "true" : undefined}
             >
               {deferredThreadReplies.map((entry, index) => {
@@ -503,7 +498,6 @@ export function MessageThreadPanel({
           // rows are streaming in on the deferred commit. Paint nothing rather
           // than flashing the empty state.
           null}
-          <div aria-hidden className="h-px" ref={bottomAnchorRef} />
         </div>
       </div>
     </div>
@@ -514,7 +508,7 @@ export function MessageThreadPanel({
       {!isAtBottom ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-36 z-20 flex justify-center px-4">
           <Button
-            className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-2xs font-medium text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
+            className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-2xs font-medium text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-4"
             data-testid="thread-scroll-to-latest"
             onClick={() => scrollToBottom("smooth")}
             size="sm"

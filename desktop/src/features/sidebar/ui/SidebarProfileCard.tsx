@@ -9,11 +9,6 @@ import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import type { Workspace } from "@/features/workspaces/types";
 import { WorkspaceSwitcher } from "@/features/workspaces/ui/WorkspaceSwitcher";
 import type { PresenceStatus, Profile, UserStatus } from "@/shared/api/types";
-import { useReconnectRelay } from "@/shared/api/useReconnectRelay";
-import {
-  isRelayConnectionDegraded,
-  useRelayConnection,
-} from "@/shared/api/useRelayConnection";
 import { cn } from "@/shared/lib/cn";
 
 type SidebarProfileCardProps = {
@@ -54,17 +49,7 @@ export function SidebarProfileCard({
   selfUserStatus,
   workspaces,
 }: SidebarProfileCardProps) {
-  // Called locally rather than threading props from AppShell — both hooks are
-  // workspace-provider and QueryClient safe at this level.
   const selfProfileCache = useSelfProfileCache();
-  const { isPending, reconnect } = useReconnectRelay();
-  // Only offer reconnect when the relay is actually degraded — keep the item
-  // visible while a reconnect is in flight so it does not vanish mid-click if
-  // the live state briefly flips.
-  const isRelayConnectionDegradedNow = isRelayConnectionDegraded(
-    useRelayConnection(),
-  );
-
   const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
   const profileCardRef = React.useRef<HTMLDivElement | null>(null);
   const toggleProfilePopover = React.useCallback(
@@ -88,8 +73,11 @@ export function SidebarProfileCard({
   const workspaceLabel = activeWorkspace?.name ?? "No workspace";
   const readonlyWorkspaceLabel = (
     <span className="flex min-w-0 cursor-pointer items-center gap-1 text-xs leading-snug text-sidebar-foreground/70">
-      <span aria-hidden="true" className="shrink-0 text-2xs leading-none">
-        🐝
+      <span
+        aria-hidden="true"
+        className="flex w-3.5 shrink-0 items-center justify-center text-2xs"
+      >
+        <span className="-translate-y-px leading-normal">🐝</span>
       </span>
       <span className="truncate">{workspaceLabel}</span>
     </span>
@@ -140,15 +128,9 @@ export function SidebarProfileCard({
             avatarUrl={profile?.avatarUrl ?? null}
             currentStatus={selfPresenceStatus}
             displayName={resolvedDisplayName}
-            isReconnectPending={isPending}
             isStatusPending={isPresencePending}
             onClearUserStatus={onClearUserStatus}
             onOpenSettings={onOpenSettings}
-            onReconnect={
-              isRelayConnectionDegradedNow || isPending
-                ? () => void reconnect()
-                : undefined
-            }
             onSetStatus={onSetPresenceStatus ?? (() => {})}
             onSetUserStatus={onSetUserStatus}
             triggerContainerRef={profileCardRef}
@@ -201,7 +183,7 @@ export function SidebarProfileCard({
               >
                 {selfUserStatus?.emoji ? (
                   <StatusEmoji
-                    className="mr-1 h-3.5 w-3.5"
+                    className="mr-1 w-4 shrink-0 text-xs"
                     value={selfUserStatus.emoji}
                   />
                 ) : null}
