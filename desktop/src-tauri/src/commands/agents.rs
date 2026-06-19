@@ -867,9 +867,13 @@ pub async fn start_managed_agent(
                 reconcile_agent_profile(&state, &reconcile_app, &reconcile_pubkey, &reconcile_data)
                     .await
             {
-                eprintln!(
-                    "buzz-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {e}"
-                );
+                // Suppress the expected relay-unreachable case; see the same
+                // guard in restore.rs's boot reconcile path for the rationale.
+                if !e.starts_with("relay unreachable:") {
+                    eprintln!(
+                        "buzz-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {e}"
+                    );
+                }
             }
         });
     }
