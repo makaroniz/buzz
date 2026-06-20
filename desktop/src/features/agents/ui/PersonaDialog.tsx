@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/shared/ui/select";
 import { Textarea } from "@/shared/ui/textarea";
+import { EnvVarsEditor, type EnvVarsValue } from "./EnvVarsEditor";
 import {
   getImportButtonLabel,
   getImportButtonTone,
@@ -148,6 +149,7 @@ export function PersonaDialog({
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [runtime, setRuntime] = React.useState("");
   const [model, setModel] = React.useState("");
+  const [envVars, setEnvVars] = React.useState<EnvVarsValue>({});
   const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
   const [importErrorMessage, setImportErrorMessage] = React.useState<
     string | null
@@ -170,6 +172,7 @@ export function PersonaDialog({
     setSystemPrompt(initialValues.systemPrompt);
     setRuntime(initialValues.runtime ?? "");
     setModel(initialValues.model ?? "");
+    setEnvVars("envVars" in initialValues ? (initialValues.envVars ?? {}) : {});
     setImportErrorMessage(null);
     setIsImportingUpdate(false);
   }, [initialValues, open]);
@@ -289,6 +292,7 @@ export function PersonaDialog({
       setSystemPrompt("");
       setRuntime("");
       setModel("");
+      setEnvVars({});
       setImportErrorMessage(null);
       setIsImportingUpdate(false);
       setIsWindowFileDragOver(false);
@@ -315,8 +319,6 @@ export function PersonaDialog({
         : initialValues.provider;
     const preservedNamePool =
       "namePool" in initialValues ? initialValues.namePool : undefined;
-    const preservedEnvVars =
-      "envVars" in initialValues ? initialValues.envVars : undefined;
     const baseInput = {
       displayName: displayName.trim(),
       avatarUrl: avatarUrl.trim() || undefined,
@@ -325,7 +327,7 @@ export function PersonaDialog({
       model: model.trim() || undefined,
       provider: preservedProvider ?? undefined,
       namePool: preservedNamePool,
-      envVars: preservedEnvVars,
+      envVars,
     };
 
     if ("id" in initialValues) {
@@ -633,6 +635,12 @@ export function PersonaDialog({
                 </div>
               </div>
             </div>
+
+            <EnvVarsEditor
+              disabled={isPending}
+              onChange={setEnvVars}
+              value={envVars}
+            />
 
             {error ? (
               <p className="text-sm text-destructive">{error.message}</p>
