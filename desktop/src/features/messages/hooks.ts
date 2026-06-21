@@ -591,6 +591,10 @@ export function useToggleReactionMutation() {
     },
     onError: (_error, _variables, context) => {
       if (context) {
+        // Rollback restores the pre-click snapshot. Narrow accepted edge: if a
+        // backfill landed a real event between onMutate and onError, this drops
+        // it too — but that needs a relay error racing an in-flight backfill,
+        // and the next backfill self-heals it. Not worth guarding.
         queryClient.setQueryData<RelayEvent[]>(
           context.queryKey,
           context.previous,
