@@ -519,13 +519,17 @@ export function useToggleReactionMutation() {
     // channel cache ourselves, optimistically, or the reactor's own reaction
     // stays invisible until the next channel switch. Mirrors the apply-on-
     // success cache writes in the edit/delete mutations below.
-    onMutate: ({ eventId, emoji, remove, channelId }) => {
+    onMutate: async ({ eventId, emoji, remove, channelId }) => {
       const pubkey = identityQuery.data?.pubkey;
       if (!channelId || !pubkey) {
         return undefined;
       }
 
       const queryKey = channelMessagesKey(channelId);
+      // Cancel any in-flight channel fetch so its post-write setQueryData
+      // can't clobber the optimistic reaction with a pre-write snapshot
+      // (matches the send-message onMutate below).
+      await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
       const pubkeyLower = pubkey.toLowerCase();
       const trimmedEmoji = emoji.trim();
