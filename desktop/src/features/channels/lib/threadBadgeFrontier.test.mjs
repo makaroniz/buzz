@@ -98,20 +98,28 @@ test("seedThreadBadgeFrontiers_reseed_advancesMonotonically", () => {
   assert.equal(frontiers.get("root"), 250);
 });
 
-// --- LP4 Case 3 demonstration: seed-vs-mark-read race poisons the frontier ---
+// --- LP4 Case 3, seed-timing face: channel marker must not bleed into seed ---
 //
-// seedThreadBadgeFrontiers seeds each root via getReadAt(root), which resolves
-// to the EFFECTIVE thread marker = max(thread_own_marker, channel_marker).
-// On channel open, markChannelRead advances the channel marker to the newest
-// top-level message. If that fold lands before (or in) the render where a root
-// is first seeded, the seed adopts a frontier PAST the unread reply, and
-// computeThreadBadgeCounts then reads zero unread — the badge vanishes
-// everywhere. What the seed READS (folded vs. pre-mark-read marker) is the sole
-// determinant; the seed/compute mechanics are otherwise identical.
+// seedThreadBadgeFrontiers seeds each root via getReadAt(root). AppShell's
+// getThreadReadAt(rootId, channelId?) returns the thread's OWN marker when no
+// channelId is passed, but max(thread_own, channel) when one is — the NIP-RS
+// hierarchical fold. Channel-open markChannelRead advances the channel marker
+// to the newest top-level message; if the seed reads the FOLDED marker, that
+// fresh channel timestamp seeds the frontier PAST an unread reply and the badge
+// vanishes everywhere (computeThreadBadgeCounts then reads zero). The seed is
+// monotonic (nextThreadBadgeFrontier uses Math.max), so once the channel marker
+// has advanced, any re-render re-bleeds it back — the flaky "no badge" the user
+// saw correlated with newer channel messages.
 //
-// These tests drive seed -> compute end-to-end and pass against TODAY's code.
-// The first DOCUMENTS THE DEFECT (folded marker -> no badge); the second is the
-// pre-mark-read control (own marker -> badge survives).
+// The fix: the seed reads the thread's OWN marker (getThreadReadAt(root) with no
+// channelId), never the folded marker. Thread badges are channel-independent by
+// design (NIP-RS Option 1: channel-open leaves them intact until each thread is
+// read); the own marker advances only when the thread itself is read, which is
+// exactly the advance-on-read the monotonic seed wants.
+//
+// These tests model getThreadReadAt exactly as AppShell defines it and drive
+// seed -> compute end-to-end. The folded path is the regression tripwire (badge
+// vanishes); the own-marker path is the fixed behavior (badge survives).
 
 // Richer message shape than the file-level `msg`: computeThreadBadgeCounts reads
 // createdAt and pubkey, which the frontier-only helper omits. rootId defaults to
@@ -125,62 +133,91 @@ const reply = (id, parentId, createdAt, rootId) => ({
   pubkey: "author",
 });
 
-test("seedThreadBadgeFrontiers_channelMarkerFoldedIntoSeed_badgeVanishes_DEFECT", () => {
-  // Thread "root" has one unread reply at createdAt 200. The thread's OWN read
-  // marker is 100 (reply is genuinely unread). But channel-open mark-read has
-  // already advanced the channel marker to 250, so the EFFECTIVE marker
-  // getReadAt returns is max(100, 250) = 250.
-  const messages = [reply("root", null, 50), reply("r1", "root", 200)];
-  const repliesByRootId = buildRepliesByRootId(messages);
-  const foldedEffectiveMarker = Math.max(100, 250); // thread_own vs channel
+// Faithful model of AppShell's getThreadReadAt(rootId, channelId?): own marker
+// alone, or folded with the channel marker via Math.max when a channelId is
+// passed. The seed must invoke this WITHOUT a channelId.
+const makeGetThreadReadAt = (threadOwn, channel) => (_rootId, channelId) => {
+  if (channelId == null) return threadOwn;
+  if (threadOwn === null) return channel;
+  if (channel === null) return threadOwn;
+  return Math.max(threadOwn, channel);
+};
 
+const seedAndCount = (messages, getReadAt) => {
+  const repliesByRootId = buildRepliesByRootId(messages);
   const frontiers = new Map();
   seedThreadBadgeFrontiers(
     frontiers,
     messages,
     repliesByRootId,
     seedAll,
-    () => foldedEffectiveMarker,
+    (id) => getReadAt(id),
   );
-  // DEFECT: frontier seeded to 250, past the unread reply at 200.
-  assert.equal(frontiers.get("root"), 250);
+  return {
+    frontier: frontiers.get("root"),
+    counts: computeThreadBadgeCounts(
+      messages,
+      repliesByRootId,
+      frontiers,
+      seedAll,
+    ),
+  };
+};
 
-  const result = computeThreadBadgeCounts(
-    messages,
-    repliesByRootId,
-    frontiers,
-    seedAll,
+test("seedThreadBadgeFrontiers_channelMarkerFoldedIntoSeed_badgeVanishes", () => {
+  // Thread "root" has one unread reply at 200. Own marker is 100 (reply is
+  // genuinely unread), but channel-open advanced the channel marker to 250.
+  // Seeding via the FOLDED accessor (channelId passed) reads max(100, 250)=250.
+  const messages = [reply("root", null, 50), reply("r1", "root", 200)];
+  const getThreadReadAt = makeGetThreadReadAt(100, 250);
+
+  const { frontier, counts } = seedAndCount(messages, (id) =>
+    getThreadReadAt(id, "channel-1"),
   );
-  // DEFECT: badge vanishes — no count anywhere despite a genuinely unread reply.
-  assert.equal(result.has("root"), false);
+  // Regression tripwire: folded marker seeds past the unread reply -> no badge.
+  assert.equal(frontier, 250);
+  assert.equal(counts.has("root"), false);
 });
 
-test("seedThreadBadgeFrontiers_preMarkReadMarkerSeeded_badgeSurvives_DESIRED", () => {
-  // Identical thread, but the seed reads the PRE-mark-read marker: the thread's
-  // own marker (100), captured before the channel-open fold advanced it to 250.
+test("seedThreadBadgeFrontiers_ownMarkerSeeded_badgeSurvives", () => {
+  // Identical thread, but the seed reads the thread's OWN marker (no channelId),
+  // so the channel fold never applies — the fixed wiring.
   const messages = [reply("root", null, 50), reply("r1", "root", 200)];
-  const repliesByRootId = buildRepliesByRootId(messages);
-  const preMarkReadMarker = 100; // thread_own only, channel fold not applied
+  const getThreadReadAt = makeGetThreadReadAt(100, 250);
 
-  const frontiers = new Map();
-  seedThreadBadgeFrontiers(
-    frontiers,
-    messages,
-    repliesByRootId,
-    seedAll,
-    () => preMarkReadMarker,
+  const { frontier, counts } = seedAndCount(messages, (id) =>
+    getThreadReadAt(id),
   );
-  // Frontier seeded to 100, behind the unread reply at 200.
-  assert.equal(frontiers.get("root"), 100);
+  // Fixed: frontier seeded to the own marker (100), behind the unread reply.
+  assert.equal(frontier, 100);
+  assert.equal(counts.get("root"), 1);
+});
 
-  const result = computeThreadBadgeCounts(
-    messages,
-    repliesByRootId,
-    frontiers,
-    seedAll,
+test("seedThreadBadgeFrontiers_threadReadNewerThanChannel_noSpuriousShift", () => {
+  // Edge case: the THREAD was read more recently (180) than the channel (120),
+  // and one reply at 200 is still unread. The own marker and the folded marker
+  // happen to coincide here (max(180, 120) = 180), so both paths agree the reply
+  // at 200 is unread — the own-marker path must not under- or over-clear it.
+  const messages = [reply("root", null, 50), reply("r1", "root", 200)];
+  const getThreadReadAt = makeGetThreadReadAt(180, 120);
+
+  const own = seedAndCount(messages, (id) => getThreadReadAt(id));
+  assert.equal(own.frontier, 180);
+  assert.equal(own.counts.get("root"), 1);
+});
+
+test("seedThreadBadgeFrontiers_ownMarkerCoversReply_badgeClears", () => {
+  // The thread itself was read past the reply (own marker 250 >= reply at 200),
+  // so the badge correctly clears regardless of the channel marker. Confirms the
+  // own-marker seed still advances-on-read — it isn't pinned at "always unread".
+  const messages = [reply("root", null, 50), reply("r1", "root", 200)];
+  const getThreadReadAt = makeGetThreadReadAt(250, 120);
+
+  const { frontier, counts } = seedAndCount(messages, (id) =>
+    getThreadReadAt(id),
   );
-  // DESIRED: badge survives — the reply at 200 is correctly counted unread.
-  assert.equal(result.get("root"), 1);
+  assert.equal(frontier, 250);
+  assert.equal(counts.has("root"), false);
 });
 
 // --- LP4 Case 3, second face: orphan-only root IS seed-eligible ---

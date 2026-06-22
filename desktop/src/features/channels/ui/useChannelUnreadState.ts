@@ -327,12 +327,26 @@ export function useChannelUnreadState({
       channelFrontiers = new Map();
       threadBadgeFrontiersRef.current.set(activeChannelId, channelFrontiers);
     }
+    // Seed from the thread's OWN read marker, never the channel-folded
+    // effective marker. getThreadReadAt WITH activeChannelId returns
+    // max(thread_own, channel) (AppShell), and channel-open markChannelRead
+    // advances the channel term to the newest top-level message — so a folded
+    // marker seeds the frontier PAST an unread reply and the badge vanishes
+    // (LP4 Case 3, seed-timing face). The seed is monotonic, so any re-render
+    // after the channel marker advanced would otherwise bleed it back via
+    // Math.max. Omitting the channelId reads the own marker directly (no parent
+    // term), so the badge clears only when the THREAD itself is read. This
+    // matches the #1114 topLevelOnly channel-open convention already shipped on
+    // main — the sidebar dot persists for unopened thread replies — a codebase
+    // layer on top of NIP-RS, not NIP-RS spec itself. The thread-own marker
+    // advances only via the thread-open mark-read effect above, preserving
+    // advance-on-read.
     seedThreadBadgeFrontiers(
       channelFrontiers,
       timelineMessages,
       repliesByRootId,
       (rootId) => !isThreadMuted(rootId),
-      (rootId) => getThreadReadAt(rootId, activeChannelId),
+      (rootId) => getThreadReadAt(rootId),
     );
   }
   // Clear the thread badge frontiers on channel leave (same cleanup as
