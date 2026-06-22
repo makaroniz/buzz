@@ -6,6 +6,7 @@ import {
   parseTimestamp,
   pickPreferredManagedAgent,
   findReusablePersonaAgent,
+  findReusablePersonaAgentForRequest,
   findReusableGenericAgent,
   findReusableAgent,
 } from "./agentReuse.ts";
@@ -18,6 +19,9 @@ function makeAgent(overrides = {}) {
     id: "agent-1",
     pubkey: PUB_A,
     agentCommand: "goose",
+    agentArgs: ["acp"],
+    mcpCommand: "",
+    backend: { type: "local" },
     status: "running",
     personaId: null,
     systemPrompt: null,
@@ -213,6 +217,74 @@ test("findReusablePersonaAgent: channel membership does not affect reuse", () =>
   const result = findReusableAgent([agent], channelMembers, {
     personaId: "p1",
     command: "goose",
+  });
+  assert.equal(result, agent);
+});
+
+test("findReusablePersonaAgentForRequest: matches persona and requested local runtime", () => {
+  const agent = makeAgent({ personaId: "p1" });
+  const result = findReusablePersonaAgentForRequest([agent], {
+    personaId: "p1",
+    command: "goose",
+    defaultArgs: ["acp"],
+    mcpCommand: null,
+  });
+  assert.equal(result, agent);
+});
+
+test("findReusablePersonaAgentForRequest: rejects runtime command overrides", () => {
+  const agent = makeAgent({ personaId: "p1", agentCommand: "goose" });
+  const result = findReusablePersonaAgentForRequest([agent], {
+    personaId: "p1",
+    command: "claude-acp",
+    defaultArgs: ["acp"],
+    mcpCommand: null,
+  });
+  assert.equal(result, undefined);
+});
+
+test("findReusablePersonaAgentForRequest: rejects runtime arg overrides", () => {
+  const agent = makeAgent({ personaId: "p1", agentArgs: ["acp"] });
+  const result = findReusablePersonaAgentForRequest([agent], {
+    personaId: "p1",
+    command: "goose",
+    defaultArgs: ["acp", "--profile", "work"],
+    mcpCommand: null,
+  });
+  assert.equal(result, undefined);
+});
+
+test("findReusablePersonaAgentForRequest: rejects backend overrides", () => {
+  const agent = makeAgent({ personaId: "p1", backend: { type: "local" } });
+  const result = findReusablePersonaAgentForRequest([agent], {
+    personaId: "p1",
+    command: "goose",
+    defaultArgs: ["acp"],
+    mcpCommand: null,
+    backend: { type: "provider", id: "remote-a", config: {} },
+  });
+  assert.equal(result, undefined);
+});
+
+test("findReusablePersonaAgentForRequest: accepts equivalent provider backend config", () => {
+  const agent = makeAgent({
+    personaId: "p1",
+    backend: {
+      type: "provider",
+      id: "remote-a",
+      config: { beta: true, alpha: { second: 2, first: 1 } },
+    },
+  });
+  const result = findReusablePersonaAgentForRequest([agent], {
+    personaId: "p1",
+    command: "goose",
+    defaultArgs: ["acp"],
+    mcpCommand: "",
+    backend: {
+      type: "provider",
+      id: "remote-a",
+      config: { alpha: { first: 1, second: 2 }, beta: true },
+    },
   });
   assert.equal(result, agent);
 });

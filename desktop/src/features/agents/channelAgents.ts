@@ -2,6 +2,8 @@ import {
   commandsMatch,
   findReusableGenericAgent,
   findReusablePersonaAgent,
+  managedAgentBackendMatchesRequest,
+  managedAgentRuntimeMatchesRequest,
   pickPreferredManagedAgent,
 } from "@/features/agents/agentReuse";
 export { findReusableAgent } from "@/features/agents/agentReuse";
@@ -114,6 +116,27 @@ export function respondToUpdateForReusedAgent(
   return {
     respondTo: nextRespondTo,
     respondToAllowlist: nextAllowlist,
+  };
+}
+
+export function runtimeUpdateForReusedAgent(
+  agent: ManagedAgent,
+  runtime: ChannelAgentRuntime,
+): { agentCommand: string; agentArgs: string[]; mcpCommand: string } | null {
+  if (
+    managedAgentRuntimeMatchesRequest(agent, {
+      command: runtime.command,
+      defaultArgs: runtime.defaultArgs,
+      mcpCommand: runtime.mcpCommand,
+    })
+  ) {
+    return null;
+  }
+
+  return {
+    agentCommand: runtime.command,
+    agentArgs: runtime.defaultArgs,
+    mcpCommand: runtime.mcpCommand ?? "",
   };
 }
 
@@ -296,15 +319,29 @@ export async function createChannelManagedAgent(
       context.managedAgents,
       input.personaId,
     );
-    if (reusable) {
+    // Runtime command changes can be applied to the singleton agent below.
+    // Backend changes cannot be updated by the managed-agent API, so a backend
+    // mismatch falls through to create the requested backend instance.
+    if (
+      reusable &&
+      managedAgentBackendMatchesRequest(reusable.backend, input.backend)
+    ) {
       // Apply the caller's respondTo settings so the user's permission
       // choice in the dialog is always honored, even when reusing.
       const respondToUpdate = respondToUpdateForReusedAgent(reusable, input);
-      const updatedAgent = respondToUpdate
+      const runtimeUpdate = runtimeUpdateForReusedAgent(
+        reusable,
+        input.runtime,
+      );
+      const agentUpdate = {
+        ...(runtimeUpdate ?? {}),
+        ...(respondToUpdate ?? {}),
+      };
+      const updatedAgent = Object.keys(agentUpdate).length
         ? (
             await updateManagedAgent({
               pubkey: reusable.pubkey,
-              ...respondToUpdate,
+              ...agentUpdate,
             })
           ).agent
         : reusable;

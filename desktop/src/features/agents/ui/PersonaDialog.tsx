@@ -63,6 +63,7 @@ const PERSONA_LABEL_OPTIONAL_CLASS =
 const PERSONA_DROPDOWN_TRIGGER_CLASS =
   "flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border border-input bg-muted/40 px-3 py-2 text-left text-sm text-muted-foreground shadow-none transition-colors duration-150 ease-out hover:border-muted-foreground/40 focus:border-muted-foreground/50 focus:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 const AUTO_MODEL_DROPDOWN_VALUE = "__auto_model__";
+const AUTO_PROVIDER_DROPDOWN_VALUE = "__auto_provider__";
 
 type PersonaModelOption = {
   id: string;
@@ -73,6 +74,14 @@ const AUTO_MODEL_OPTION: PersonaModelOption = {
   id: "",
   label: "Auto (provider default)",
 };
+
+const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
+  { id: "", label: "Auto (runtime default)" },
+  { id: "anthropic", label: "Anthropic" },
+  { id: "openai", label: "OpenAI" },
+  { id: "openai-compat", label: "OpenAI-compatible" },
+  { id: "databricks", label: "Databricks" },
+];
 
 const PERSONA_MODEL_OPTIONS_BY_RUNTIME: Record<
   string,
@@ -118,6 +127,23 @@ function getPersonaModelOptions(
   return [...options, { id: trimmedModel, label: `${trimmedModel} (current)` }];
 }
 
+function getPersonaProviderOptions(
+  currentProvider: string,
+): readonly PersonaModelOption[] {
+  const trimmedProvider = currentProvider.trim();
+  if (
+    trimmedProvider.length === 0 ||
+    PERSONA_LLM_PROVIDER_OPTIONS.some((option) => option.id === trimmedProvider)
+  ) {
+    return PERSONA_LLM_PROVIDER_OPTIONS;
+  }
+
+  return [
+    ...PERSONA_LLM_PROVIDER_OPTIONS,
+    { id: trimmedProvider, label: `${trimmedProvider} (current)` },
+  ];
+}
+
 function formatRuntimeOptionLabel(runtime: AcpRuntimeCatalogEntry) {
   const suffix =
     runtime.availability === "adapter_missing"
@@ -150,6 +176,7 @@ export function PersonaDialog({
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [runtime, setRuntime] = React.useState("");
   const [model, setModel] = React.useState("");
+  const [provider, setProvider] = React.useState("");
   const [envVars, setEnvVars] = React.useState<EnvVarsValue>({});
   const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
   const [importErrorMessage, setImportErrorMessage] = React.useState<
@@ -173,6 +200,7 @@ export function PersonaDialog({
     setSystemPrompt(initialValues.systemPrompt);
     setRuntime(initialValues.runtime ?? "");
     setModel(initialValues.model ?? "");
+    setProvider(initialValues.provider ?? "");
     setEnvVars("envVars" in initialValues ? (initialValues.envVars ?? {}) : {});
     setImportErrorMessage(null);
     setIsImportingUpdate(false);
@@ -293,6 +321,7 @@ export function PersonaDialog({
       setSystemPrompt("");
       setRuntime("");
       setModel("");
+      setProvider("");
       setEnvVars({});
       setImportErrorMessage(null);
       setIsImportingUpdate(false);
@@ -313,11 +342,6 @@ export function PersonaDialog({
     }
 
     const trimmedRuntime = runtime.trim();
-    const initialRuntime = initialValues.runtime ?? "";
-    const preservedProvider =
-      "id" in initialValues && trimmedRuntime !== initialRuntime
-        ? undefined
-        : initialValues.provider;
     const preservedNamePool =
       "namePool" in initialValues ? initialValues.namePool : undefined;
     const baseInput = {
@@ -326,7 +350,7 @@ export function PersonaDialog({
       systemPrompt: systemPrompt.trim(),
       runtime: trimmedRuntime || undefined,
       model: model.trim() || undefined,
-      provider: preservedProvider ?? undefined,
+      provider: provider.trim() || undefined,
       namePool: preservedNamePool,
       envVars,
     };
@@ -371,12 +395,18 @@ export function PersonaDialog({
     (!isCreateMode || selectedRuntimeIsAvailable) &&
     !isPending;
   const modelOptions = getPersonaModelOptions(runtime, model);
+  const providerOptions = getPersonaProviderOptions(provider);
   const selectedRuntimeLabel = runtimesLoading
     ? "Loading providers..."
     : (selectedRuntime?.label ?? "Choose a provider");
   const selectedModelLabel =
     modelOptions.find((option) => option.id === model)?.label ??
     AUTO_MODEL_OPTION.label;
+  const selectedProviderLabel =
+    providerOptions.find((option) => option.id === provider)?.label ??
+    (provider.trim()
+      ? `${provider.trim()} (current)`
+      : "Auto (runtime default)");
   const previewLabel = displayName.trim() || "Agent name";
   const previewAvatarUrl = avatarUrl.trim() || null;
   const runtimeWarning =
@@ -635,6 +665,68 @@ export function PersonaDialog({
                         <SelectItem
                           key={option.id || AUTO_MODEL_DROPDOWN_VALUE}
                           value={option.id || AUTO_MODEL_DROPDOWN_VALUE}
+                        >
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <div
+              aria-hidden={!modelFieldVisible}
+              className={cn(
+                "grid overflow-hidden transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+                modelFieldVisible
+                  ? "grid-rows-[1fr] opacity-100"
+                  : "grid-rows-[0fr] opacity-0",
+              )}
+            >
+              <div className="min-h-0 overflow-hidden">
+                <div
+                  className={cn(
+                    "space-y-1.5 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+                    modelFieldVisible
+                      ? "translate-y-0 opacity-100"
+                      : "-translate-y-1 opacity-0",
+                  )}
+                >
+                  <label
+                    className="text-sm font-medium text-foreground"
+                    htmlFor="persona-llm-provider"
+                  >
+                    LLM provider
+                    <span className={PERSONA_LABEL_OPTIONAL_CLASS}>
+                      Optional
+                    </span>
+                  </label>
+                  <Select
+                    disabled={isPending || !modelFieldVisible}
+                    onValueChange={(nextProvider) => {
+                      setProvider(
+                        nextProvider === AUTO_PROVIDER_DROPDOWN_VALUE
+                          ? ""
+                          : nextProvider,
+                      );
+                    }}
+                    value={provider.trim() || AUTO_PROVIDER_DROPDOWN_VALUE}
+                  >
+                    <SelectTrigger
+                      className={PERSONA_DROPDOWN_TRIGGER_CLASS}
+                      id="persona-llm-provider"
+                    >
+                      <SelectValue placeholder={selectedProviderLabel} />
+                    </SelectTrigger>
+                    <SelectContent
+                      align="start"
+                      onCloseAutoFocus={(event) => event.preventDefault()}
+                    >
+                      {providerOptions.map((option) => (
+                        <SelectItem
+                          key={option.id || AUTO_PROVIDER_DROPDOWN_VALUE}
+                          value={option.id || AUTO_PROVIDER_DROPDOWN_VALUE}
                         >
                           {option.label}
                         </SelectItem>

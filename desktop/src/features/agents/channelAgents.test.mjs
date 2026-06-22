@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { respondToUpdateForReusedAgent } from "./channelAgents.ts";
+import {
+  respondToUpdateForReusedAgent,
+  runtimeUpdateForReusedAgent,
+} from "./channelAgents.ts";
 
 const PUBKEY = "a".repeat(64);
 
@@ -72,6 +75,36 @@ test("respondToUpdateForReusedAgent carries explicit allowlist choices", () => {
     {
       respondTo: "allowlist",
       respondToAllowlist: [PUBKEY],
+    },
+  );
+});
+
+test("runtimeUpdateForReusedAgent leaves matching runtime unchanged", () => {
+  assert.equal(
+    runtimeUpdateForReusedAgent(agent({ agentArgs: ["acp"] }), {
+      id: "goose",
+      label: "Goose",
+      command: "goose",
+      defaultArgs: ["acp"],
+      mcpCommand: null,
+    }),
+    null,
+  );
+});
+
+test("runtimeUpdateForReusedAgent returns command fields for runtime overrides", () => {
+  assert.deepEqual(
+    runtimeUpdateForReusedAgent(agent({ agentArgs: ["acp"] }), {
+      id: "claude",
+      label: "Claude Code",
+      command: "claude-acp",
+      defaultArgs: ["--mode", "acp"],
+      mcpCommand: "claude-mcp",
+    }),
+    {
+      agentCommand: "claude-acp",
+      agentArgs: ["--mode", "acp"],
+      mcpCommand: "claude-mcp",
     },
   );
 });
