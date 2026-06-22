@@ -122,9 +122,9 @@ export function useProfileFieldBuckets({
     return {
       ...bucketProfileFields(metadataFields),
       diagnosticsSummary:
-        diagnosticsFields.find((field) => field.label === "Last error")
-          ?.displayValue ??
         diagnosticsFields.find((field) => field.label === "Status")
+          ?.displayValue ??
+        diagnosticsFields.find((field) => field.label === "Last error")
           ?.displayValue ??
         null,
       modelLabel: managedAgent?.model ?? persona?.model ?? "Auto",

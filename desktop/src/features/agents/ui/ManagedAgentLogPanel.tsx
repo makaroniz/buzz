@@ -25,30 +25,43 @@ export function ManagedAgentLogPanel({
     return null;
   }
 
+  const logDescription = selectedAgent
+    ? `${selectedAgent.name} · ${describeLogFile(selectedAgent.logPath)}`
+    : "Select a local agent to inspect recent output.";
+
   return (
     <section
       className={cn(
         isInline
-          ? ""
+          ? "space-y-3"
           : "rounded-[28px] border border-border/70 bg-card/90 p-5 shadow-xs",
       )}
     >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h3 className="text-sm font-semibold tracking-tight">Harness log</h3>
-          <p className="text-sm text-muted-foreground">
-            {selectedAgent
-              ? `${selectedAgent.name} · ${describeLogFile(selectedAgent.logPath)}`
-              : "Select a local agent to inspect recent output."}
+      <div
+        className={cn(
+          "flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between",
+          isInline && "sm:items-center",
+        )}
+      >
+        {isInline ? (
+          <p className="min-w-0 truncate text-sm text-muted-foreground">
+            {logDescription}
           </p>
-        </div>
+        ) : (
+          <div>
+            <h3 className="text-sm font-semibold tracking-tight">
+              Harness log
+            </h3>
+            <p className="text-sm text-muted-foreground">{logDescription}</p>
+          </div>
+        )}
         {selectedAgent ? (
           <CopyButton label="Copy log" value={logContent ?? ""} />
         ) : null}
       </div>
 
       {!selectedAgent ? (
-        <div className="mt-4 rounded-xl border border-dashed border-border/80 bg-background/70 px-6 py-10 text-center">
+        <div className="rounded-xl border border-dashed border-border/80 bg-background/70 px-6 py-10 text-center">
           <p className="text-sm font-semibold tracking-tight">
             No local agent selected
           </p>
@@ -57,14 +70,14 @@ export function ManagedAgentLogPanel({
           </p>
         </div>
       ) : isLoading ? (
-        <div className="mt-4 rounded-xl border border-border/70 bg-background/80 p-4">
+        <div className="rounded-xl border border-border/70 bg-background/80 p-4">
           <Skeleton className="h-4 w-48" />
           <Skeleton className="mt-3 h-4 w-full" />
           <Skeleton className="mt-2 h-4 w-full" />
           <Skeleton className="mt-2 h-4 w-3/4" />
         </div>
       ) : (
-        <div className="mt-4 overflow-hidden rounded-xl border border-border/70 bg-[#17171d] text-xs text-zinc-100">
+        <div className="overflow-hidden rounded-xl border border-border/70 bg-[#17171d] text-xs text-zinc-100">
           <div className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-2xs uppercase tracking-[0.18em] text-zinc-400">
             <span>{selectedAgent.name}</span>
             <span>{selectedAgent.status}</span>
@@ -82,7 +95,7 @@ export function ManagedAgentLogPanel({
       )}
 
       {error ? (
-        <p className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <p className="inline-flex items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <CircleAlert className="h-4 w-4" />
           {error.message}
         </p>

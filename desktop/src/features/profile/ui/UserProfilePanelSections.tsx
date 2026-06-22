@@ -53,6 +53,7 @@ import { cn } from "@/shared/lib/cn";
 import { useNow } from "@/shared/lib/useNow";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { Markdown } from "@/shared/ui/markdown";
 
 // ── Summary view ─────────────────────────────────────────────────────────────
 
@@ -706,7 +707,12 @@ function ProfileIngressRow({
         {label}
       </span>
       {trailing ? (
-        <span className="text-sm text-muted-foreground">{trailing}</span>
+        <span
+          className="max-w-[45%] truncate text-right text-sm text-muted-foreground"
+          title={trailing}
+        >
+          {trailing}
+        </span>
       ) : null}
       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
     </button>
@@ -951,12 +957,13 @@ export function AgentInstructionFocusedView({
     <div className="space-y-3 pt-4">
       <div className="rounded-2xl bg-muted/20 px-4 py-3">
         {trimmedInstruction ? (
-          <p
-            className="whitespace-pre-wrap text-sm leading-6 text-foreground"
-            data-testid="user-profile-agent-instruction"
-          >
-            {trimmedInstruction}
-          </p>
+          <div data-testid="user-profile-agent-instruction">
+            <Markdown
+              className="text-sm leading-6"
+              content={trimmedInstruction}
+              interactive={false}
+            />
+          </div>
         ) : (
           <p
             className="text-sm leading-6 text-muted-foreground"

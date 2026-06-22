@@ -225,9 +225,16 @@ export function UserProfilePanel({
   const { onOpenAgentSession } = useAgentSession();
   const { goChannel } = useAppNavigation();
 
-  const profile =
-    profileQuery.data ??
-    (resolvedPersona ? buildPersonaDraftProfile(resolvedPersona) : undefined);
+  const profile = React.useMemo(() => {
+    const baseProfile =
+      profileQuery.data ??
+      (resolvedPersona ? buildPersonaDraftProfile(resolvedPersona) : undefined);
+    const fallbackAvatarUrl =
+      managedAgent?.avatarUrl ?? resolvedPersona?.avatarUrl ?? null;
+    return baseProfile && !baseProfile.avatarUrl && fallbackAvatarUrl
+      ? { ...baseProfile, avatarUrl: fallbackAvatarUrl }
+      : baseProfile;
+  }, [managedAgent?.avatarUrl, profileQuery.data, resolvedPersona]);
   const presenceStatus = pubkeyLower
     ? presenceQuery.data?.[pubkeyLower]
     : undefined;
@@ -855,6 +862,7 @@ export function UserProfilePanel({
           isLoading={managedAgentLogQuery.isLoading}
           logContent={managedAgentLogQuery.data?.content ?? null}
           selectedAgent={managedAgent ?? null}
+          variant="inline"
         />
       ) : null}
     </div>

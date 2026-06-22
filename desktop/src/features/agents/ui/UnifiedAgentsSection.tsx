@@ -252,7 +252,7 @@ function AgentPersonaCard({
   const modelLabel = formatAgentModelLabel(agent?.model ?? persona.model);
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const avatarUrl = agent
-    ? (profileQuery.data?.avatarUrl ?? null)
+    ? (profileQuery.data?.avatarUrl ?? agent.avatarUrl ?? persona.avatarUrl)
     : persona.avatarUrl;
 
   return (
@@ -286,7 +286,7 @@ function StandaloneAgentCard({
   return (
     <AgentIdentityCard
       ariaLabel={`${title} agent profile`}
-      avatarUrl={profileQuery.data?.avatarUrl ?? null}
+      avatarUrl={profileQuery.data?.avatarUrl ?? agent.avatarUrl}
       dataTestId={`managed-agent-${agent.pubkey}`}
       label={title}
       modelLabel={formatAgentModelLabel(agent.model)}
