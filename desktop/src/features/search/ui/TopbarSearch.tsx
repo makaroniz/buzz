@@ -20,6 +20,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/shared/ui/dialog";
+import { SidebarMenuButton } from "@/shared/ui/sidebar";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
@@ -30,6 +31,7 @@ type TopbarSearchProps = {
   focusRequest?: number;
   onOpenChannel: (channelId: string) => void;
   onOpenResult: (hit: SearchHit) => void;
+  variant?: "bar" | "sidebar-item";
 };
 
 function describeSearchHit(hit: SearchHit) {
@@ -146,11 +148,13 @@ export function TopbarSearch({
   focusRequest = 0,
   onOpenChannel,
   onOpenResult,
+  variant = "bar",
 }: TopbarSearchProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [selectedMenuIndex, setSelectedMenuIndex] = React.useState(0);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const dialogInputRef = React.useRef<HTMLInputElement>(null);
+  const isSidebarItemVariant = variant === "sidebar-item";
   const {
     channelLookup,
     debouncedQuery,
@@ -330,26 +334,45 @@ export function TopbarSearch({
     <div className={cn("relative", className)}>
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogTrigger asChild>
-          <button
-            aria-label="Search everything"
-            className="group/search flex h-7 w-full items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-xs text-muted-foreground shadow-xs transition-colors duration-150 ease-out hover:bg-muted/70 hover:text-foreground focus-visible:border-border focus-visible:bg-muted/70 focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-            data-testid="open-search"
-            ref={triggerRef}
-            type="button"
-          >
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-visible/search:text-foreground" />
-            <span
-              className={cn(
-                "min-w-0 flex-1 translate-y-px truncate transition-colors duration-150 ease-out",
-                query ? "text-foreground" : "text-muted-foreground/55",
-              )}
+          {isSidebarItemVariant ? (
+            <SidebarMenuButton
+              className="group/search"
+              data-testid="open-search"
+              ref={triggerRef}
+              title="Search"
+              type="button"
             >
-              {query || "Search everything"}
-            </span>
-            <kbd className="shrink-0 text-2xs text-muted-foreground/70">
-              &#x2318;K
-            </kbd>
-          </button>
+              <Search className="h-4 w-4" />
+              <span className="min-w-0 flex-1 truncate">Search</span>
+              <kbd
+                aria-hidden="true"
+                className="ml-auto shrink-0 text-2xs text-sidebar-foreground/45 opacity-0 transition-opacity duration-150 group-hover/search:opacity-100 group-focus-visible/search:opacity-100 group-data-[collapsible=icon]:hidden"
+              >
+                &#x2318;K
+              </kbd>
+            </SidebarMenuButton>
+          ) : (
+            <button
+              aria-label="Search everything"
+              className="group/search flex h-7 w-full items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-xs text-muted-foreground shadow-xs transition-colors duration-150 ease-out hover:bg-muted/70 hover:text-foreground focus-visible:border-border focus-visible:bg-muted/70 focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              data-testid="open-search"
+              ref={triggerRef}
+              type="button"
+            >
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-visible/search:text-foreground" />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 translate-y-px truncate transition-colors duration-150 ease-out",
+                  query ? "text-foreground" : "text-muted-foreground/55",
+                )}
+              >
+                {query || "Search everything"}
+              </span>
+              <kbd className="shrink-0 text-2xs text-muted-foreground/70">
+                &#x2318;K
+              </kbd>
+            </button>
+          )}
         </DialogTrigger>
         <DialogContent
           aria-busy={searchQuery.isLoading && results.length === 0}

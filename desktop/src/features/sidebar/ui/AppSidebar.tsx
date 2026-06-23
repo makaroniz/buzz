@@ -529,18 +529,21 @@ export function AppSidebar({
           className="mt-(--buzz-top-chrome-height,2.5rem) shrink-0 px-2 pt-2"
           data-testid="sidebar-pinned-header"
         >
-          <TopbarSearch
-            channels={searchChannels}
-            currentPubkey={currentPubkey}
-            focusRequest={searchFocusRequest}
-            onOpenChannel={onSelectChannel}
-            onOpenResult={onOpenSearchResult}
-          />
           <SidebarHeader
             className="cursor-default select-none px-0 pb-0 pt-2"
             data-tauri-drag-region
           >
             <SidebarMenu>
+              <SidebarMenuItem>
+                <TopbarSearch
+                  channels={searchChannels}
+                  currentPubkey={currentPubkey}
+                  focusRequest={searchFocusRequest}
+                  onOpenChannel={onSelectChannel}
+                  onOpenResult={onOpenSearchResult}
+                  variant="sidebar-item"
+                />
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   isActive={selectedView === "home"}
