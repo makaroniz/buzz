@@ -15,8 +15,9 @@ export function subscribeToAgentObserverFrames(
       kinds: [KIND_AGENT_OBSERVER_FRAME],
       "#p": [ownerPubkey],
       // A popped-out OS window is a fresh webview with a fresh in-memory
-      // observer store. Replay recent telemetry so it hydrates the activity
-      // that happened before the window opened, then continue live.
+      // observer store. Replay recent telemetry so it hydrates the activity that
+      // happened before the window opened and so reconnect replay can recover
+      // observer frames missed during a drop.
       limit: OBSERVER_REPLAY_LIMIT,
       since: Math.floor(Date.now() / 1_000) - OBSERVER_REPLAY_WINDOW_SECS,
     },

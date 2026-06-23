@@ -91,6 +91,25 @@ pub const KIND_AGENT_PROFILE: u32 = 10100;
 /// `docs/nips/NIP-AE.md` and [`crate::engram`].
 pub const KIND_AGENT_ENGRAM: u32 = 30174;
 
+/// NIP-ER: Event Reminder (parameterized replaceable, author-only).
+///
+/// Encrypted, author-only reminder addressed by `(pubkey, kind, d_tag)`. The
+/// public `not_before` tag tells supporting relays when the reminder is due;
+/// the target, note, and state are NIP-44 encrypted to the author. Reads are
+/// author-only (see [`AUTHOR_ONLY_KINDS`]). See `docs/nips/NIP-ER.md`.
+pub const KIND_EVENT_REMINDER: u32 = 30300;
+
+/// Kinds whose stored events are readable only by their author.
+///
+/// The relay must never reveal the existence, count, tags, content, schedule,
+/// or search matches of these events to anyone but the authenticated author.
+/// Shared across the ingest write path (NIP-ER `not_before` validation) and the
+/// read path (REQ/COUNT/subscription author-only filtering).
+///
+/// Currently O(1) with a single entry. If this grows past ~4 kinds, convert to
+/// a compile-time bitset or sorted array with binary search for hot-path use.
+pub const AUTHOR_ONLY_KINDS: &[u32] = &[KIND_EVENT_REMINDER];
+
 // NIP-29 group admin events
 /// NIP-29: Add a user to a group.
 pub const KIND_NIP29_PUT_USER: u32 = 9000;
@@ -187,6 +206,9 @@ pub const KIND_PAIRING: u32 = 24134;
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
 /// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
 pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
+/// Ephemeral: huddle emoji reaction burst. Channel-scoped to the ephemeral
+/// huddle channel with an `h` tag; never stored in the timeline.
+pub const KIND_HUDDLE_REACTION: u32 = 24810;
 /// Ephemeral: mesh status report (desktop → relay). A relay member reports its
 /// current mesh serve availability + EndpointAddr(s) so the relay can project a
 /// sanitized, relay-signed kind:30621 discovery note keyed per reporter. Tagged
@@ -368,6 +390,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_FILE_METADATA,
     KIND_AGENT_PROFILE,
     KIND_AGENT_ENGRAM,
+    KIND_EVENT_REMINDER,
     KIND_NIP29_PUT_USER,
     KIND_NIP29_REMOVE_USER,
     KIND_NIP29_EDIT_METADATA,
@@ -395,6 +418,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_GROUP_ROLES,
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
+    KIND_HUDDLE_REACTION,
     KIND_MESH_STATUS_REPORT,
     KIND_MESH_CONNECT_REQUEST,
     KIND_MESH_CALL_ME_NOW,
@@ -550,6 +574,7 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 // Compile-time: new kinds are in the expected ranges.
 const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MESH_LLM_RELAY_STATUS)); // 30621 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 

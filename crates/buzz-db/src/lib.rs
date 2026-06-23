@@ -23,6 +23,8 @@ pub mod error;
 pub mod event;
 /// Home feed queries.
 pub mod feed;
+/// Embedded database migrations.
+pub mod migration;
 /// Monthly table partition management.
 pub mod partition;
 /// Reaction persistence.
@@ -194,6 +196,11 @@ impl Db {
     /// Creates a `Db` from an existing `PgPool` (useful in tests).
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Run pending database migrations.
+    pub async fn migrate(&self) -> Result<()> {
+        migration::run_migrations(&self.pool).await
     }
 
     /// Returns `true` if the database is reachable (used by readiness probes).
@@ -530,6 +537,26 @@ impl Db {
     /// Archive ephemeral channels whose TTL deadline has passed.
     pub async fn reap_expired_ephemeral_channels(&self) -> Result<Vec<Uuid>> {
         channel::reap_expired_ephemeral_channels(&self.pool).await
+    }
+
+    // ── Reminder scheduler ───────────────────────────────────────────────────
+
+    /// Query due reminders ready for delivery.
+    pub async fn query_due_reminders(
+        &self,
+        now_secs: i64,
+        batch_limit: i64,
+    ) -> Result<Vec<event::DueReminder>> {
+        event::query_due_reminders(&self.pool, now_secs, batch_limit).await
+    }
+
+    /// Atomically claim a due reminder for delivery (cross-pod dedup).
+    pub async fn claim_due_reminder(
+        &self,
+        event_id: &[u8],
+        event_created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        event::claim_due_reminder(&self.pool, event_id, event_created_at).await
     }
 
     // ── Users ────────────────────────────────────────────────────────────────
@@ -1725,8 +1752,8 @@ impl Db {
         let received_at = chrono::Utc::now();
 
         let insert_result = sqlx::query(
-            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT DO NOTHING",
         )
         .bind(event.id.as_bytes().as_slice())
@@ -1739,6 +1766,7 @@ impl Db {
         .bind(received_at)
         .bind(channel_id)
         .bind(d_tag)
+        .bind(event::extract_not_before(event))
         .execute(&mut *tx)
         .await?;
 

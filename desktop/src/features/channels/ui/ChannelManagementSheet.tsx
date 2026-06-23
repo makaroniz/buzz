@@ -68,7 +68,7 @@ type ChannelManagementSheetProps = {
   open: boolean;
 };
 
-const DEFAULT_EPHEMERAL_TTL_SECONDS = 24 * 60 * 60;
+const DEFAULT_EPHEMERAL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 function MetadataPill({
   icon: Icon,
@@ -79,7 +79,7 @@ function MetadataPill({
 }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="h-4 w-4" />
       <span>{label}</span>
     </div>
   );
@@ -481,7 +481,7 @@ export function ChannelManagementSheet({
                   >
                     {ttlInvalid
                       ? "Enter a duration like 1d, 12h, or 30m."
-                      : "Defaults to 1d when left empty. Resets the deletion countdown from now whenever changed."}
+                      : "Defaults to 7d when left empty. Resets the deletion countdown from now whenever changed."}
                   </p>
                 </div>
               ) : null}

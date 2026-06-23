@@ -75,7 +75,10 @@ function ReplyRow({
   const replyMentionNames = resolveMentionNames(reply.tags, profiles);
 
   return (
-    <div className="group px-4 py-3" data-forum-event-id={reply.eventId}>
+    <div
+      className="group content-visibility-auto px-4 py-3"
+      data-forum-event-id={reply.eventId}
+    >
       <div className="flex items-center gap-2">
         <UserProfilePopover pubkey={reply.pubkey}>
           <button
@@ -107,7 +110,7 @@ function ReplyRow({
       <div className="mt-1.5 pl-8">
         <Markdown
           channelNames={channelNames}
-          compact
+          className="text-sm"
           content={reply.content}
           imetaByUrl={parseImetaTags(reply.tags)}
           mentionNames={replyMentionNames}
@@ -247,6 +250,7 @@ export function ForumThreadPanel({
           <div className="mt-3">
             <Markdown
               channelNames={channelNames}
+              className="text-sm"
               content={post.content}
               imetaByUrl={parseImetaTags(post.tags)}
               mentionNames={postMentionNames}

@@ -65,6 +65,7 @@ fn copy_dir_all_preserves_nested_files_without_overwriting() {
 /// Helper: create a temp dir structure mimicking canonical + worktree layout.
 /// Packs live in a `.main` sibling (not canonical) to match real-world state.
 /// Returns `(parent_dir_handle, canonical_dir, worktree_dir)`.
+#[cfg(unix)]
 fn setup_sync_layout() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let parent = tempfile::tempdir().unwrap();
     let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
@@ -97,7 +98,37 @@ fn setup_sync_layout() -> (tempfile::TempDir, PathBuf, PathBuf) {
 /// Mirrors the symlink loop of `sync_shared_agent_data` but takes explicit
 /// paths. `sync_shared_agent_data` requires a live Tauri AppHandle and
 /// cannot be unit-tested directly.
+#[cfg(unix)]
 fn sync_files(canonical: &Path, worktree: &Path) -> u32 {
+    // Seed-up: mirrors the SHARED_AGENT_FILES seed-up in `sync_shared_agent_data`.
+    // Kept logic-identical to production so these tests exercise real behavior.
+    for rel in SHARED_AGENT_FILES {
+        let canonical_file = canonical.join(rel);
+        if canonical_file.exists() {
+            continue;
+        }
+        let Some(parent) = canonical.parent() else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let sibling = entry.path();
+            if sibling == canonical {
+                continue;
+            }
+            let sibling_file = sibling.join(rel);
+            if sibling_file.is_file() && !sibling_file.is_symlink() {
+                if let Some(file_parent) = canonical_file.parent() {
+                    std::fs::create_dir_all(file_parent).unwrap();
+                }
+                let _ = std::fs::rename(&sibling_file, &canonical_file);
+                break;
+            }
+        }
+    }
+
     let mut synced = 0u32;
     for rel in SHARED_AGENT_FILES {
         let src = canonical.join(rel);
@@ -180,6 +211,7 @@ fn sync_files(canonical: &Path, worktree: &Path) -> u32 {
     synced
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_creates_symlinks_to_fresh_worktree() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -201,6 +233,7 @@ fn sync_creates_symlinks_to_fresh_worktree() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_replaces_existing_files_with_symlinks() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -226,6 +259,7 @@ fn sync_replaces_existing_files_with_symlinks() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_preserves_correct_symlinks() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -238,6 +272,7 @@ fn sync_preserves_correct_symlinks() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_replaces_wrong_symlinks() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -256,6 +291,7 @@ fn sync_replaces_wrong_symlinks() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_handles_broken_symlinks() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -275,6 +311,7 @@ fn sync_handles_broken_symlinks() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn writes_through_symlink_reach_canonical() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -304,6 +341,103 @@ fn writes_through_symlink_reach_canonical() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn seed_up_migrates_sibling_file_to_canonical_then_symlinks() {
+    let (_parent, canonical, worktree) = setup_sync_layout();
+    let rel = "agents/personas.json";
+    // Canonical is missing the file; a sibling (.main) holds real content.
+    std::fs::remove_file(canonical.join(rel)).unwrap();
+    let sibling = canonical
+        .parent()
+        .unwrap()
+        .join("xyz.block.buzz.app.dev.main");
+    std::fs::create_dir_all(sibling.join("agents")).unwrap();
+    std::fs::write(sibling.join(rel), r#"[{"id":"brain"}]"#).unwrap();
+
+    sync_files(&canonical, &worktree);
+
+    // The real file landed at canonical (proves the rename, not a dangling link).
+    let canonical_file = canonical.join(rel);
+    assert!(
+        canonical_file.is_file() && !canonical_file.is_symlink(),
+        "canonical should hold the migrated real file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&canonical_file).unwrap(),
+        r#"[{"id":"brain"}]"#,
+    );
+    // The worktree is symlinked to canonical.
+    let dst = worktree.join(rel);
+    assert!(dst.is_symlink());
+    assert_eq!(std::fs::read_link(&dst).unwrap(), canonical_file);
+}
+
+#[cfg(unix)]
+#[test]
+fn seed_up_no_sibling_content_is_noop() {
+    let (_parent, canonical, worktree) = setup_sync_layout();
+    let rel = "agents/personas.json";
+    // Canonical missing the file and no sibling holds it.
+    std::fs::remove_file(canonical.join(rel)).unwrap();
+
+    sync_files(&canonical, &worktree);
+
+    // Nothing to seed: canonical stays missing, worktree gets no symlink for it.
+    assert!(!canonical.join(rel).exists());
+    assert!(!worktree.join(rel).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn seed_up_skipped_when_canonical_has_file() {
+    let (_parent, canonical, worktree) = setup_sync_layout();
+    let rel = "agents/personas.json";
+    // A sibling also holds different content, but canonical already has the file.
+    let sibling = canonical
+        .parent()
+        .unwrap()
+        .join("xyz.block.buzz.app.dev.main");
+    std::fs::create_dir_all(sibling.join("agents")).unwrap();
+    std::fs::write(sibling.join(rel), r#"[{"id":"should-not-win"}]"#).unwrap();
+
+    sync_files(&canonical, &worktree);
+
+    // Canonical's original content is untouched; the sibling did not seed it.
+    assert_eq!(
+        std::fs::read_to_string(canonical.join(rel)).unwrap(),
+        r#"[{"id":"builtin:fizz"}]"#,
+    );
+    // Pull-symlink path is unchanged: worktree links to canonical.
+    let dst = worktree.join(rel);
+    assert!(dst.is_symlink());
+    assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
+}
+
+#[cfg(unix)]
+#[test]
+fn seed_up_ignores_sibling_symlink_as_source() {
+    let (_parent, canonical, worktree) = setup_sync_layout();
+    let rel = "agents/personas.json";
+    std::fs::remove_file(canonical.join(rel)).unwrap();
+    // Sibling holds only a symlink (not real content) — not a valid seed source.
+    let sibling = canonical
+        .parent()
+        .unwrap()
+        .join("xyz.block.buzz.app.dev.main");
+    std::fs::create_dir_all(sibling.join("agents")).unwrap();
+    std::os::unix::fs::symlink(
+        PathBuf::from("/nonexistent/elsewhere.json"),
+        sibling.join(rel),
+    )
+    .unwrap();
+
+    sync_files(&canonical, &worktree);
+
+    // The symlink was not promoted; canonical stays missing.
+    assert!(!canonical.join(rel).exists());
+}
+
 #[test]
 fn canonical_dev_data_dir_returns_self_for_canonical_instance() {
     // When the current app data dir IS the canonical dev identifier,
@@ -321,6 +455,7 @@ fn canonical_dev_data_dir_returns_self_for_canonical_instance() {
     assert_eq!(canonical_dev_data_dir(&canonical).unwrap(), canonical);
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_creates_teams_directory_symlink() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -341,6 +476,7 @@ fn sync_creates_teams_directory_symlink() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_migrates_teams_from_sibling_to_canonical() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -368,6 +504,7 @@ fn sync_migrates_teams_from_sibling_to_canonical() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn sync_replaces_real_teams_dir_with_symlink() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -386,6 +523,7 @@ fn sync_replaces_real_teams_dir_with_symlink() {
 
 // ── Packs → Teams migration tests ───────────────────────────────────
 
+#[cfg(unix)]
 #[test]
 fn migrate_packs_merge_preserves_non_empty_dir() {
     // When packs/ contains symlinks that weren't moved (e.g., external tools

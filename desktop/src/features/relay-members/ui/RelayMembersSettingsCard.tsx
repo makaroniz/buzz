@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { Input } from "@/shared/ui/input";
+import { VirtualizedList } from "@/shared/ui/VirtualizedList";
 
 type AssignableRelayRole = Exclude<RelayMemberRole, "owner">;
 
@@ -165,10 +166,10 @@ function RelayMemberRow({
       <div className="min-w-0 flex-1 space-y-0.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {member.role === "owner" ? (
-            <Crown className="h-3.5 w-3.5 text-amber-500" />
+            <Crown className="h-4 w-4 text-amber-500" />
           ) : null}
           {member.role === "admin" ? (
-            <Shield className="h-3.5 w-3.5 text-blue-500" />
+            <Shield className="h-4 w-4 text-blue-500" />
           ) : null}
           <span className="truncate text-sm font-medium">{displayName}</span>
           {isSelf ? (
@@ -461,10 +462,13 @@ export function RelayMembersSettingsCard({
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
+              autoCapitalize="none"
+              autoCorrect="off"
               className="w-full rounded-lg border border-border/70 bg-background/70 py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
               data-testid="relay-members-search"
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search members by name, npub, or role…"
+              spellCheck={false}
               type="text"
               value={search}
             />
@@ -483,17 +487,22 @@ export function RelayMembersSettingsCard({
               No members match your search.
             </p>
           ) : (
-            <div className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
-              {filteredMembers.map((member) => (
-                <RelayMemberRow
-                  currentPubkey={currentPubkey}
-                  currentRole={currentRole}
-                  key={member.pubkey}
-                  member={member}
-                  profile={profiles?.[normalizePubkey(member.pubkey)]}
-                />
-              ))}
-            </div>
+            <VirtualizedList
+              className="max-h-[28rem] pr-1"
+              estimateSize={56}
+              getItemKey={(member) => member.pubkey}
+              items={filteredMembers}
+              renderItem={(member) => (
+                <div className="pb-2">
+                  <RelayMemberRow
+                    currentPubkey={currentPubkey}
+                    currentRole={currentRole}
+                    member={member}
+                    profile={profiles?.[normalizePubkey(member.pubkey)]}
+                  />
+                </div>
+              )}
+            />
           )}
         </div>
       </div>

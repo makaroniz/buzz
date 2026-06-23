@@ -179,7 +179,7 @@ export function NotificationSettingsCard({
                           <span className="flex items-center gap-2 text-sm font-medium">
                             {SLOT_LABELS[slot]}
                             {comingSoon ? (
-                              <span className="rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                              <span className="rounded-full bg-muted/70 px-2 py-0.5 text-2xs font-normal uppercase tracking-wide text-muted-foreground">
                                 Coming soon
                               </span>
                             ) : null}
@@ -227,12 +227,12 @@ export function NotificationSettingsCard({
                   >
                     {showComingSoon ? (
                       <>
-                        <ChevronUp className="h-3.5 w-3.5" />
+                        <ChevronUp className="h-4 w-4" />
                         Show less
                       </>
                     ) : (
                       <>
-                        <ChevronDown className="h-3.5 w-3.5" />
+                        <ChevronDown className="h-4 w-4" />
                         View all
                       </>
                     )}

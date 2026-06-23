@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import {
+  installMockBridge,
+  openChannelBrowser,
+  TEST_IDENTITIES,
+} from "../helpers/bridge";
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
@@ -24,7 +28,7 @@ const SYSTEM_MESSAGE_KIND = 40099;
 function autocomplete(page: import("@playwright/test").Page) {
   return page
     .getByTestId("message-composer")
-    .locator(".rounded-xl.border.bg-popover");
+    .getByTestId("mention-autocomplete");
 }
 
 async function readCommandLog(page: import("@playwright/test").Page) {
@@ -82,6 +86,15 @@ async function waitForMockLiveSubscription(
       );
     })
     .toBe(true);
+}
+
+// The channel timeline renders off a `useDeferredValue` snapshot that lags the
+// latest `messages` by a commit; the list wrapper carries
+// `data-render-pending="true"` while that commit is in flight and drops the
+// attribute once it settles. Poll for its absence before asserting on
+// freshly-sent content so the assertion does not race the deferred commit.
+async function waitForTimelineSettled(page: import("@playwright/test").Page) {
+  await expect(page.locator("[data-render-pending]")).toHaveCount(0);
 }
 
 test("@ trigger shows unified autocomplete with agents first", async ({
@@ -188,7 +201,7 @@ test("selecting a person mention inserts @Name into input", async ({
   await dropdown.getByText("bob").click();
 
   await expect(input).toHaveText("Hey @bob ");
-  const mentionChip = input.locator(".mention-highlight", {
+  const mentionChip = input.locator(".mention-chip", {
     hasText: "@bob",
   });
   await expect(mentionChip).toBeVisible();
@@ -370,7 +383,7 @@ test("relay-profile agents with member roles use the agent composer style", asyn
 }) => {
   await page.goto("/");
 
-  await page.getByTestId("browse-channels").click();
+  await openChannelBrowser(page);
   await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
   await page
     .getByTestId("browse-channel-sales")
@@ -406,7 +419,7 @@ test("profile-only agents without public respond-to are hidden from mentions", a
 
   const dropdown = autocomplete(page);
   await expect(dropdown).not.toBeVisible();
-  await expect(input.locator(".mention-highlight")).toHaveCount(0);
+  await expect(input.locator(".mention-chip")).toHaveCount(0);
 });
 
 test("mentioning an in-channel stopped managed agent starts it before sending", async ({
@@ -690,6 +703,49 @@ test("system add and remove rows use agent mention styling for managed agents", 
   ).toHaveText("portal");
 });
 
+test("system member-joined rows render the joined person as a mention chip", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general", SYSTEM_MESSAGE_KIND);
+
+  await page.evaluate(
+    ({ kind, pubkey }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content: JSON.stringify({
+          type: "member_joined",
+          actor: pubkey,
+          target: pubkey,
+        }),
+        kind,
+      });
+    },
+    { kind: SYSTEM_MESSAGE_KIND, pubkey: TEST_IDENTITIES.bob.pubkey },
+  );
+  await waitForTimelineSettled(page);
+
+  const joinedRow = page
+    .getByTestId("system-message-row")
+    .filter({ hasText: "bob" })
+    .filter({ hasText: "joined the channel" });
+  const joinedPersonChip = joinedRow.locator("[data-mention].mention-chip", {
+    hasText: "bob",
+  });
+
+  await expect(joinedPersonChip).toBeVisible();
+  await expect(joinedPersonChip).toHaveCSS("display", /^(inline-)?flex$/);
+  await expect(joinedPersonChip).not.toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(joinedPersonChip.locator(".mention-chip-prefix")).toHaveText(
+    "@",
+  );
+});
+
 test("selecting a non-member agent from a DM inserts @Name into input", async ({
   page,
 }) => {
@@ -703,11 +759,11 @@ test("selecting a non-member agent from a DM inserts @Name into input", async ({
   const dropdown = autocomplete(page);
   await expect(dropdown.getByText("charlie")).toBeVisible();
   await expect(autocomplete(page)).toHaveCount(1);
-  await expect(input.locator(".mention-highlight")).toHaveCount(0);
+  await expect(input.locator(".mention-chip")).toHaveCount(0);
   await input.press("Enter");
 
   await expect(input).toHaveText("@charlie ");
-  await expect(input.locator(".mention-highlight")).toBeVisible();
+  await expect(input.locator(".mention-chip")).toBeVisible();
 });
 
 test("do nothing sends a non-member mention without inviting", async ({
@@ -979,7 +1035,7 @@ test("Escape dismisses autocomplete dropdown", async ({ page }) => {
 });
 
 test("mention text is highlighted in sent messages", async ({ page }) => {
-  const suffix = `check this out ${Date.now()}`;
+  const suffix = ` check this out ${Date.now()}`;
 
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -988,14 +1044,18 @@ test("mention text is highlighted in sent messages", async ({ page }) => {
   const input = page.getByTestId("message-input");
   await input.fill("Hey @bo");
   await autocomplete(page).getByText("bob").click();
+  await expect(input).toHaveText("Hey @bob ");
   await page.keyboard.type(suffix);
   await page.getByTestId("send-message").click();
+
+  await waitForTimelineSettled(page);
 
   const mentionChip = page
     .getByTestId("message-row")
     .last()
-    .locator("[data-mention]", { hasText: "@bob" });
+    .locator("[data-mention].mention-chip", { hasText: "bob" });
   await expect(mentionChip).toBeVisible();
+  await expect(mentionChip.locator(".mention-chip-prefix")).toHaveText("@");
   await expect(mentionChip.locator("svg")).toHaveCount(0);
 });
 

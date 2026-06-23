@@ -36,6 +36,9 @@ export function ChannelCanvas({
   const [draft, setDraft] = React.useState("");
 
   const canvasContent = canvasQuery.data?.content ?? null;
+  // Defer the single large Markdown parse so opening the canvas commits the
+  // surrounding chrome immediately and the heavy render reconciles after.
+  const deferredCanvasContent = React.useDeferredValue(canvasContent);
 
   function handleStartEditing() {
     setDraft(canvasContent ?? "");
@@ -123,8 +126,7 @@ export function ChannelCanvas({
         >
           <Markdown
             channelNames={channelNames}
-            compact
-            content={canvasContent}
+            content={deferredCanvasContent ?? ""}
           />
         </div>
       ) : (

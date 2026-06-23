@@ -1,38 +1,46 @@
+import * as React from "react";
+
 import type {
   TimelineThreadSummary,
   TimelineThreadSummaryParticipant,
 } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
+import type { ThreadDepthGuideAction } from "@/features/messages/ui/MessageRow";
 import { formatThreadSummaryLastReplyTime } from "@/features/messages/lib/dateFormatters";
+import {
+  getThreadReplyAvatarCenterPx,
+  getThreadReplyIndentPx,
+  THREAD_REPLY_BODY_OFFSET_PX,
+  THREAD_REPLY_LINE_WIDTH_PX,
+} from "@/features/messages/lib/threadTreeLayout";
+import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
-
-const MESSAGE_TEXT_OFFSET_PX = 54;
-const MESSAGE_BODY_OFFSET_PX = MESSAGE_TEXT_OFFSET_PX + 4;
-const NESTED_REPLY_OFFSET_PX = 28;
 
 function ParticipantAvatar({
   participant,
   index,
+  participantCount,
 }: {
   participant: TimelineThreadSummaryParticipant;
   index: number;
+  participantCount: number;
 }) {
   return (
     <div
       className={index > 0 ? "-ml-2" : ""}
       data-testid="message-thread-summary-participant"
       style={{
-        zIndex: 10 - index,
-        ...(index > 0 && {
-          mask: "radial-gradient(circle 16px at -4px 50%, transparent 99%, #fff 100%)",
+        zIndex: index + 1,
+        ...(index < participantCount - 1 && {
+          mask: "radial-gradient(circle 16px at calc(100% + 4px) 50%, transparent 99%, #fff 100%)",
           WebkitMask:
-            "radial-gradient(circle 16px at -4px 50%, transparent 99%, #fff 100%)",
+            "radial-gradient(circle 16px at calc(100% + 4px) 50%, transparent 99%, #fff 100%)",
         }),
       }}
     >
       <UserAvatar
         avatarUrl={participant.avatarUrl}
-        className="h-7 w-7 text-[10px]"
+        className="h-7 w-7 text-2xs"
         displayName={participant.author}
         size="sm"
       />
@@ -41,55 +49,145 @@ function ParticipantAvatar({
 }
 
 export function MessageThreadSummaryRow({
+  collapseDepthGuideActions,
   depth = 0,
+  depthGuideDepths,
+  highlightThreadLineDepths,
   message,
+  onCollapseDepthGuide,
+  onCollapseDepthGuideHoverChange,
   onOpenThread,
+  showDepthGuides = true,
   summary,
+  summaryIndentOffsetPx = 0,
+  unreadCount,
 }: {
+  collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
   depth?: number;
+  depthGuideDepths?: ReadonlyArray<number>;
+  highlightThreadLineDepths?: ReadonlyArray<number>;
   message: TimelineMessage;
+  onCollapseDepthGuide?: (message: TimelineMessage) => void;
+  onCollapseDepthGuideHoverChange?: (
+    message: TimelineMessage,
+    hovered: boolean,
+  ) => void;
   onOpenThread: (message: TimelineMessage) => void;
+  showDepthGuides?: boolean;
   summary: TimelineThreadSummary;
+  summaryIndentOffsetPx?: number;
+  unreadCount?: number;
 }) {
-  const visibleDepth = Math.min(Math.max(depth, 0), 6);
-  const indentPx =
-    visibleDepth > 0
-      ? MESSAGE_TEXT_OFFSET_PX + (visibleDepth - 1) * NESTED_REPLY_OFFSET_PX
-      : 0;
-  const marginLeftPx = indentPx + MESSAGE_BODY_OFFSET_PX;
+  const indentPx = getThreadReplyIndentPx(depth);
+  const marginLeftPx =
+    indentPx + THREAD_REPLY_BODY_OFFSET_PX + summaryIndentOffsetPx;
   const replyLabel = summary.replyCount === 1 ? "reply" : "replies";
   const summaryAriaLabel = summary.lastReplyAt
     ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}`
     : `View thread with ${summary.replyCount} ${replyLabel}`;
-  const depthGuideOffsets =
-    visibleDepth === 0
-      ? []
-      : Array.from({ length: visibleDepth }, (_, index) =>
-          index === 0
-            ? MESSAGE_TEXT_OFFSET_PX / 2
-            : MESSAGE_TEXT_OFFSET_PX +
-              NESTED_REPLY_OFFSET_PX / 2 +
-              (index - 1) * NESTED_REPLY_OFFSET_PX,
-        );
+  const guideDepths = depthGuideDepths
+    ? [...depthGuideDepths]
+    : Array.from({ length: depth }, (_, index) => index);
+  const depthGuideItems = guideDepths.map((guideDepth) => ({
+    depth: guideDepth,
+    offset: getThreadReplyAvatarCenterPx(guideDepth),
+  }));
+  const collapseDepthGuideActionsByDepth = new Map(
+    collapseDepthGuideActions?.map((action) => [action.depth, action]) ?? [],
+  );
 
   return (
     <div className="relative pb-1 pt-0.5">
-      {depthGuideOffsets.length > 0 ? (
+      {showDepthGuides && depthGuideItems.length > 0 ? (
         <div
-          aria-hidden
-          className="pointer-events-none absolute left-0"
+          aria-hidden={
+            collapseDepthGuideActionsByDepth.size > 0 ? undefined : true
+          }
+          className={cn(
+            "absolute left-0",
+            collapseDepthGuideActionsByDepth.size === 0 &&
+              "pointer-events-none",
+          )}
           style={{ bottom: "-4px", top: "-4px" }}
         >
-          {depthGuideOffsets.map((offset, index) => (
-            <div
-              className="absolute bottom-0 top-0 border-l border-border/70"
-              key={`${message.id}-summary-depth-guide-${offset}`}
-              style={{
-                left: `${offset}px`,
-                opacity: index === depthGuideOffsets.length - 1 ? 0.9 : 0.55,
-              }}
-            />
-          ))}
+          {depthGuideItems.map(({ depth: guideDepth, offset }) => {
+            const collapseAction =
+              collapseDepthGuideActionsByDepth.get(guideDepth);
+            const isHighlighted =
+              Boolean(collapseAction?.active) ||
+              Boolean(highlightThreadLineDepths?.includes(guideDepth));
+            if (collapseAction) {
+              return (
+                <React.Fragment
+                  key={`${message.id}-summary-depth-guide-${offset}`}
+                >
+                  <div
+                    aria-hidden
+                    className={cn(
+                      "pointer-events-none absolute bottom-0 top-0 border-l transition-[border-color]",
+                      isHighlighted ? "border-primary" : "border-border",
+                    )}
+                    style={{
+                      borderLeftWidth: `${THREAD_REPLY_LINE_WIDTH_PX}px`,
+                      left: `${offset}px`,
+                    }}
+                  />
+                  <button
+                    aria-label={collapseAction.label}
+                    className="absolute bottom-0 top-0 z-20 w-5 -translate-x-1/2 cursor-pointer rounded-full focus-visible:outline-hidden"
+                    data-thread-head-id={collapseAction.message.id}
+                    data-testid="thread-collapse-guide"
+                    onBlur={() =>
+                      onCollapseDepthGuideHoverChange?.(
+                        collapseAction.message,
+                        false,
+                      )
+                    }
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onCollapseDepthGuide?.(collapseAction.message);
+                    }}
+                    onFocus={() =>
+                      onCollapseDepthGuideHoverChange?.(
+                        collapseAction.message,
+                        true,
+                      )
+                    }
+                    onMouseEnter={() =>
+                      onCollapseDepthGuideHoverChange?.(
+                        collapseAction.message,
+                        true,
+                      )
+                    }
+                    onMouseLeave={() =>
+                      onCollapseDepthGuideHoverChange?.(
+                        collapseAction.message,
+                        false,
+                      )
+                    }
+                    style={{ left: `${offset}px` }}
+                    type="button"
+                  />
+                </React.Fragment>
+              );
+            }
+
+            return (
+              <div
+                aria-hidden
+                className={cn(
+                  "pointer-events-none absolute bottom-0 top-0 border-l transition-[border-color]",
+                  isHighlighted ? "border-primary" : "border-border",
+                )}
+                key={`${message.id}-summary-depth-guide-${offset}`}
+                style={{
+                  borderLeftWidth: `${THREAD_REPLY_LINE_WIDTH_PX}px`,
+                  left: `${offset}px`,
+                }}
+              />
+            );
+          })}
         </div>
       ) : null}
 
@@ -108,6 +206,7 @@ export function MessageThreadSummaryRow({
               index={index}
               key={participant.id}
               participant={participant}
+              participantCount={summary.participants.length}
             />
           ))}
         </div>
@@ -116,6 +215,11 @@ export function MessageThreadSummaryRow({
             <span className="font-medium transition-colors group-hover:text-foreground">
               {summary.replyCount} {replyLabel}
             </span>
+            {unreadCount != null && unreadCount > 0 ? (
+              <span className="ml-1" data-testid="thread-unread-badge">
+                ({unreadCount} new)
+              </span>
+            ) : null}
             {summary.lastReplyAt ? (
               <>
                 <span className="mx-1 font-normal text-muted-foreground/50">

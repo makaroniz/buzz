@@ -95,11 +95,18 @@ type MockBridgeOptions = {
   channelsReadError?: string;
   feedReadError?: string;
   canvasReadError?: string;
+  openDmDelayMs?: number;
+  /** Delay (ms) for older-history fetches; see e2eBridge mock config. */
+  historyDelayMs?: number;
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
+  profileUpdateErrors?: string[];
   searchProfiles?: MockSearchProfileSeed[];
+  updateAvailable?: boolean;
   updateChannelDelayMs?: number;
+  updateDownloadDelayMs?: number;
+  updateVersion?: string;
   stallWebsocketSends?: boolean;
   userSearchDelayMs?: number;
   // NIP-IA gate inputs — drive the archive-button gate matrix in
@@ -132,6 +139,7 @@ type MockBridgeOptions = {
    * generic PDF so the file-attachment flow can be exercised by default. An
    * explicit `[]` is honoured (models a picker cancel / no files selected).
    */
+  uploadDelayMs?: number;
   uploadDescriptors?: {
     url: string;
     sha256: string;
@@ -472,4 +480,25 @@ export async function installRelayBridge(
     user,
     seedPreviewFeatures: options?.seedPreviewFeatures,
   });
+}
+
+// The sidebar no longer renders a "browse channels" icon button; the channel
+// browser is opened via the primary-modifier + Shift + O keyboard shortcut.
+export async function openChannelBrowser(page: Page) {
+  await page.getByTestId("app-sidebar").waitFor({ state: "visible" });
+  const isMacBrowser = await page.evaluate(() =>
+    /mac|iphone|ipad|ipod/i.test(navigator.platform),
+  );
+  await page.evaluate((isMac) => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: !isMac,
+        key: "O",
+        metaKey: isMac,
+        shiftKey: true,
+      }),
+    );
+  }, isMacBrowser);
 }

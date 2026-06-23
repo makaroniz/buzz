@@ -15,7 +15,6 @@ import {
   getReactionTargetId,
   matchesInboxFilter,
 } from "@/features/home/lib/inboxViewHelpers";
-import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useHomeInboxReadState } from "@/features/home/useHomeInboxReadState";
 import { useInboxThreadContext } from "@/features/home/useInboxThreadContext";
 import {
@@ -35,8 +34,14 @@ import {
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
 import { splitOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
+import {
+  countDueReminders,
+  useRemindersQuery,
+} from "@/features/reminders/hooks";
+import { useRemindLater } from "@/features/reminders/ui/RemindMeLaterProvider";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
 import type { HomeFeedResponse } from "@/shared/api/types";
 import { KIND_REACTION } from "@/shared/constants/kinds";
@@ -44,7 +49,10 @@ import { topChromeInset } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { useElementWidth } from "@/shared/hooks/use-mobile";
+import { useHistorySearchState } from "@/shared/hooks/useHistorySearchState";
 import { Button } from "@/shared/ui/button";
+
+const INBOX_SEARCH_KEYS = ["item"] as const;
 
 type HomeViewProps = {
   feed?: HomeFeedResponse;
@@ -52,8 +60,11 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
-  onOpenChannel: (channelId: string) => void;
-  onOpenContext: (channelId: string, messageId: string) => void;
+  onOpenContext: (
+    channelId: string,
+    messageId: string,
+    threadRootId?: string | null,
+  ) => void;
   onRefresh: () => void;
 };
 
@@ -63,7 +74,6 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
-  onOpenChannel,
   onOpenContext,
   onRefresh,
 }: HomeViewProps) {
@@ -72,11 +82,37 @@ export function HomeView({
     homeInboxWidthPx > 0 &&
     homeInboxWidthPx < INBOX_SINGLE_COLUMN_BREAKPOINT_PX;
   const [filter, setFilter] = React.useState<InboxFilter>("all");
+  const [unreadOnly, setUnreadOnly] = React.useState(false);
+  // Explicit selections are mirrored to the URL (`?item=`), so back/forward
+  // restores the detail pane each history entry was showing and reloads
+  // restore it from the URL. Default/automatic selection stays local-only —
+  // background data loads must never trigger navigations.
+  const { applyPatch: applyInboxSearchPatch, values: inboxSearchValues } =
+    useHistorySearchState(INBOX_SEARCH_KEYS);
+  const isReminders = filter === "reminders";
+  const isMessagesMode = !isReminders;
+  const remindersQuery = useRemindersQuery(currentPubkey);
+  const dueReminderCount = countDueReminders(remindersQuery.data ?? []);
+  // `?item=` is Messages-mode-only machinery: a reminder never enters the
+  // FeedItem selection model, so reload while in Reminders mode keeps a stale
+  // `?item=` unconsumed and does not snap back to a feed-item detail view.
+  const urlSelectedItemId = isMessagesMode ? inboxSearchValues.item : null;
   const [selectedItemId, setSelectedItemId] = React.useState<string | null>(
-    null,
+    urlSelectedItemId,
+  );
+  React.useEffect(() => {
+    setSelectedItemId(urlSelectedItemId);
+  }, [urlSelectedItemId]);
+  const handleUserSelectItem = React.useCallback(
+    (itemId: string | null) => {
+      setSelectedItemId(itemId);
+      applyInboxSearchPatch({ item: itemId });
+    },
+    [applyInboxSearchPatch],
   );
   const [isDeletingMessage, setIsDeletingMessage] = React.useState(false);
   const [isSendingReply, setIsSendingReply] = React.useState(false);
+  const { activeReminderEventIds, openReminder } = useRemindLater();
   const [localRepliesByItemId, setLocalRepliesByItemId] = React.useState<
     Record<string, InboxReply[]>
   >({});
@@ -86,13 +122,16 @@ export function HomeView({
     handleInboxListWidthReset,
     inboxListWidthPx,
   } = useResizableInboxListWidth();
-  const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
   const {
     getChannelReadAt,
+    getThreadReadAt,
+    feedItemState,
     markChannelRead,
-    markChannelUnread,
+    markThreadRead,
     readStateVersion,
   } = useAppShell();
+  const { doneSet, markDone, markUnread, undoDone, undoUnread, unreadSet } =
+    feedItemState;
   const feedItems = React.useMemo(
     () =>
       feed
@@ -151,26 +190,37 @@ export function HomeView({
   const inboxItems = React.useMemo(
     () =>
       buildInboxItems({
+        channels,
         currentPubkey,
         feed,
         profiles: feedProfiles,
       }),
-    [currentPubkey, feed, feedProfiles],
+    [channels, currentPubkey, feed, feedProfiles],
   );
   const { effectiveDoneSet, markItemRead, markItemUnread } =
     useHomeInboxReadState({
       items: inboxItems,
       getChannelReadAt,
+      getThreadReadAt,
       readStateVersion,
       localDoneSet: doneSet,
+      localUnreadSet: unreadSet,
       markChannelRead,
-      markChannelUnread,
+      markThreadRead,
       markDoneLocal: markDone,
+      markUnreadLocal: markUnread,
       undoDoneLocal: undoDone,
+      undoUnreadLocal: undoUnread,
     });
   const filteredItems = React.useMemo(() => {
-    return inboxItems.filter((item) => matchesInboxFilter(item, filter));
-  }, [filter, inboxItems]);
+    return inboxItems.filter(
+      (item) =>
+        matchesInboxFilter(item, filter) &&
+        (!unreadOnly ||
+          !effectiveDoneSet.has(item.id) ||
+          item.id === selectedItemId),
+    );
+  }, [effectiveDoneSet, filter, inboxItems, selectedItemId, unreadOnly]);
   const selectedItem =
     filteredItems.find((item) => item.id === selectedItemId) ?? null;
   const contextMessages = React.useMemo<InboxContextMessage[]>(() => {
@@ -214,6 +264,7 @@ export function HomeView({
         mentionNames:
           resolveMentionNames(message.tags ?? [], feedProfiles) ?? [],
         reactions: message.reactions,
+        tags: message.tags,
       };
     });
   }, [
@@ -231,6 +282,20 @@ export function HomeView({
     return localReplies.filter((reply) => !contextIds.has(reply.id));
   }, [contextMessages, localRepliesByItemId, selectedItem]);
   React.useEffect(() => {
+    // Auto-selection is Messages-mode-only: in Reminders mode no FeedItem is
+    // ever selected, so default-selecting one behind the reminders list would
+    // be wasted work and could drive narrow-viewport detail off a stale feed
+    // selection.
+    if (!isMessagesMode) {
+      return;
+    }
+
+    // While the feed is loading (e.g. a reload restoring `?item=` from the
+    // URL) the selected item simply hasn't arrived yet — don't clobber it.
+    if (isLoading || !feed) {
+      return;
+    }
+
     if (filteredItems.length === 0) {
       setSelectedItemId(null);
       return;
@@ -247,7 +312,15 @@ export function HomeView({
         isNarrowHomeViewport ? null : (filteredItems[0]?.id ?? null),
       );
     }
-  }, [filteredItems, homeInboxWidthPx, isNarrowHomeViewport, selectedItemId]);
+  }, [
+    feed,
+    filteredItems,
+    homeInboxWidthPx,
+    isLoading,
+    isMessagesMode,
+    isNarrowHomeViewport,
+    selectedItemId,
+  ]);
 
   React.useEffect(() => {
     void selectedItemId;
@@ -255,25 +328,18 @@ export function HomeView({
     setIsSendingReply(false);
   }, [selectedItemId]);
 
-  const handleToggleDone = React.useCallback(
-    (itemId: string) => {
-      if (effectiveDoneSet.has(itemId)) {
-        markItemUnread(itemId);
-        return;
-      }
-
-      markItemRead(itemId);
-    },
-    [effectiveDoneSet, markItemRead, markItemUnread],
-  );
-
   if (isLoading && !feed) {
     return <HomeLoadingState />;
   }
 
   if (!feed) {
     return (
-      <div className="flex-1 overflow-hidden px-4 pb-3 pt-14 sm:px-6">
+      <div
+        className={cn(
+          "flex-1 overflow-hidden px-4 pb-3 sm:px-6",
+          topChromeInset.padding,
+        )}
+      >
         <div className="flex w-full max-w-3xl flex-col gap-4">
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-5">
             <p className="text-base font-semibold tracking-tight">
@@ -314,8 +380,12 @@ export function HomeView({
       selectedItem.item.pubkey.trim().toLowerCase();
   const isSinglePanelDetailView =
     isNarrowHomeViewport && selectedItemId !== null;
+  // Reminders mode is single-pane: the reminders list renders inline row
+  // actions and never drives the FeedItem detail pane, so the detail column is
+  // not rendered at all (no empty pane on wide viewports).
   const showListPane = !isSinglePanelDetailView;
-  const showDetailPane = !isNarrowHomeViewport || isSinglePanelDetailView;
+  const showDetailPane =
+    isMessagesMode && (!isNarrowHomeViewport || isSinglePanelDetailView);
   const maxEffectiveInboxListWidthPx =
     homeInboxWidthPx > 0
       ? Math.max(
@@ -350,16 +420,46 @@ export function HomeView({
       >
         {showListPane ? (
           <InboxListPane
+            activeReminderEventIds={activeReminderEventIds}
             doneSet={effectiveDoneSet}
+            dueReminderCount={dueReminderCount}
             filter={filter}
             items={filteredItems}
             onFilterChange={setFilter}
+            onMarkRead={markItemRead}
+            onMarkUnread={markItemUnread}
+            onOpenDirect={(item) => {
+              const channelId = item.item.channelId;
+              if (!channelId) {
+                return;
+              }
+              onOpenContext(
+                channelId,
+                item.id,
+                getThreadReference(item.item.tags).rootId,
+              );
+            }}
+            onRemindLater={(item) => {
+              const channelId = item.item.channelId;
+              if (!channelId) {
+                return;
+              }
+              openReminder({
+                authorPubkey: item.item.pubkey,
+                channelId,
+                eventId: item.id,
+                preview: item.preview.slice(0, 100),
+              });
+            }}
             onSelect={(itemId) => {
-              setSelectedItemId(itemId);
+              handleUserSelectItem(itemId);
               markItemRead(itemId);
             }}
+            onUnreadOnlyChange={setUnreadOnly}
+            reminderPubkey={currentPubkey}
             selectedId={selectedItemId}
             showRightDivider={showListPane && showDetailPane}
+            unreadOnly={unreadOnly}
           />
         ) : null}
 
@@ -399,9 +499,6 @@ export function HomeView({
             currentPubkey={currentPubkey}
             disabledReplyReason={disabledReplyReason}
             isDeletingMessage={isDeletingMessage}
-            isDone={
-              selectedItem ? effectiveDoneSet.has(selectedItem.id) : false
-            }
             isSendingReply={isSendingReply}
             isSinglePanelView={isSinglePanelDetailView}
             isThreadContextLoading={threadContext.isLoading}
@@ -410,7 +507,7 @@ export function HomeView({
             onBack={
               isSinglePanelDetailView
                 ? () => {
-                    setSelectedItemId(null);
+                    handleUserSelectItem(null);
                   }
                 : undefined
             }
@@ -432,7 +529,6 @@ export function HomeView({
                   setIsDeletingMessage(false);
                 });
             }}
-            onOpenChannel={onOpenChannel}
             onOpenContext={onOpenContext}
             onSendReply={async ({
               content,
@@ -485,6 +581,7 @@ export function HomeView({
                   id: result.eventId,
                   parentId: result.parentEventId,
                   rootId: result.rootEventId,
+                  tags: emojiTags,
                 };
                 setLocalRepliesByItemId((current) => ({
                   ...current,
@@ -493,11 +590,6 @@ export function HomeView({
                 onRefresh();
               } finally {
                 setIsSendingReply(false);
-              }
-            }}
-            onToggleDone={() => {
-              if (selectedItem) {
-                handleToggleDone(selectedItem.id);
               }
             }}
             onToggleReaction={

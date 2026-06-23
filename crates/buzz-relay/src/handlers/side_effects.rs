@@ -97,6 +97,21 @@ async fn evict_non_member_channel_subscriptions(
     Ok(())
 }
 
+/// Close every live subscription on a channel, for all subscribers, sending
+/// `CLOSED restricted: channel access revoked` to each.
+///
+/// Used when a channel is archived (e.g. the ephemeral-channel reaper): the
+/// channel becomes unusable for everyone, so all live subscriptions must close.
+/// The `channel access revoked` reason is in the client's drop-set, so a
+/// connected agent drops just that channel and keeps its socket — no reconnect
+/// storm. Offline/reconnecting clients are covered by the discovery-time
+/// `archived=true` skip in `discover_channels`.
+pub async fn evict_all_channel_subscriptions(state: &Arc<AppState>, channel_id: Uuid) {
+    for conn_id in state.sub_registry.channel_subscriber_conns(channel_id) {
+        evict_conn_channel_subscriptions(state, channel_id, conn_id).await;
+    }
+}
+
 /// Dispatch side effects for a stored event.
 pub async fn handle_side_effects(
     kind: u32,
@@ -1150,6 +1165,39 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                                 }),
                             )
                             .await?;
+
+                            // Resubscribe connected agents after restore: archiving evicts their
+                            // live subscriptions (CLOSED "channel access revoked") and unarchive
+                            // otherwise emits no signal that makes a connected agent resubscribe.
+                            // We reuse the member_added notification (44100) purely as a resubscribe
+                            // trigger — no membership actually changed here — because it flows on the
+                            // agent's always-live global membership subscription, the same path
+                            // remove/re-add uses to recover. Humans self-heal via the re-emitted
+                            // kind:39000 discovery, so this is intentionally agent-scoped.
+                            //
+                            // Known limitation: emit_membership_notification builds a created_at=now
+                            // event with no nonce, and insert_event skips fan-out on a duplicate id.
+                            // Four sub-second toggles (archive->unarchive->archive->unarchive) on the
+                            // same channel by the same actor could collide ids and skip a fan-out.
+                            // Not reachable in practice — unarchive has a single human-driven caller;
+                            // the reaper only auto-archives — so we don't engineer around it.
+                            for member in state.db.get_members(channel_id).await? {
+                                if let Err(e) = emit_membership_notification(
+                                    state,
+                                    channel_id,
+                                    &member.pubkey,
+                                    &actor_bytes,
+                                    KIND_MEMBER_ADDED_NOTIFICATION,
+                                )
+                                .await
+                                {
+                                    warn!(
+                                        channel = %channel_id,
+                                        error = %e,
+                                        "post-unarchive resubscribe notification failed"
+                                    );
+                                }
+                            }
                         }
                         _ => {} // ignore invalid values
                     }

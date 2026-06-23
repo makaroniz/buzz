@@ -1,6 +1,10 @@
 import { expect, test, type Browser } from "@playwright/test";
 
-import { installRelayBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import {
+  installRelayBridge,
+  openChannelBrowser,
+  TEST_IDENTITIES,
+} from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 import { assertRelaySeeded } from "../helpers/seed";
 
@@ -154,6 +158,13 @@ async function getLoggedNotificationCount(
   return (await getLoggedNotifications(page)).length;
 }
 
+async function expectLoggedNotifications(
+  page: import("@playwright/test").Page,
+  expected: Array<{ body: string | null; title: string }>,
+) {
+  await expect.poll(() => getLoggedNotifications(page)).toEqual(expected);
+}
+
 test.beforeAll(async () => {
   test.setTimeout(relaySeedHookTimeoutMs);
   await assertRelaySeeded();
@@ -194,7 +205,7 @@ test("two users see the same channel", async ({
     await expect(pageOne.getByTestId("stream-list")).toContainText(channelName);
 
     await pageTwo.goto("/");
-    await pageTwo.getByTestId("browse-channels").click();
+    await openChannelBrowser(pageTwo);
     await expect(pageTwo.getByTestId("channel-browser-dialog")).toBeVisible();
     await pageTwo
       .getByTestId(`browse-channel-${channelName}`)
@@ -275,23 +286,22 @@ test("live mentions refetch the home feed without waiting for polling", async ({
       message,
     );
 
-    await expect.poll(() => getLoggedNotificationCount(targetPage)).toBe(1);
-
-    const notifications = await getLoggedNotifications(targetPage);
-
-    expect(notifications).toEqual([
+    await expectLoggedNotifications(targetPage, [
       {
         body: message,
         title: "alice mentioned you in #general",
       },
     ]);
 
-    // The home feed should have been refetched live (the original purpose
+    // The inbox feed should have been refetched live (the original purpose
     // of this test). The home badge stays at 0 while the user is actively
     // reading #general — reading in-channel advances the NIP-RS marker past
     // the new mention — so the assertion that the refetch happened is the
     // inbox-list content, not the badge.
-    await targetPage.getByRole("button", { name: "Home" }).click();
+    await targetPage
+      .getByTestId("app-sidebar")
+      .getByRole("button", { name: "Inbox" })
+      .click();
     await expect(targetPage.getByTestId("home-inbox-list")).toBeVisible();
     await expect(targetPage.getByTestId("home-inbox-list")).toContainText(
       message,
@@ -337,18 +347,17 @@ test("live forum mentions refetch the home feed without waiting for polling", as
 
     await expect(targetPage.getByTestId("sidebar-home-count")).toHaveText("1");
 
-    await expect.poll(() => getLoggedNotificationCount(targetPage)).toBe(1);
-
-    const notifications = await getLoggedNotifications(targetPage);
-
-    expect(notifications).toEqual([
+    await expectLoggedNotifications(targetPage, [
       {
         body: message,
         title: "alice mentioned you in #watercooler",
       },
     ]);
 
-    await targetPage.getByRole("button", { name: "Home" }).click();
+    await targetPage
+      .getByTestId("app-sidebar")
+      .getByRole("button", { name: "Inbox" })
+      .click();
     await expect(targetPage.getByTestId("home-inbox-list")).toBeVisible();
     await expect(targetPage.getByTestId("home-inbox-list")).toBeVisible();
     await expect(targetPage.getByTestId("home-inbox-list")).toContainText(
@@ -531,7 +540,7 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await page.reload();
 
   await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
-  await page.getByTestId("browse-channels").click();
+  await openChannelBrowser(page);
   await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
   await expect(page.getByTestId(`browse-channel-${channelName}`)).toContainText(
     "archived",
