@@ -206,21 +206,35 @@ export function useChannelUnreadState({
   const threadOpenReadSnapshotRef = React.useRef(
     new Map<string, Map<string, number | null>>(),
   );
-  if (openThreadHeadId) {
-    let snapshot = threadOpenReadSnapshotRef.current.get(openThreadHeadId);
-    if (!snapshot) {
-      snapshot = new Map<string, number | null>();
-      threadOpenReadSnapshotRef.current.set(openThreadHeadId, snapshot);
-    }
-    // Capture each reply's read state the first render it becomes visible —
-    // before the on-open mark-read effect advances its marker. Replies revealed
-    // later by expanding a branch are snapshotted then, so the divider anchors
-    // to "what was unread when each reply first appeared," not "what was unread
-    // at the initial open" (which would miss deeper replies revealed on expand).
-    for (const entry of threadMessages) {
-      if (!snapshot.has(entry.message.id)) {
-        snapshot.set(entry.message.id, getMessageReadAt(entry.message.id));
+  // Record a reply's read state into the open thread's divider snapshot the
+  // first time we observe it, before any marker advance. Idempotent per reply
+  // (the first capture wins), so a value taken before a mark-read is never
+  // overwritten by the post-mark value. Keyed to the current open thread so a
+  // stale entry from a previous open cannot leak across a close→reopen cycle
+  // (the snapshot is dropped on close by the effect below).
+  const captureDividerReadState = React.useCallback(
+    (replyId: string) => {
+      if (!openThreadHeadId) return;
+      let snapshot = threadOpenReadSnapshotRef.current.get(openThreadHeadId);
+      if (!snapshot) {
+        snapshot = new Map<string, number | null>();
+        threadOpenReadSnapshotRef.current.set(openThreadHeadId, snapshot);
       }
+      if (!snapshot.has(replyId)) {
+        snapshot.set(replyId, getMessageReadAt(replyId));
+      }
+    },
+    [getMessageReadAt, openThreadHeadId],
+  );
+  if (openThreadHeadId) {
+    // Capture each visible reply's read state the first render it appears —
+    // before the on-open mark-read effect advances its marker. Replies revealed
+    // by expanding a branch are captured eagerly in markRevealedRepliesRead
+    // (before that path's synchronous mark-read), so this render-time pass
+    // covers replies present at open and acts as the fallback for any reply
+    // that reaches render without being pre-captured.
+    for (const entry of threadMessages) {
+      captureDividerReadState(entry.message.id);
     }
   }
   React.useEffect(() => {
@@ -255,7 +269,16 @@ export function useChannelUnreadState({
     const replies = threadMessages.map((entry) => entry.message);
     return computeThreadUnreadMarker(
       replies,
-      (replyId) => snapshot?.get(replyId) ?? getMessageReadAt(replyId),
+      // Use the snapshot value when the reply was captured — even when it is
+      // null (never read on open). Distinguish "captured null" from "never
+      // captured" with `has`, not `??`: a never-read reply snapshots to null,
+      // and a nullish-coalescing fallthrough would discard that and re-read the
+      // now-advanced live marker, collapsing the divider over the very replies
+      // that should anchor it.
+      (replyId) =>
+        snapshot?.has(replyId)
+          ? (snapshot.get(replyId) ?? null)
+          : getMessageReadAt(replyId),
       currentPubkey,
     );
   }, [currentPubkey, getMessageReadAt, openThreadHeadId, threadMessages]);
@@ -335,14 +358,29 @@ export function useChannelUnreadState({
   // expanding a branch reveals only its direct replies, so only those get a
   // msg:<id> marker advanced to their createdAt. A reply still nested in a
   // collapsed grandchild branch keeps its badge until it too is revealed.
+  //
+  // Capture each child's pre-read state into the divider snapshot BEFORE
+  // advancing its marker. This path runs synchronously in the expand event
+  // handler, before React re-renders with the child visible — so without the
+  // pre-capture the render-time pass above would snapshot the child as already
+  // read (this mark-read having won the race) and the "New" divider would never
+  // anchor to a reply first revealed by expansion.
   const markRevealedRepliesRead = React.useCallback(
     (messageId: string) => {
       for (const replyId of directReplyIdsByParentId.get(messageId) ?? []) {
         const createdAt = createdAtByMessageId.get(replyId);
-        if (createdAt !== undefined) markMessageRead(replyId, createdAt);
+        if (createdAt !== undefined) {
+          captureDividerReadState(replyId);
+          markMessageRead(replyId, createdAt);
+        }
       }
     },
-    [createdAtByMessageId, directReplyIdsByParentId, markMessageRead],
+    [
+      captureDividerReadState,
+      createdAtByMessageId,
+      directReplyIdsByParentId,
+      markMessageRead,
+    ],
   );
 
   // Mark a message and its whole subtree READ (LP4 v3 menu action). Writes a
