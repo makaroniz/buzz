@@ -8,6 +8,7 @@ import {
   countUnreadHighPriorityObservedEvents,
   countUnreadObservedEvents,
   observedUnreadEventReadAt,
+  pruneCoveredObservedRefs,
   recordObservedUnreadEvent,
 } from "./unreadChannelCounts.ts";
 import {
@@ -386,6 +387,114 @@ test("highPriorityObservedEvents_countOnlyUnreadHighPriorityItems", () => {
 
   assert.equal(countUnreadObservedEvents(events, getReadAt), 2);
   assert.equal(countUnreadHighPriorityObservedEvents(events, getReadAt), 1);
+});
+
+// --- Clearing asymmetry: prune covered observed refs ---
+
+// The headline regression. A channel was read top-level-only (channel-open) and
+// later a thread reply arrived; reading THAT thread advances thread:<root> so
+// the badge counts 0, but markChannelRead("thread:<root>") can't prune the real
+// channel's refs (wrong key). pruneCoveredObservedRefs drops the dead refs once
+// the memo no longer reports the channel unread, and the badge must STAY 0 even
+// if a catch-up REQ re-records the same already-covered event.
+test("pruneCoveredObservedRefs_threadReadCovers_prunesRefsAndBadgeStaysZero", () => {
+  const channelId = "chan";
+  const rootId = "root-1";
+  const reply = observed("reply", 500, rootId);
+  const latestByChannel = new Map([[channelId, 500]]);
+  const observedByChannel = new Map();
+  recordObservedUnreadEvent(observedByChannel, channelId, reply, 20);
+
+  // Before reading the thread: channel marker 300 < reply 500, badge counts 1.
+  const beforeRead = readAtFor(300, new Map());
+  assert.equal(
+    countUnreadBadgeObservedEvents(
+      observedByChannel.get(channelId),
+      beforeRead,
+    ),
+    1,
+  );
+
+  // Reading the thread advances thread:root-1=500. The badge now counts 0, so
+  // the memo drops the channel from unreadChannelIds — the prune signal.
+  const afterRead = readAtFor(300, new Map([[rootId, 500]]));
+  assert.equal(
+    countUnreadBadgeObservedEvents(observedByChannel.get(channelId), afterRead),
+    0,
+  );
+
+  pruneCoveredObservedRefs(
+    latestByChannel,
+    observedByChannel,
+    [channelId],
+    new Set(),
+    new Set(),
+    null,
+  );
+
+  assert.equal(latestByChannel.has(channelId), false);
+  assert.equal(observedByChannel.has(channelId), false);
+
+  // A catch-up REQ re-records the same covered event. The badge must stay 0.
+  recordObservedUnreadEvent(observedByChannel, channelId, reply, 20);
+  assert.equal(
+    countUnreadBadgeObservedEvents(observedByChannel.get(channelId), afterRead),
+    0,
+  );
+});
+
+test("pruneCoveredObservedRefs_channelStillUnread_keepsRefs", () => {
+  const channelId = "chan";
+  const latestByChannel = new Map([[channelId, 500]]);
+  const observedByChannel = new Map([[channelId, new Map()]]);
+
+  pruneCoveredObservedRefs(
+    latestByChannel,
+    observedByChannel,
+    [channelId],
+    new Set([channelId]),
+    new Set(),
+    null,
+  );
+
+  assert.equal(latestByChannel.has(channelId), true);
+  assert.equal(observedByChannel.has(channelId), true);
+});
+
+test("pruneCoveredObservedRefs_activeChannel_keepsRefs", () => {
+  const channelId = "chan";
+  const latestByChannel = new Map([[channelId, 500]]);
+  const observedByChannel = new Map([[channelId, new Map()]]);
+
+  pruneCoveredObservedRefs(
+    latestByChannel,
+    observedByChannel,
+    [channelId],
+    new Set(),
+    new Set(),
+    channelId,
+  );
+
+  assert.equal(latestByChannel.has(channelId), true);
+  assert.equal(observedByChannel.has(channelId), true);
+});
+
+test("pruneCoveredObservedRefs_forcedUnread_keepsRefs", () => {
+  const channelId = "chan";
+  const latestByChannel = new Map([[channelId, 500]]);
+  const observedByChannel = new Map([[channelId, new Map()]]);
+
+  pruneCoveredObservedRefs(
+    latestByChannel,
+    observedByChannel,
+    [channelId],
+    new Set(),
+    new Set([channelId]),
+    null,
+  );
+
+  assert.equal(latestByChannel.has(channelId), true);
+  assert.equal(observedByChannel.has(channelId), true);
 });
 
 test("addThreadActivityItems keeps newest items when input is newest-first", () => {

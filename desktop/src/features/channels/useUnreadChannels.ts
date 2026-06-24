@@ -12,6 +12,7 @@ import {
   makeObservedUnreadEvent,
   mapsEqual,
   observedUnreadEventReadAt,
+  pruneCoveredObservedRefs,
   recordObservedUnreadEvent,
   type ObservedUnreadEvent,
 } from "@/features/channels/unreadChannelCounts";
@@ -917,6 +918,21 @@ export function useUnreadChannels(
 
   const unreadChannelIdsRef = React.useRef(unreadChannelIds);
   unreadChannelIdsRef.current = unreadChannelIds;
+
+  // Drop observed refs the read markers now fully cover (the thread/message
+  // read clearing asymmetry — see pruneCoveredObservedRefs). Driven off the
+  // memo's own output; no version bump and no loop because pruning is invisible
+  // to the count.
+  React.useEffect(() => {
+    pruneCoveredObservedRefs(
+      latestByChannelRef.current,
+      observedUnreadEventsByChannelRef.current,
+      channels.map((channel) => channel.id),
+      unreadChannelIds,
+      forcedUnreadRef.current,
+      activeChannelId,
+    );
+  }, [unreadChannelIds, channels, activeChannelId]);
 
   const markAllChannelsRead = React.useCallback(() => {
     for (const channelId of unreadChannelIdsRef.current) {

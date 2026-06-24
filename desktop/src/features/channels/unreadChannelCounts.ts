@@ -65,6 +65,32 @@ export function recordObservedUnreadEvent(
   return true;
 }
 
+// Drop observed refs for channels whose unread events the read markers now
+// fully cover. `markThreadRead`/`markMessageRead` advance a `thread:<root>`/
+// `msg:<id>` marker, but `markChannelRead`'s clearObserved prune keys these maps
+// by that synthetic key — never the real channel — so the real channel's refs
+// linger after a thread/message read covers its last badge event. A channel
+// absent from `unreadChannelIds` (and not forced or active) has no unread
+// observed events left, so its refs are dead weight. Pruning them is invisible
+// to the count (a covered channel and an absent one both contribute 0).
+export function pruneCoveredObservedRefs(
+  latestByChannel: Map<string, number>,
+  observedByChannel: Map<string, Map<string, ObservedUnreadEvent>>,
+  channelIds: Iterable<string>,
+  unreadChannelIds: ReadonlySet<string>,
+  forcedChannelIds: ReadonlySet<string>,
+  activeChannelId: string | null,
+): void {
+  for (const channelId of channelIds) {
+    if (channelId === activeChannelId) continue;
+    if (unreadChannelIds.has(channelId)) continue;
+    if (forcedChannelIds.has(channelId)) continue;
+    if (latestByChannel.get(channelId) === undefined) continue;
+    latestByChannel.delete(channelId);
+    observedByChannel.delete(channelId);
+  }
+}
+
 export function countUnreadObservedEvents(
   eventsById: ReadonlyMap<string, ObservedUnreadEvent> | undefined,
   getReadAt: (event: ObservedUnreadEvent) => number | null,
