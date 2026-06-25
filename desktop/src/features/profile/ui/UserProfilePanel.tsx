@@ -88,6 +88,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 import type {
   AgentPersona,
+  AcpRuntime,
   Channel,
   CreateManagedAgentInput,
   CreatePersonaInput,
@@ -189,15 +190,12 @@ export function UserProfilePanel({
   );
   const effectivePubkey = pubkey ?? managedAgent?.pubkey ?? null;
   const pubkeyLower = effectivePubkey?.toLowerCase() ?? "";
-
   const profileQuery = useUserProfileQuery(effectivePubkey ?? undefined);
   const currentProfileQuery = useProfileQuery(currentPubkey !== undefined);
-
   React.useEffect(() => {
     if (!effectivePubkey) return;
     void profileQuery.refetch();
   }, [effectivePubkey, profileQuery.refetch]);
-
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: true });
   const availableRuntimesQuery = useAvailableAcpRuntimes();
   const acpRuntimesQuery = useAcpRuntimesQuery();
@@ -311,7 +309,6 @@ export function UserProfilePanel({
       (contact) => contact.pubkey.toLowerCase() === pubkeyLower,
     ) ??
       false);
-
   const profileChannels = React.useMemo(
     () =>
       deriveProfileChannels(
@@ -322,7 +319,6 @@ export function UserProfilePanel({
       ),
     [pubkeyLower, relayAgent, managedAgent, channelsQuery.data],
   );
-
   const channelIdToName = React.useMemo(() => {
     const map: Record<string, string> = {};
     for (const channel of channelsQuery.data ?? []) {
@@ -330,7 +326,6 @@ export function UserProfilePanel({
     }
     return map;
   }, [channelsQuery.data]);
-
   const targetKey =
     effectivePubkey ?? `persona:${resolvedPersona?.id ?? "unknown"}`;
   const prevTargetKeyRef = React.useRef(targetKey);
@@ -344,7 +339,6 @@ export function UserProfilePanel({
     onOpenDm?.([effectivePubkey]);
     onClose();
   }, [effectivePubkey, onClose, onOpenDm]);
-
   const handleEditAgent = React.useCallback(() => {
     if (managedAgent) {
       setEditAgentOpen(true);
@@ -352,7 +346,6 @@ export function UserProfilePanel({
       setPersonaDialogState(editPersonaDialogState(resolvedPersona));
     }
   }, [managedAgent, resolvedPersona]);
-
   const { deleteManagedAgentRecord, deleteManagedAgentsForPersona } =
     useProfileAgentDeletion({
       channels: channelsQuery.data,
@@ -362,17 +355,21 @@ export function UserProfilePanel({
       presenceLookup: presenceQuery.data,
       relayAgents: relayAgentsQuery.data,
     });
-
   const createManagedAgentForPersona = React.useCallback(
     async (personaToStart: AgentPersona) => {
-      const runtimes = availableRuntimesQuery.data ?? [];
+      const runtimeCatalogData = availableRuntimesQuery.isLoading
+        ? await availableRuntimesQuery.refetch()
+        : { data: availableRuntimesQuery.data };
+      const runtimes = (runtimeCatalogData.data ?? []).filter(
+        (candidate): candidate is AcpRuntime =>
+          candidate.availability === "available",
+      );
       const defaultRuntime = runtimes[0] ?? null;
       const { runtime, warnings } = resolvePersonaRuntime(
         personaToStart.runtime,
         runtimes,
         defaultRuntime,
       );
-
       for (const warning of warnings) {
         toast.warning(warning);
       }
@@ -404,6 +401,8 @@ export function UserProfilePanel({
     },
     [
       availableRuntimesQuery.data,
+      availableRuntimesQuery.isLoading,
+      availableRuntimesQuery.refetch,
       createAgentMutation.mutateAsync,
       managedAgentsQuery.refetch,
       relayAgentsQuery.refetch,

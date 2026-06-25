@@ -111,20 +111,19 @@ export function useProfileFieldBuckets({
   return React.useMemo(() => {
     const metadataFields = [
       ...buildPublicFields({ pubkey, profile, relayAgent, isBot, persona }),
-      ...(isOwner === true
-        ? buildOwnerFields({
-            managedAgent,
-            ownerAvatarUrl,
-            ownerDisplayName,
-            ownerHandle,
-            ownerPubkey,
-            onOpenOwner,
-            persona,
-            presenceLoaded,
-            presenceStatus,
-            relayAgent,
-          })
-        : []),
+      ...buildOwnerFields({
+        includeManagementFields: isOwner === true,
+        managedAgent,
+        ownerAvatarUrl,
+        ownerDisplayName,
+        ownerHandle,
+        ownerPubkey,
+        onOpenOwner,
+        persona,
+        presenceLoaded,
+        presenceStatus,
+        relayAgent,
+      }),
     ];
     const diagnosticsFields =
       bucketProfileFields(metadataFields).diagnosticsFields;
@@ -225,6 +224,7 @@ export function buildPublicFields({
 }
 
 export function buildOwnerFields({
+  includeManagementFields,
   managedAgent,
   ownerAvatarUrl,
   ownerDisplayName,
@@ -236,6 +236,7 @@ export function buildOwnerFields({
   presenceStatus,
   relayAgent,
 }: {
+  includeManagementFields: boolean;
   managedAgent: ManagedAgent | undefined;
   ownerAvatarUrl: string | null;
   ownerDisplayName: string | null;
@@ -279,6 +280,10 @@ export function buildOwnerFields({
       label: "Owned by",
       testId: "user-profile-owned-by",
     });
+  }
+
+  if (!includeManagementFields) {
+    return fields;
   }
 
   if (managedAgent?.agentCommand) {
