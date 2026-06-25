@@ -60,6 +60,8 @@ const overrides = new Map([
   // config-bridge: get_agent_config_surface/write_agent_config_field/put_agent_session_config
   // commands add ~40 lines. Queued to split.
   // branch cut; override bumped to cover the merged total. Queued to split.
+  // continued-agent-conversations: refreshes the owner auth tag before
+  // starting/restoring agents so staged identities keep working.
   ["src-tauri/src/commands/agents.rs", 1437],
   // Residual repos_dir integration in ensure_nest_at: REPOS is provisioned
   // outside NEST_DIRS (it may be a symlink), so it needs its own create +
@@ -73,7 +75,10 @@ const overrides = new Map([
   // unify refactor followup. +26 for resolve_effective_prompt_model_provider
   // re-introduced after 826d735fe removal (config-bridge caller still needs it).
   // PGID resolution helper + PID-recycling safety guard added for orphan sweep.
+  // continued-agent-conversations: owner-scoped auth tag refresh is threaded
+  // through the runtime env builder and covered by regression tests.
   ["src-tauri/src/managed_agents/runtime.rs", 2150],
+  ["src-tauri/src/managed_agents/personas.rs", 1080],
   // Phase-2 inbound reconcile + review-fix cycle: reconcile_inbound_persona_event
   // dispatches 30175/30176/30177 inbound plus kind:5 tombstone consume
   // (reconcile_inbound_tombstone), the two apply_inbound_* fns, the
@@ -82,6 +87,7 @@ const overrides = new Map([
   // queued to split with the list. The two `agents-data-changed` emits (live
   // UI refresh on inbound reconcile + tombstone) add the latest growth.
   ["src-tauri/src/commands/personas.rs", 1279],
+  ["src-tauri/src/managed_agents/persona_card.rs", 1050],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing
@@ -96,6 +102,9 @@ const overrides = new Map([
   // Load-bearing, not generic debt.
   // config-bridge: schema-driven field extraction adds ~26 lines. Queued to split.
   ["src-tauri/src/managed_agents/discovery.rs", 1111],
+  // types.rs adds the persona/instance harness fields. Load-bearing, not
+  // generic debt.
+  ["src-tauri/src/managed_agents/types.rs", 1037],
   // migration_tests.rs carries the harness-sync migration coverage plus the
   // patch_json_records owner-only writeback regression test (SECURITY.md:90
   // crash-safe 0o600 fallback). Load-bearing security + feature coverage, not
@@ -115,6 +124,21 @@ const overrides = new Map([
   // +135 for AgentInfoFocusedView/DiagnosticsFocusedView/ChannelsFocusedView
   // props restored after 826d735fe removal (UserProfilePanel.tsx still needs them).
   ["src/features/profile/ui/UserProfilePanelSections.tsx", 1140],
+  // useDueReminderBadgeCount hook call + sum to wire due-reminder count into
+  // the Inbox nav badge — a small overage from load-bearing badge plumbing,
+  // not generic debt growth. Approved override; still queued to split.
+  // continued-agent-conversations: persisted channel-scoped conversation state
+  // and route wiring. Queued to split with the rest of AppShell state.
+  ["src/app/AppShell.tsx", 1060],
+  // continued-agent-conversations: marker filtering, thread handoff, and
+  // activity handoff props live at the channel surface for now.
+  ["src/features/channels/ui/ChannelPane.tsx", 1107],
+  // continued-agent-conversations: composer notice banner for read-only agent
+  // conversations.
+  ["src/features/messages/ui/MessageComposer.tsx", 1010],
+  // continued-agent-conversations: channel sidebar children and active
+  // conversation unread suppression. Queued to split with sidebar sections.
+  ["src/features/sidebar/ui/AppSidebar.tsx", 1081],
   // PersistBackend enum + marker-on-keyring-success plumbing and its three
   // fail-closed regression tests (silent identity rotation on keyring outage).
   // A small overage from load-bearing security plumbing on a file already at

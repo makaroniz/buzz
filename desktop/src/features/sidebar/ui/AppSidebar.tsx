@@ -1,11 +1,20 @@
 // biome-ignore format: keep compact to stay within file size limit
-import { MessageCirclePlus } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  FolderGit2,
+  Inbox,
+  MessageCirclePlus,
+  Zap,
+} from "lucide-react";
 import * as React from "react";
 import { AnimatePresence } from "motion/react";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
+import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 
 import type { Workspace } from "@/features/workspaces/types";
+import type { AgentConversation } from "@/features/agents/agentConversations";
 import { AddWorkspaceDialog } from "@/features/workspaces/ui/AddWorkspaceDialog";
 import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
 import {
@@ -23,7 +32,6 @@ import {
   RenameSectionDialog,
   useLeaveChannelDialog,
 } from "@/features/sidebar/ui/ChannelSectionDialogs";
-import { AppSidebarPinnedHeader } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
 import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
 import { SidebarSection } from "@/features/sidebar/ui/SidebarSection";
 import {
@@ -59,7 +67,10 @@ import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   useSidebar,
@@ -75,6 +86,7 @@ type CreateChannelKind = "stream" | "forum";
 
 type AppSidebarProps = {
   activeWorkspace: Workspace | null;
+  agentConversations?: AgentConversation[];
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
@@ -87,6 +99,7 @@ type AppSidebarProps = {
   profile?: Profile;
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
+  selectedAgentConversationId?: string | null;
   selectedChannelId: string | null;
   selectedView:
     | "home"
@@ -115,6 +128,7 @@ type AppSidebarProps = {
     templateId?: string;
   }) => Promise<void>;
   onOpenAddWorkspace: () => void;
+  onHideAgentConversation?: (conversationId: string) => void;
   onHideDm: (channelId: string) => void;
   onMarkChannelUnread: (channelId: string) => void;
   onMarkChannelRead: (
@@ -130,6 +144,7 @@ type AppSidebarProps = {
   ) => void;
   onRemoveWorkspace: (id: string) => void;
   onCreateAgent: () => void;
+  onSelectAgentConversation?: (conversationId: string) => void;
   onSelectAgents: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
@@ -165,6 +180,7 @@ type AppSidebarProps = {
 
 export function AppSidebar({
   activeWorkspace,
+  agentConversations = [],
   channels,
   currentPubkey,
   fallbackDisplayName,
@@ -177,6 +193,7 @@ export function AppSidebar({
   profile,
   selfPresenceStatus,
   errorMessage,
+  selectedAgentConversationId,
   selectedChannelId,
   selectedView,
   unreadChannelCounts,
@@ -187,6 +204,7 @@ export function AppSidebar({
   onCreateChannel,
   onCreateForum,
   onOpenAddWorkspace,
+  onHideAgentConversation,
   onHideDm,
   onMarkChannelUnread,
   onMarkChannelRead,
@@ -196,6 +214,7 @@ export function AppSidebar({
   onUpdateWorkspace,
   onRemoveWorkspace,
   onCreateAgent,
+  onSelectAgentConversation,
   onSelectAgents,
   onSelectProjects,
   onSelectPulse,
@@ -461,6 +480,58 @@ export function AppSidebar({
     () => sortDmChannelsByLabel(directMessages, dmChannelLabels),
     [directMessages, dmChannelLabels],
   );
+  const agentConversationsByChannelId = React.useMemo(() => {
+    const byChannelId = new Map<string, AgentConversation[]>();
+
+    for (const conversation of agentConversations) {
+      const channelConversations =
+        byChannelId.get(conversation.channelId) ?? [];
+      channelConversations.push(conversation);
+      byChannelId.set(conversation.channelId, channelConversations);
+    }
+
+    return byChannelId;
+  }, [agentConversations]);
+  const isAgentConversationActive = selectedView === "agents";
+  const activeAgentConversationChannelId = React.useMemo(() => {
+    if (!isAgentConversationActive || !selectedAgentConversationId) {
+      return null;
+    }
+
+    return (
+      agentConversations.find(
+        (conversation) => conversation.id === selectedAgentConversationId,
+      )?.channelId ?? null
+    );
+  }, [
+    agentConversations,
+    isAgentConversationActive,
+    selectedAgentConversationId,
+  ]);
+  const displayUnreadChannelIds = React.useMemo(() => {
+    if (
+      !activeAgentConversationChannelId ||
+      !unreadChannelIds.has(activeAgentConversationChannelId)
+    ) {
+      return unreadChannelIds;
+    }
+
+    const next = new Set(unreadChannelIds);
+    next.delete(activeAgentConversationChannelId);
+    return next;
+  }, [activeAgentConversationChannelId, unreadChannelIds]);
+  const displayUnreadChannelCounts = React.useMemo(() => {
+    if (
+      !activeAgentConversationChannelId ||
+      !unreadChannelCounts.has(activeAgentConversationChannelId)
+    ) {
+      return unreadChannelCounts;
+    }
+
+    const next = new Map(unreadChannelCounts);
+    next.delete(activeAgentConversationChannelId);
+    return next;
+  }, [activeAgentConversationChannelId, unreadChannelCounts]);
   const sidebarLoadingShape = useSidebarLoadingShape({
     activeWorkspaceId: activeWorkspace?.id,
     currentPubkey,
@@ -478,7 +549,10 @@ export function AppSidebar({
     scrollToNextBelow,
     unreadAboveCount,
     unreadBelowCount,
-  } = useUnreadOverflow({ scrollRef, unreadChannelIds });
+  } = useUnreadOverflow({
+    scrollRef,
+    unreadChannelIds: displayUnreadChannelIds,
+  });
 
   const isCreatingAny =
     createDialogKind === "stream"
@@ -524,165 +598,215 @@ export function AppSidebar({
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         data-testid="app-sidebar-scroll-anchor"
       >
-        <AppSidebarPinnedHeader
-          channelLabels={dmChannelLabels}
-          currentPubkey={currentPubkey}
-          homeBadgeCount={homeBadgeCount}
-          onCreateAgent={onCreateAgent}
-          onCreateChannel={handleOpenCreateChannel}
-          onOpenDm={onOpenDm}
-          onOpenSearchResult={onOpenSearchResult}
-          onSelectAgents={onSelectAgents}
-          onSelectChannel={onSelectChannel}
-          onSelectHome={onSelectHome}
-          onSelectProjects={onSelectProjects}
-          onSelectPulse={onSelectPulse}
-          onSelectWorkflows={onSelectWorkflows}
-          searchChannels={searchChannels}
-          searchFocusRequest={searchFocusRequest}
-          selectedView={selectedView}
-          suggestionChannels={channels}
-        />
-
+        {unreadAboveCount > 0 ? (
+          <MoreUnreadButton
+            count={unreadAboveCount}
+            onClick={scrollToNextAbove}
+            position="top"
+            testId="sidebar-more-unread-above"
+          />
+        ) : null}
         <div
-          className="relative flex min-h-0 flex-1 flex-col"
-          data-testid="sidebar-channel-content"
+          className="shrink-0 px-2 pt-2.5"
+          data-testid="sidebar-pinned-header"
         >
-          {unreadAboveCount > 0 ? (
-            <MoreUnreadButton
-              count={unreadAboveCount}
-              onClick={scrollToNextAbove}
-              position="top"
-              testId="sidebar-more-unread-above"
-            />
+          <TopbarSearch
+            channelLabels={dmChannelLabels}
+            channels={searchChannels}
+            currentPubkey={currentPubkey}
+            focusRequest={searchFocusRequest}
+            onOpenChannel={onSelectChannel}
+            onOpenResult={onOpenSearchResult}
+            onOpenUser={(user) => onOpenDm({ pubkeys: [user.pubkey] })}
+            onCreateAgent={onCreateAgent}
+            onCreateChannel={handleOpenCreateChannel}
+            suggestionChannels={channels}
+          />
+          <SidebarHeader
+            className="cursor-default select-none px-0 pb-0 pt-2.5"
+            data-tauri-drag-region
+          >
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={selectedView === "home"}
+                  onClick={onSelectHome}
+                  tooltip="Inbox"
+                  type="button"
+                >
+                  <Inbox className="h-4 w-4" />
+                  <span>Inbox</span>
+                </SidebarMenuButton>
+                {homeBadgeCount > 0 ? (
+                  <SidebarMenuBadge
+                    className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+                    data-testid="sidebar-home-count"
+                  >
+                    {Math.min(homeBadgeCount, 99)}
+                  </SidebarMenuBadge>
+                ) : null}
+              </SidebarMenuItem>
+              <FeatureGate feature="pulse">
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    data-testid="open-pulse-view"
+                    isActive={selectedView === "pulse"}
+                    onClick={onSelectPulse}
+                    tooltip="Pulse"
+                    type="button"
+                  >
+                    <Activity className="h-4 w-4" />
+                    <span>Pulse</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </FeatureGate>
+              <FeatureGate feature="projects">
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    data-testid="open-projects-view"
+                    isActive={selectedView === "projects"}
+                    onClick={onSelectProjects}
+                    tooltip="Projects"
+                    type="button"
+                  >
+                    <FolderGit2 className="h-4 w-4" />
+                    <span>Projects</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </FeatureGate>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  data-testid="open-agents-view"
+                  isActive={
+                    selectedView === "agents" && !selectedAgentConversationId
+                  }
+                  onClick={onSelectAgents}
+                  tooltip="Agents"
+                  type="button"
+                >
+                  <Bot className="h-4 w-4" />
+                  <span>Agents</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <FeatureGate feature="workflows">
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    data-testid="open-workflows-view"
+                    isActive={selectedView === "workflows"}
+                    onClick={onSelectWorkflows}
+                    tooltip="Workflows"
+                    type="button"
+                  >
+                    <Zap className="h-4 w-4" />
+                    <span>Workflows</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </FeatureGate>
+            </SidebarMenu>
+          </SidebarHeader>
+        </div>
+
+        <SidebarContent
+          className="buzz-sidebar-scrollbar overscroll-none pt-4"
+          ref={scrollRef}
+        >
+          {isLoading ? (
+            <SidebarLoadingContent shape={sidebarLoadingShape} />
           ) : null}
 
-          <SidebarContent
-            className="buzz-sidebar-scrollbar overscroll-none pt-4"
-            ref={scrollRef}
-          >
-            {isLoading ? (
-              <SidebarLoadingContent shape={sidebarLoadingShape} />
-            ) : null}
-
-            {!isLoading ? (
-              <>
-                {starredChannels.length > 0 ? (
-                  <ChannelGroupSection
-                    createAriaLabel="Starred channels"
-                    hasUnread={starredChannels.some((c) =>
-                      unreadChannelIds.has(c.id),
-                    )}
-                    isCollapsed={collapsedGroups.starred}
+          {!isLoading ? (
+            <>
+              {starredChannels.length > 0 ? (
+                <ChannelGroupSection
+                  agentConversationsByChannelId={agentConversationsByChannelId}
+                  createAriaLabel="Starred channels"
+                  hasUnread={starredChannels.some((c) =>
+                    displayUnreadChannelIds.has(c.id),
+                  )}
+                  isAgentConversationActive={isAgentConversationActive}
+                  isCollapsed={collapsedGroups.starred}
+                  isActiveChannel={selectedView === "channel"}
+                  activeWorkingByChannelId={activeWorkingByChannelId}
+                  items={starredChannels}
+                  listTestId="starred-list"
+                  onMarkAllRead={() => {
+                    for (const channel of starredChannels) {
+                      onMarkChannelRead(channel.id, channel.lastMessageAt);
+                    }
+                  }}
+                  onHideAgentConversation={onHideAgentConversation}
+                  onMarkChannelRead={onMarkChannelRead}
+                  onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectAgentConversation={onSelectAgentConversation}
+                  onSelectChannel={onSelectChannel}
+                  onToggleCollapsed={() => toggleCollapsedGroup("starred")}
+                  selectedChannelId={selectedChannelId}
+                  selectedAgentConversationId={selectedAgentConversationId}
+                  title="Starred"
+                  unreadChannelCounts={displayUnreadChannelCounts}
+                  unreadChannelIds={displayUnreadChannelIds}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={onMuteChannel}
+                  onUnmuteChannel={onUnmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={onStarChannel}
+                  onUnstarChannel={onUnstarChannel}
+                  onLeaveChannel={requestLeaveChannel}
+                />
+              ) : null}
+              <SidebarDndContext
+                channels={channels}
+                sections={channelSections}
+                sectionIds={sectionIds}
+                onAssignChannel={assignChannel}
+                onUnassignChannel={unassignChannel}
+                onReorderSections={reorderSections}
+              >
+                {channelSections.map((section, idx) => (
+                  <CustomChannelSection
+                    agentConversationsByChannelId={
+                      agentConversationsByChannelId
+                    }
+                    key={section.id}
+                    section={section}
+                    channels={sectionBuckets.bySection[section.id] ?? []}
+                    hasUnread={
+                      sectionBuckets.bySection[section.id]?.some((c) =>
+                        displayUnreadChannelIds.has(c.id),
+                      ) ?? false
+                    }
+                    isAgentConversationActive={isAgentConversationActive}
+                    isCollapsed={collapsedSections[section.id] ?? false}
                     isActiveChannel={selectedView === "channel"}
                     activeWorkingByChannelId={activeWorkingByChannelId}
-                    items={starredChannels}
-                    listTestId="starred-list"
-                    onMarkAllRead={() => {
-                      for (const channel of starredChannels) {
+                    selectedChannelId={selectedChannelId}
+                    selectedAgentConversationId={selectedAgentConversationId}
+                    unreadChannelCounts={displayUnreadChannelCounts}
+                    unreadChannelIds={displayUnreadChannelIds}
+                    sections={channelSections}
+                    assignments={channelAssignments}
+                    isFirst={idx === 0}
+                    isLast={idx === channelSections.length - 1}
+                    onToggleCollapsed={() => toggleCollapsedSection(section.id)}
+                    onHideAgentConversation={onHideAgentConversation}
+                    onSelectChannel={onSelectChannel}
+                    onSelectAgentConversation={onSelectAgentConversation}
+                    onMarkChannelRead={onMarkChannelRead}
+                    onMarkChannelUnread={onMarkChannelUnread}
+                    onMarkSectionRead={() => {
+                      for (const channel of sectionBuckets.bySection[
+                        section.id
+                      ] ?? []) {
                         onMarkChannelRead(channel.id, channel.lastMessageAt);
                       }
                     }}
-                    onMarkChannelRead={onMarkChannelRead}
-                    onMarkChannelUnread={onMarkChannelUnread}
-                    onSelectChannel={onSelectChannel}
-                    onToggleCollapsed={() => toggleCollapsedGroup("starred")}
-                    selectedChannelId={selectedChannelId}
-                    title="Starred"
-                    unreadChannelCounts={unreadChannelCounts}
-                    unreadChannelIds={unreadChannelIds}
-                    mutedChannelIds={mutedChannelIds}
-                    onMuteChannel={onMuteChannel}
-                    onUnmuteChannel={onUnmuteChannel}
-                    starredChannelIds={starredChannelIds}
-                    onStarChannel={onStarChannel}
-                    onUnstarChannel={onUnstarChannel}
-                    onLeaveChannel={requestLeaveChannel}
-                  />
-                ) : null}
-                <SidebarDndContext
-                  channels={channels}
-                  sections={channelSections}
-                  sectionIds={sectionIds}
-                  onAssignChannel={assignChannel}
-                  onUnassignChannel={unassignChannel}
-                  onReorderSections={reorderSections}
-                >
-                  {channelSections.map((section, idx) => (
-                    <CustomChannelSection
-                      key={section.id}
-                      section={section}
-                      channels={sectionBuckets.bySection[section.id] ?? []}
-                      hasUnread={
-                        sectionBuckets.bySection[section.id]?.some((c) =>
-                          unreadChannelIds.has(c.id),
-                        ) ?? false
-                      }
-                      isCollapsed={collapsedSections[section.id] ?? false}
-                      isActiveChannel={selectedView === "channel"}
-                      activeWorkingByChannelId={activeWorkingByChannelId}
-                      selectedChannelId={selectedChannelId}
-                      unreadChannelCounts={unreadChannelCounts}
-                      unreadChannelIds={unreadChannelIds}
-                      sections={channelSections}
-                      assignments={channelAssignments}
-                      isFirst={idx === 0}
-                      isLast={idx === channelSections.length - 1}
-                      onToggleCollapsed={() =>
-                        toggleCollapsedSection(section.id)
-                      }
-                      onSelectChannel={onSelectChannel}
-                      onMarkChannelRead={onMarkChannelRead}
-                      onMarkChannelUnread={onMarkChannelUnread}
-                      onMarkSectionRead={() => {
-                        for (const channel of sectionBuckets.bySection[
-                          section.id
-                        ] ?? []) {
-                          onMarkChannelRead(channel.id, channel.lastMessageAt);
-                        }
-                      }}
-                      onAssignChannel={assignChannel}
-                      onUnassignChannel={unassignChannel}
-                      onCreateSectionForChannel={handleCreateSectionForChannel}
-                      onRenameSection={() => setRenameSectionTarget(section)}
-                      onDeleteSection={() => setDeleteSectionTarget(section)}
-                      onMoveSectionUp={() => moveSectionUp(section.id)}
-                      onMoveSectionDown={() => moveSectionDown(section.id)}
-                      mutedChannelIds={mutedChannelIds}
-                      onMuteChannel={onMuteChannel}
-                      onUnmuteChannel={onUnmuteChannel}
-                      starredChannelIds={starredChannelIds}
-                      onStarChannel={onStarChannel}
-                      onUnstarChannel={onUnstarChannel}
-                      onLeaveChannel={requestLeaveChannel}
-                    />
-                  ))}
-                  <ChannelGroupSection
-                    browseAriaLabel="Browse channels"
-                    createAriaLabel="Create a channel"
-                    draggable
-                    hasUnread={unreadChannelIds.size > 0}
-                    isCollapsed={collapsedGroups.channels}
-                    isActiveChannel={selectedView === "channel"}
-                    activeWorkingByChannelId={activeWorkingByChannelId}
-                    items={sectionBuckets.unassigned}
-                    listTestId="stream-list"
-                    onBrowseClick={onBrowseChannels}
-                    onCreateClick={() => openCreateDialog("stream")}
-                    onMarkAllRead={onMarkAllChannelsRead}
-                    onMarkChannelRead={onMarkChannelRead}
-                    onMarkChannelUnread={onMarkChannelUnread}
-                    onSelectChannel={onSelectChannel}
-                    onToggleCollapsed={() => toggleCollapsedGroup("channels")}
-                    selectedChannelId={selectedChannelId}
-                    title="Channels"
-                    unreadChannelCounts={unreadChannelCounts}
-                    unreadChannelIds={unreadChannelIds}
-                    sections={channelSections}
-                    assignments={channelAssignments}
                     onAssignChannel={assignChannel}
                     onUnassignChannel={unassignChannel}
                     onCreateSectionForChannel={handleCreateSectionForChannel}
+                    onRenameSection={() => setRenameSectionTarget(section)}
+                    onDeleteSection={() => setDeleteSectionTarget(section)}
+                    onMoveSectionUp={() => moveSectionUp(section.id)}
+                    onMoveSectionDown={() => moveSectionDown(section.id)}
                     mutedChannelIds={mutedChannelIds}
                     onMuteChannel={onMuteChannel}
                     onUnmuteChannel={onUnmuteChannel}
@@ -691,83 +815,130 @@ export function AppSidebar({
                     onUnstarChannel={onUnstarChannel}
                     onLeaveChannel={requestLeaveChannel}
                   />
-                </SidebarDndContext>
-                <FeatureGate feature="forum">
-                  <ChannelGroupSection
-                    createAriaLabel="Create a forum"
-                    hasUnread={unreadChannelIds.size > 0}
-                    isCollapsed={collapsedGroups.forums}
-                    isActiveChannel={selectedView === "channel"}
-                    activeWorkingByChannelId={activeWorkingByChannelId}
-                    items={forumChannels}
-                    listTestId="forum-list"
-                    onCreateClick={() => openCreateDialog("forum")}
-                    onMarkAllRead={onMarkAllChannelsRead}
-                    onMarkChannelRead={onMarkChannelRead}
-                    onMarkChannelUnread={onMarkChannelUnread}
-                    onSelectChannel={onSelectChannel}
-                    onToggleCollapsed={() => toggleCollapsedGroup("forums")}
-                    selectedChannelId={selectedChannelId}
-                    title="Forums"
-                    unreadChannelCounts={unreadChannelCounts}
-                    unreadChannelIds={unreadChannelIds}
-                    mutedChannelIds={mutedChannelIds}
-                    onMuteChannel={onMuteChannel}
-                    onUnmuteChannel={onUnmuteChannel}
-                  />
-                </FeatureGate>
-                <SidebarSection
-                  action={
-                    <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
-                      <button
-                        aria-expanded={isNewDmOpen}
-                        aria-label="Compose new message"
-                        className={`${SECTION_ICON_BUTTON_CLASS} ${SECTION_ACTION_VISIBILITY_CLASS}`}
-                        data-testid="new-dm-trigger"
-                        onClick={() => {
-                          setIsNewDmOpen(true);
-                        }}
-                        title="Compose new message"
-                        type="button"
-                      >
-                        <MessageCirclePlus className="h-4 w-4" />
-                      </button>
-                    </div>
-                  }
-                  dmParticipantsByChannelId={dmParticipantsByChannelId}
-                  isCollapsed={collapsedGroups.directMessages}
+                ))}
+                <ChannelGroupSection
+                  agentConversationsByChannelId={agentConversationsByChannelId}
+                  browseAriaLabel="Browse channels"
+                  createAriaLabel="Create a channel"
+                  draggable
+                  hasUnread={displayUnreadChannelIds.size > 0}
+                  isAgentConversationActive={isAgentConversationActive}
+                  isCollapsed={collapsedGroups.channels}
                   isActiveChannel={selectedView === "channel"}
                   activeWorkingByChannelId={activeWorkingByChannelId}
-                  items={sortedDirectMessages}
-                  channelLabels={dmChannelLabels}
-                  onHideDm={onHideDm}
+                  items={sectionBuckets.unassigned}
+                  listTestId="stream-list"
+                  onBrowseClick={onBrowseChannels}
+                  onCreateClick={() => openCreateDialog("stream")}
+                  onMarkAllRead={onMarkAllChannelsRead}
+                  onHideAgentConversation={onHideAgentConversation}
                   onMarkChannelRead={onMarkChannelRead}
                   onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectAgentConversation={onSelectAgentConversation}
                   onSelectChannel={onSelectChannel}
-                  onToggleCollapsed={() =>
-                    toggleCollapsedGroup("directMessages")
-                  }
-                  presenceByChannelId={dmPresenceByChannelId}
+                  onToggleCollapsed={() => toggleCollapsedGroup("channels")}
                   selectedChannelId={selectedChannelId}
-                  testId="dm-list"
-                  title="Direct messages"
-                  unreadChannelCounts={unreadChannelCounts}
-                  unreadChannelIds={unreadChannelIds}
+                  selectedAgentConversationId={selectedAgentConversationId}
+                  title="Channels"
+                  unreadChannelCounts={displayUnreadChannelCounts}
+                  unreadChannelIds={displayUnreadChannelIds}
+                  sections={channelSections}
+                  assignments={channelAssignments}
+                  onAssignChannel={assignChannel}
+                  onUnassignChannel={unassignChannel}
+                  onCreateSectionForChannel={handleCreateSectionForChannel}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={onMuteChannel}
+                  onUnmuteChannel={onUnmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={onStarChannel}
+                  onUnstarChannel={onUnstarChannel}
+                  onLeaveChannel={requestLeaveChannel}
+                />
+              </SidebarDndContext>
+              <FeatureGate feature="forum">
+                <ChannelGroupSection
+                  agentConversationsByChannelId={agentConversationsByChannelId}
+                  createAriaLabel="Create a forum"
+                  hasUnread={displayUnreadChannelIds.size > 0}
+                  isAgentConversationActive={isAgentConversationActive}
+                  isCollapsed={collapsedGroups.forums}
+                  isActiveChannel={selectedView === "channel"}
+                  activeWorkingByChannelId={activeWorkingByChannelId}
+                  items={forumChannels}
+                  listTestId="forum-list"
+                  onCreateClick={() => openCreateDialog("forum")}
+                  onMarkAllRead={onMarkAllChannelsRead}
+                  onHideAgentConversation={onHideAgentConversation}
+                  onMarkChannelRead={onMarkChannelRead}
+                  onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectAgentConversation={onSelectAgentConversation}
+                  onSelectChannel={onSelectChannel}
+                  onToggleCollapsed={() => toggleCollapsedGroup("forums")}
+                  selectedChannelId={selectedChannelId}
+                  selectedAgentConversationId={selectedAgentConversationId}
+                  title="Forums"
+                  unreadChannelCounts={displayUnreadChannelCounts}
+                  unreadChannelIds={displayUnreadChannelIds}
                   mutedChannelIds={mutedChannelIds}
                   onMuteChannel={onMuteChannel}
                   onUnmuteChannel={onUnmuteChannel}
                 />
-              </>
-            ) : null}
+              </FeatureGate>
+              <SidebarSection
+                action={
+                  <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                    <button
+                      aria-expanded={isNewDmOpen}
+                      aria-label="Compose new message"
+                      className={`${SECTION_ICON_BUTTON_CLASS} ${SECTION_ACTION_VISIBILITY_CLASS}`}
+                      data-testid="new-dm-trigger"
+                      onClick={() => {
+                        setIsNewDmOpen(true);
+                      }}
+                      title="Compose new message"
+                      type="button"
+                    >
+                      <MessageCirclePlus className="h-4 w-4" />
+                    </button>
+                  </div>
+                }
+                agentConversationsByChannelId={agentConversationsByChannelId}
+                dmParticipantsByChannelId={dmParticipantsByChannelId}
+                isCollapsed={collapsedGroups.directMessages}
+                isAgentConversationActive={isAgentConversationActive}
+                isActiveChannel={selectedView === "channel"}
+                activeWorkingByChannelId={activeWorkingByChannelId}
+                items={sortedDirectMessages}
+                channelLabels={dmChannelLabels}
+                onHideAgentConversation={onHideAgentConversation}
+                onHideDm={onHideDm}
+                onMarkChannelRead={onMarkChannelRead}
+                onMarkChannelUnread={onMarkChannelUnread}
+                onSelectAgentConversation={onSelectAgentConversation}
+                onSelectChannel={onSelectChannel}
+                onToggleCollapsed={() => toggleCollapsedGroup("directMessages")}
+                presenceByChannelId={dmPresenceByChannelId}
+                selectedAgentConversationId={selectedAgentConversationId}
+                selectedChannelId={selectedChannelId}
+                testId="dm-list"
+                title="Direct messages"
+                unreadChannelCounts={displayUnreadChannelCounts}
+                unreadChannelIds={displayUnreadChannelIds}
+                mutedChannelIds={mutedChannelIds}
+                onMuteChannel={onMuteChannel}
+                onUnmuteChannel={onUnmuteChannel}
+              />
+            </>
+          ) : null}
 
-            {errorMessage &&
-            !sidebarRelayConnectionCard.hasRelayUnreachableError ? (
-              <div className="px-3 py-2 text-sm text-destructive">
-                {errorMessage}
-              </div>
-            ) : null}
-          </SidebarContent>
-        </div>
+          {errorMessage &&
+          !sidebarRelayConnectionCard.hasRelayUnreachableError ? (
+            <div className="px-3 py-2 text-sm text-destructive">
+              {errorMessage}
+            </div>
+          ) : null}
+        </SidebarContent>
 
         <div className="relative z-30 shrink-0">
           {unreadBelowCount > 0 ? (

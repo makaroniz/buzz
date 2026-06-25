@@ -11,6 +11,9 @@ import {
   MessageTimeline,
   type MessageTimelineHandle,
 } from "@/features/messages/ui/MessageTimeline";
+import {
+  getHiddenAgentConversationMessageIds,
+} from "@/features/agents/agentConversations";
 import { buildDirectMessageIntro } from "@/features/channels/lib/dmParticipantDisplay";
 import {
   getDmHuddleMemberPubkeys,
@@ -51,11 +54,13 @@ import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRen
 import type { TimelineMessage } from "@/features/messages/types";
 import { isWelcomeChannel } from "@/features/onboarding/welcome";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
+import { useAppShell } from "@/app/AppShellContext";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
+  agentConversationMarkers,
   agentPubkeys,
   agentPubkeysPending = false,
   agentSessionAgents,
@@ -139,6 +144,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
   const messageTimelineRef = React.useRef<MessageTimelineHandle>(null);
   const composerWrapperRef = React.useRef<HTMLDivElement>(null);
+  const { openAgentConversation } = useAppShell();
   const completedWelcomeBannerChannelIdsRef = React.useRef(new Set<string>());
   const welcomeComposerDismissTimerRef = React.useRef<number | null>(null);
   const welcomeComposerHideTimerRef = React.useRef<number | null>(null);
@@ -317,6 +323,47 @@ export const ChannelPane = React.memo(function ChannelPane({
       onSendMessage,
     ],
   );
+  const handleOpenAgentSession = React.useCallback(
+    (pubkey: string) => {
+      onOpenAgentSession(pubkey);
+    },
+    [onOpenAgentSession],
+  );
+  const handleOpenAgentConversation = React.useCallback(
+    (message: TimelineMessage, options?: { publishMarker?: boolean }) => {
+      if (!activeChannel || !message.pubkey) {
+        return;
+      }
+
+      const rootId = message.rootId ?? message.parentId ?? message.id;
+      const contextMessages = messages.filter(
+        (candidate) =>
+          candidate.id === rootId ||
+          candidate.id === message.id ||
+          candidate.rootId === rootId ||
+          candidate.parentId === rootId,
+      );
+      openAgentConversation(
+        {
+          agentName: message.author,
+          agentPubkey: message.pubkey,
+          agentReply: message,
+          channel: activeChannel,
+          contextMessages,
+          parentMessage: message.parentId
+            ? (messages.find(
+                (candidate) => candidate.id === message.parentId,
+              ) ?? null)
+            : null,
+          threadRootMessage: rootId
+            ? (messages.find((candidate) => candidate.id === rootId) ?? null)
+            : null,
+        },
+        options,
+      );
+    },
+    [activeChannel, messages, openAgentConversation],
+  );
   const canDropInMainColumn =
     hasMainComposerOverlay && !isComposerDisabled && !isSinglePanelView;
   const hasTypingActivity = typingPubkeys.length > 0;
@@ -359,8 +406,29 @@ export const ChannelPane = React.memo(function ChannelPane({
     }
     return pubkeys;
   }, [botTypingEntries, openThreadHeadId]);
-  const hasThreadComposerBotActivity =
-    threadComposerBotTypingPubkeys.length > 0;
+  const threadActivityAgents = React.useMemo(() => {
+    if (
+      threadComposerBotTypingPubkeys.length === 0 ||
+      (openThreadHeadId &&
+        agentConversationMarkers?.some(
+          (marker) => marker.threadRootId === openThreadHeadId,
+        ))
+    ) {
+      return [];
+    }
+
+    const threadTypingSet = new Set(
+      threadComposerBotTypingPubkeys.map((pubkey) => pubkey.toLowerCase()),
+    );
+    return activityAgents.filter((agent) =>
+      threadTypingSet.has(agent.pubkey.toLowerCase()),
+    );
+  }, [
+    activityAgents,
+    agentConversationMarkers,
+    openThreadHeadId,
+    threadComposerBotTypingPubkeys,
+  ]);
   const directMessageIntro = React.useMemo(
     () =>
       buildDirectMessageIntro({
@@ -435,22 +503,76 @@ export const ChannelPane = React.memo(function ChannelPane({
     };
   }, [activeChannel, onAddAgent, onCreateChannel, onOpenMembers]);
 
-  const visibleMessages = React.useMemo(() => {
+  const baseVisibleMessages = React.useMemo(() => {
     if (!isWelcomeChannel(activeChannel)) {
       return messages;
     }
 
     return messages.filter((message) => !isWelcomeSetupSystemMessage(message));
   }, [activeChannel, messages]);
+  const threadSourceMessages = React.useMemo(() => {
+    if (!threadHeadMessage && threadMessages.length === 0) {
+      return [];
+    }
+
+    return [
+      ...(threadHeadMessage ? [threadHeadMessage] : []),
+      ...threadMessages.map((entry) => entry.message),
+    ];
+  }, [threadHeadMessage, threadMessages]);
+  const hiddenAgentConversationMessageIds = React.useMemo(() => {
+    const hiddenIds = getHiddenAgentConversationMessageIds(
+      baseVisibleMessages,
+      agentConversationMarkers,
+    );
+    const threadHiddenIds = getHiddenAgentConversationMessageIds(
+      threadSourceMessages,
+      agentConversationMarkers,
+    );
+    for (const id of threadHiddenIds) {
+      hiddenIds.add(id);
+    }
+    return hiddenIds;
+  }, [agentConversationMarkers, baseVisibleMessages, threadSourceMessages]);
+  const visibleMessages = React.useMemo(() => {
+    if (hiddenAgentConversationMessageIds.size === 0) {
+      return baseVisibleMessages;
+    }
+
+    return baseVisibleMessages.filter(
+      (message) => !hiddenAgentConversationMessageIds.has(message.id),
+    );
+  }, [baseVisibleMessages, hiddenAgentConversationMessageIds]);
+  const visibleThreadMessages = React.useMemo(() => {
+    if (hiddenAgentConversationMessageIds.size === 0) {
+      return threadMessages;
+    }
+
+    return threadMessages.filter(
+      (entry) => !hiddenAgentConversationMessageIds.has(entry.message.id),
+    );
+  }, [hiddenAgentConversationMessageIds, threadMessages]);
   const mainTimelineEntries = React.useMemo(
     () => buildMainTimelineEntries(visibleMessages),
     [visibleMessages],
   );
+  const handleEditLastOwnThreadMessage = React.useCallback((): boolean => {
+    if (!onEdit) return false;
+    // Thread scope = the open thread head plus its visible replies, in
+    // chronological order. The head is oldest, so append it first.
+    const scope: TimelineMessage[] = [];
+    if (threadHeadMessage) scope.push(threadHeadMessage);
+    for (const entry of visibleThreadMessages) scope.push(entry.message);
+    const target = findLastOwnEditable(scope);
+    if (!target) return false;
+    onEdit(target);
+    return true;
+  }, [findLastOwnEditable, onEdit, threadHeadMessage, visibleThreadMessages]);
   useRenderScopedReactionHydration({
     activeChannel,
     mainTimelineEntries,
     threadHeadMessage,
-    threadMessages,
+    threadMessages: visibleThreadMessages,
   });
   const videoReviewCommentsByRootId = React.useMemo(
     () => buildVideoReviewCommentsByRootId(messages),
@@ -569,6 +691,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           ) : null}
           <MessageTimeline
             ref={messageTimelineRef}
+            agentConversationMarkers={agentConversationMarkers}
             agentPubkeys={agentPubkeys}
             channelId={activeChannel?.id}
             channelIntro={channelIntro}
@@ -608,6 +731,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             onEdit={onEdit}
             onMarkUnread={onMarkUnread}
             onMarkRead={onMarkRead}
+            onOpenAgentConversation={handleOpenAgentConversation}
             onReply={activeChannel?.archivedAt ? undefined : onOpenThread}
             channelName={activeChannel?.name}
             channelType={activeChannel?.channelType ?? null}
@@ -693,7 +817,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                         <BotActivityComposerAction
                           agents={activityAgents}
                           channelId={activeChannel?.id ?? null}
-                          onOpenAgentSession={onOpenAgentSession}
+                          onOpenAgentSession={handleOpenAgentSession}
                           openAgentSessionPubkey={openAgentSessionPubkey}
                           profiles={profiles}
                           typingBotPubkeys={composerBotTypingPubkeys}
@@ -739,6 +863,7 @@ export const ChannelPane = React.memo(function ChannelPane({
         (() => {
           const panel = (
             <MessageThreadPanel
+              agentConversationMarkers={agentConversationMarkers}
               agentPubkeys={agentPubkeys}
               channel={activeChannel}
               channelId={activeChannel?.id ?? null}
@@ -768,6 +893,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               onMarkUnread={onMarkUnread}
               onMarkRead={onMarkRead}
               onExpandReplies={onExpandThreadReplies}
+              onOpenAgentConversation={handleOpenAgentConversation}
               onSelectReplyTarget={onSelectThreadReplyTarget}
               onSend={onSendThreadReply}
               onScrollTargetResolved={onThreadScrollTargetResolved}
@@ -778,24 +904,12 @@ export const ChannelPane = React.memo(function ChannelPane({
               scrollTargetId={threadScrollTargetId}
               threadHead={threadHeadMessage}
               threadHeadVideoReviewContext={threadHeadVideoReviewContext}
+              threadActivityAgents={threadActivityAgents}
               widthPx={threadPanelWidthPx}
-              threadReplies={threadMessages}
+              threadReplies={visibleThreadMessages}
               threadUnreadCount={threadUnreadCounts?.get(threadHeadMessage.id)}
               threadReplyUnreadCounts={threadReplyUnreadCounts}
               threadTypingPubkeys={threadTypingPubkeys}
-              toolbarExtraActions={
-                hasThreadComposerBotActivity ? (
-                  <BotActivityComposerAction
-                    agents={activityAgents}
-                    channelId={activeChannel?.id ?? null}
-                    onOpenAgentSession={onOpenAgentSession}
-                    openAgentSessionPubkey={openAgentSessionPubkey}
-                    profiles={profiles}
-                    typingBotPubkeys={threadComposerBotTypingPubkeys}
-                    variant="inline"
-                  />
-                ) : null
-              }
             />
           );
           return wrapAux(panel, "message-thread-panel");
