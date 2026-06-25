@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   List,
   MessageSquare,
+  MoreHorizontal,
   Trash2,
   Users,
 } from "lucide-react";
@@ -30,8 +31,24 @@ import { useIdentityQuery } from "@/shared/api/hooks";
 import { topChromeInset } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 type ProjectsViewMode = "grid" | "list";
@@ -161,6 +178,15 @@ function isProjectMine(project: Project, currentPubkey: string | undefined) {
   );
 }
 
+function isProjectOwnedByCurrentUser(
+  project: Project,
+  currentPubkey: string | undefined,
+) {
+  return currentPubkey
+    ? normalizePubkey(project.owner) === normalizePubkey(currentPubkey)
+    : false;
+}
+
 function projectHasAgent(
   project: Project,
   people: string[],
@@ -177,31 +203,6 @@ function projectOwnerIsUser(
   profiles: UserProfileLookup | undefined,
 ) {
   return profiles?.[normalizePubkey(project.owner)]?.isAgent !== true;
-}
-
-function WorkOwnerBadge({
-  avatarUrl,
-  isAgent,
-  label,
-}: {
-  avatarUrl: string | null;
-  isAgent: boolean;
-  label: string;
-}) {
-  return (
-    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border/50 bg-muted/30 px-1.5 py-0.5 text-xs text-muted-foreground">
-      <UserAvatar
-        accent={isAgent}
-        avatarUrl={avatarUrl}
-        displayName={label}
-        size="xs"
-        testId="project-work-owner-avatar"
-      />
-      <span className="truncate">
-        {isAgent ? "Agent" : "Work by"}: {label}
-      </span>
-    </span>
-  );
 }
 
 function ProjectPeopleStack({
@@ -248,8 +249,12 @@ function ProjectPeopleStack({
 }
 
 function StatusPill({ status }: { status: string }) {
+  if (status === "active") {
+    return null;
+  }
+
   return (
-    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+    <span className="shrink-0 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground shadow-xs">
       {status}
     </span>
   );
@@ -447,30 +452,86 @@ function ProjectCardButton({
   );
 }
 
-function ProjectDeleteButton({
+function ProjectActionsMenu({
   project,
+  canDelete,
   disabled,
   onDelete,
 }: {
   project: Project;
+  canDelete: boolean;
   disabled: boolean;
-  onDelete: (project: Project) => void;
+  onDelete: (project: Project) => Promise<void> | void;
 }) {
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
   return (
-    <Button
-      aria-label={`Delete ${project.name}`}
-      className="h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-      disabled={disabled}
-      onClick={(event) => {
-        event.stopPropagation();
-        onDelete(project);
-      }}
-      size="icon"
-      type="button"
-      variant="ghost"
-    >
-      <Trash2 className="h-3.5 w-3.5" />
-    </Button>
+    <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            aria-label={`More options for ${project.name}`}
+            className="relative z-20 h-7 w-7 text-muted-foreground hover:text-foreground"
+            onClick={(event) => event.stopPropagation()}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            disabled={!canDelete || disabled}
+            onSelect={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (canDelete && !disabled) {
+                setConfirmOpen(true);
+              }
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete branch
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <AlertDialogContent
+        data-testid={`project-delete-confirm-${project.dtag}`}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete branch?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Delete {project.name} from Projects for everyone. This can only be
+            done for branches you own and cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button disabled={disabled} type="button" variant="outline">
+              Cancel
+            </Button>
+          </AlertDialogCancel>
+          <AlertDialogAction asChild>
+            <Button
+              data-testid={`project-delete-confirm-button-${project.dtag}`}
+              disabled={disabled}
+              onClick={(event) => {
+                event.preventDefault();
+                void Promise.resolve(onDelete(project)).then(() =>
+                  setConfirmOpen(false),
+                );
+              }}
+              type="button"
+              variant="destructive"
+            >
+              {disabled ? "Deleting..." : "Delete branch"}
+            </Button>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -479,67 +540,69 @@ function ProjectGridCard({
   people,
   profiles,
   summary,
+  canDelete,
+  deleteDisabled,
   onDelete,
   onOpen,
-  deleteDisabled,
 }: {
   project: Project;
   people: string[];
   profiles?: UserProfileLookup;
   summary: ProjectActivitySummary | undefined;
-  onDelete: (project: Project) => void;
-  onOpen: (project: Project) => void;
+  canDelete: boolean;
   deleteDisabled: boolean;
+  onDelete: (project: Project) => Promise<void> | void;
+  onOpen: (project: Project) => void;
 }) {
-  const ownerProfile = profiles?.[normalizePubkey(project.owner)];
-  const ownerLabel = resolveUserLabel({ pubkey: project.owner, profiles });
-
   return (
     <Card
-      className="group relative flex min-h-52 flex-col overflow-hidden border-border/50 bg-card/60 p-3 shadow-none transition-colors hover:border-border hover:bg-muted/30"
+      className="group relative flex min-h-48 flex-col overflow-hidden border-border/60 bg-gradient-to-br from-card via-card to-muted/30 p-4 shadow-sm transition-colors duration-150 hover:border-primary/30 hover:shadow-md"
       data-testid={`project-card-${project.dtag}`}
     >
       <ProjectCardButton onOpen={onOpen} project={project} />
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
+          <div className="min-w-0 space-y-1.5">
             <div className="flex min-w-0 items-center gap-2">
-              <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="truncate text-sm font-medium text-foreground">
-                {project.name}
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary shadow-inner">
+                <FolderGit2 className="h-4 w-4" />
               </span>
+              <div className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-foreground">
+                  {project.name}
+                </span>
+                <p className="truncate font-mono text-2xs text-muted-foreground/70">
+                  {project.dtag}
+                </p>
+              </div>
             </div>
-            <p className="truncate font-mono text-2xs text-muted-foreground/70">
-              {project.dtag}
-            </p>
           </div>
-          <StatusPill status={project.status} />
+          <div className="relative z-10 flex items-center gap-1">
+            <StatusPill status={project.status} />
+            <ProjectActionsMenu
+              canDelete={canDelete}
+              disabled={deleteDisabled}
+              onDelete={onDelete}
+              project={project}
+            />
+          </div>
         </div>
 
-        <WorkOwnerBadge
-          avatarUrl={ownerProfile?.avatarUrl ?? null}
-          isAgent={ownerProfile?.isAgent === true}
-          label={ownerLabel}
-        />
-
-        <p className="line-clamp-3 min-h-12 text-sm text-muted-foreground">
+        <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
           {project.description || "A shared space for internal git work."}
         </p>
 
-        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <MetadataItem icon={GitBranch}>{project.defaultBranch}</MetadataItem>
           <MetadataItem icon={Users}>
             {pluralize(people.length, "person", "people")}
-          </MetadataItem>
-          <MetadataItem icon={MessageSquare}>
-            {getDiscussionLabel(project)}
           </MetadataItem>
           <MetadataItem icon={CalendarDays}>
             {formatCreatedDate(project.createdAt)}
           </MetadataItem>
         </div>
 
-        <div className="mt-auto space-y-2 rounded-lg border border-border/50 bg-muted/25 px-2.5 py-2">
+        <div className="mt-auto space-y-2 rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 shadow-inner">
           <div className="flex min-w-0 items-center justify-between gap-2">
             <p className="truncate text-xs text-muted-foreground">
               {getActivityLabel(summary)}
@@ -549,11 +612,6 @@ function ProjectGridCard({
                 profiles={profiles}
                 pubkeys={people}
                 workOwnerPubkey={project.owner}
-              />
-              <ProjectDeleteButton
-                disabled={deleteDisabled}
-                onDelete={onDelete}
-                project={project}
               />
             </div>
           </div>
@@ -572,24 +630,23 @@ function ProjectListRow({
   people,
   profiles,
   summary,
+  canDelete,
+  deleteDisabled,
   onDelete,
   onOpen,
-  deleteDisabled,
 }: {
   project: Project;
   people: string[];
   profiles?: UserProfileLookup;
   summary: ProjectActivitySummary | undefined;
-  onDelete: (project: Project) => void;
-  onOpen: (project: Project) => void;
+  canDelete: boolean;
   deleteDisabled: boolean;
+  onDelete: (project: Project) => Promise<void> | void;
+  onOpen: (project: Project) => void;
 }) {
-  const ownerProfile = profiles?.[normalizePubkey(project.owner)];
-  const ownerLabel = resolveUserLabel({ pubkey: project.owner, profiles });
-
   return (
     <Card
-      className="group relative overflow-hidden border-border/50 bg-card/60 p-3 shadow-none transition-colors hover:border-border hover:bg-muted/30"
+      className="group relative overflow-hidden border-border/60 bg-gradient-to-r from-card via-card to-muted/20 p-3 shadow-sm transition-colors duration-150 hover:border-primary/30 hover:shadow-md"
       data-testid={`project-row-${project.dtag}`}
     >
       <ProjectCardButton onOpen={onOpen} project={project} />
@@ -605,11 +662,6 @@ function ProjectListRow({
           <p className="line-clamp-1 text-sm text-muted-foreground">
             {project.description || "A shared space for internal git work."}
           </p>
-          <WorkOwnerBadge
-            avatarUrl={ownerProfile?.avatarUrl ?? null}
-            isAgent={ownerProfile?.isAgent === true}
-            label={ownerLabel}
-          />
         </div>
 
         <div className="min-w-0 space-y-1">
@@ -642,7 +694,8 @@ function ProjectListRow({
             pubkeys={people}
             workOwnerPubkey={project.owner}
           />
-          <ProjectDeleteButton
+          <ProjectActionsMenu
+            canDelete={canDelete}
             disabled={deleteDisabled}
             onDelete={onDelete}
             project={project}
@@ -687,6 +740,7 @@ export function ProjectsView() {
   });
   const profiles = profilesQuery.data?.profiles;
   const deleteProjectMutation = useDeleteProjectMutation();
+  const currentPubkey = identityQuery.data?.pubkey;
 
   const handleViewModeChange = React.useCallback(
     (nextViewMode: ProjectsViewMode) => {
@@ -707,14 +761,14 @@ export function ProjectsView() {
   }, []);
 
   const visibleProjects = React.useMemo(() => {
-    const currentPubkey = identityQuery.data?.pubkey;
     return projects
       .filter((project) => {
         const summary = activitySummariesQuery.data?.[project.repoAddress];
         const people = projectPeople(project, summary);
         if (filter === "mine") return isProjectMine(project, currentPubkey);
-        if (filter === "agents")
+        if (filter === "agents") {
           return projectHasAgent(project, people, profiles);
+        }
         if (filter === "users") return projectOwnerIsUser(project, profiles);
         return true;
       })
@@ -734,8 +788,8 @@ export function ProjectsView() {
       });
   }, [
     activitySummariesQuery.data,
+    currentPubkey,
     filter,
-    identityQuery.data?.pubkey,
     profiles,
     projects,
     sort,
@@ -750,17 +804,12 @@ export function ProjectsView() {
 
   const handleDeleteProject = React.useCallback(
     async (project: Project) => {
-      const confirmed = window.confirm(`Delete ${project.name}?`);
-      if (!confirmed) return;
-
       try {
         await deleteProjectMutation.mutateAsync(project);
-        toast.success("Project card deleted");
+        toast.success("Branch deleted");
       } catch (error) {
         toast.error(
-          error instanceof Error
-            ? error.message
-            : "Failed to delete project card",
+          error instanceof Error ? error.message : "Failed to delete branch",
         );
       }
     },
@@ -816,11 +865,10 @@ export function ProjectsView() {
             const summary = activitySummariesQuery.data?.[project.repoAddress];
             return (
               <ProjectGridCard
+                canDelete={isProjectOwnedByCurrentUser(project, currentPubkey)}
                 deleteDisabled={deleteProjectMutation.isPending}
                 key={project.id}
-                onDelete={(nextProject) =>
-                  void handleDeleteProject(nextProject)
-                }
+                onDelete={handleDeleteProject}
                 onOpen={handleOpenProject}
                 people={projectPeople(project, summary)}
                 profiles={profiles}
@@ -836,11 +884,10 @@ export function ProjectsView() {
             const summary = activitySummariesQuery.data?.[project.repoAddress];
             return (
               <ProjectListRow
+                canDelete={isProjectOwnedByCurrentUser(project, currentPubkey)}
                 deleteDisabled={deleteProjectMutation.isPending}
                 key={project.id}
-                onDelete={(nextProject) =>
-                  void handleDeleteProject(nextProject)
-                }
+                onDelete={handleDeleteProject}
                 onOpen={handleOpenProject}
                 people={projectPeople(project, summary)}
                 profiles={profiles}

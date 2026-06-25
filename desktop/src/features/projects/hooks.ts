@@ -95,19 +95,6 @@ function readHiddenProjectCards(): string[] {
   }
 }
 
-function hideProjectCard(project: Project): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const hidden = new Set(readHiddenProjectCards());
-  hidden.add(projectCoordinate(project));
-  window.localStorage.setItem(
-    HIDDEN_PROJECT_CARDS_KEY,
-    JSON.stringify([...hidden]),
-  );
-}
-
 function isHiddenLocally(project: Project): boolean {
   return readHiddenProjectCards().includes(projectCoordinate(project));
 }
@@ -306,13 +293,12 @@ async function fetchProjectActivitySummaries(
 async function deleteProject(project: Project): Promise<void> {
   const identity = await getIdentity();
   if (identity.pubkey.toLowerCase() !== project.owner.toLowerCase()) {
-    hideProjectCard(project);
-    return;
+    throw new Error("Only branch owners can delete branches.");
   }
 
   const event = await signRelayEvent({
     kind: KIND_DELETION,
-    content: `Delete project ${project.name}`,
+    content: `Delete branch ${project.name}`,
     tags: [["a", project.repoAddress]],
   });
 

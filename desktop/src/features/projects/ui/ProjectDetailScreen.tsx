@@ -282,7 +282,7 @@ function LatestCommitPanel({
 
   return (
     <div className="space-y-3 p-4">
-      <div className="rounded-lg border border-border/50 bg-background/50 p-4">
+      <div className="rounded-lg bg-muted/50 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-1">
             <p className="line-clamp-2 text-sm font-medium text-foreground">
@@ -395,8 +395,8 @@ function IssuesPanel({
   return (
     <div className="space-y-2 p-4">
       {issues.slice(0, 10).map((issue) => (
-        <Card
-          className="space-y-2 border-border/50 bg-card/60 p-3 shadow-none"
+        <article
+          className="space-y-2 rounded-lg bg-muted/50 p-3"
           key={issue.id}
         >
           <div className="flex items-start justify-between gap-3">
@@ -418,14 +418,14 @@ function IssuesPanel({
             <span>Updated {compactDate(issue.updatedAt)}</span>
             {issue.labels.map((label) => (
               <span
-                className="rounded-md border border-border/70 px-1.5 py-0.5"
+                className="rounded-md bg-background/60 px-1.5 py-0.5"
                 key={label}
               >
                 {label}
               </span>
             ))}
           </div>
-        </Card>
+        </article>
       ))}
     </div>
   );
@@ -646,7 +646,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
           </Button>
         </div>
 
-        <div className="mx-auto w-full max-w-5xl space-y-5">
+        <div className="w-full space-y-5">
           <section className="space-y-3 rounded-xl border border-border/50 bg-card/60 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex min-w-0 items-start gap-3">
