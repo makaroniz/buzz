@@ -859,6 +859,14 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
         .and_then(|raw| crate::api::nip05::canonicalize_nip05(raw, &state.config.relay_url).ok());
     let nip05_handle = nip05_owned.as_deref().unwrap_or("");
 
+    // NIP-01 standard `email` field — stored as-is for agent commit trailer injection.
+    // No validation beyond presence: the user is responsible for setting a valid git email.
+    let git_email_owned = content
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let git_email = git_email_owned.as_deref().unwrap_or("");
+
     let pubkey_bytes = event.pubkey.to_bytes().to_vec();
 
     state.db.ensure_user(&pubkey_bytes).await?;
@@ -875,6 +883,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
             Some(avatar_url),
             Some(about),
             Some(nip05_handle),
+            Some(git_email),
         )
         .await;
 
@@ -891,6 +900,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
                     Some(avatar_url),
                     Some(about),
                     None, // skip contested NIP-05
+                    Some(git_email),
                 )
                 .await?;
         } else {
