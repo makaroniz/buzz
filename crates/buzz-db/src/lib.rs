@@ -47,7 +47,7 @@ use sqlx::{PgPool, QueryBuilder, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
-use buzz_core::StoredEvent;
+use buzz_core::{CommunityId, StoredEvent};
 
 /// Extract p-tag mentions from an event and insert into the `event_mentions` table.
 ///
@@ -55,6 +55,7 @@ use buzz_core::StoredEvent;
 /// Uses `INSERT ... ON CONFLICT DO NOTHING` so duplicate inserts are silently skipped.
 pub async fn insert_mentions(
     pool: &PgPool,
+    community_id: CommunityId,
     event: &nostr::Event,
     channel_id: Option<Uuid>,
 ) -> Result<()> {
@@ -106,11 +107,12 @@ pub async fn insert_mentions(
     // Single multi-row INSERT ... ON CONFLICT DO NOTHING — one round-trip regardless of mention count.
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "INSERT INTO event_mentions \
-         (pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
+         (community_id, pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
     );
 
     qb.push_values(&valid_pubkeys, |mut b, pubkey| {
-        b.push_bind(pubkey.as_str())
+        b.push_bind(community_id.as_uuid())
+            .push_bind(pubkey.as_str())
             .push_bind(event_id_bytes.as_slice())
             .push_bind(created_at)
             .push_bind(channel_id)
@@ -160,6 +162,15 @@ impl Default for DbConfig {
             idle_timeout_secs: 600,
         }
     }
+}
+
+/// Community host-map row returned by [`Db::lookup_community_by_host`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommunityRecord {
+    /// Stable server-resolved community id.
+    pub id: CommunityId,
+    /// Normalized host that maps to this community.
+    pub host: String,
 }
 
 /// Token summary returned by [`Db::list_active_tokens`].
@@ -216,15 +227,101 @@ impl Db {
         self.pool.begin().await.map_err(Into::into)
     }
 
+    /// Returns the community mapped to a normalized request host, if one exists.
+    ///
+    /// The caller owns host normalization and turns `None` into the fail-closed
+    /// request/connection error. buzz-db only reads the durable host map.
+    pub async fn lookup_community_by_host(
+        &self,
+        normalized_host: &str,
+    ) -> Result<Option<CommunityRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, host
+            FROM communities
+            WHERE host = $1
+            "#,
+        )
+        .bind(normalized_host)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| {
+            let id: Uuid = row.try_get("id")?;
+            let host: String = row.try_get("host")?;
+
+            Ok(CommunityRecord {
+                id: CommunityId::from_uuid(id),
+                host,
+            })
+        })
+        .transpose()
+    }
+
+    /// Ensure a configured community host exists and return its row.
+    ///
+    /// This is the startup/config seeding path for N=1 deployments. Migrations
+    /// create the schema only; deployment-specific hosts are not hardcoded into
+    /// schema history.
+    pub async fn ensure_configured_community(
+        &self,
+        normalized_host: &str,
+    ) -> Result<CommunityRecord> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO communities (host)
+            VALUES ($1)
+            ON CONFLICT (host) DO UPDATE SET host = EXCLUDED.host
+            RETURNING id, host
+            "#,
+        )
+        .bind(normalized_host)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let id: Uuid = row.try_get("id")?;
+        let host: String = row.try_get("host")?;
+
+        Ok(CommunityRecord {
+            id: CommunityId::from_uuid(id),
+            host,
+        })
+    }
+
+    /// Returns the community that owns a channel, if the channel exists.
+    ///
+    /// Internal relay producers use this to derive tenant context from the row
+    /// they are acting on, rather than falling back to an implicit default.
+    pub async fn community_of_channel(&self, channel_id: Uuid) -> Result<Option<CommunityId>> {
+        let row = sqlx::query(
+            r#"
+            SELECT community_id
+            FROM channels
+            WHERE id = $1
+              AND deleted_at IS NULL
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| {
+            let id: Uuid = row.try_get("community_id")?;
+            Ok(CommunityId::from_uuid(id))
+        })
+        .transpose()
+    }
+
     /// Inserts an event. Returns `(StoredEvent, was_inserted)` — `false` on duplicate.
     pub async fn insert_event(
         &self,
+        community_id: CommunityId,
         event: &nostr::Event,
         channel_id: Option<Uuid>,
     ) -> Result<(StoredEvent, bool)> {
-        let result = event::insert_event(&self.pool, event, channel_id).await?;
+        let result = event::insert_event(&self.pool, community_id, event, channel_id).await?;
         if result.1 {
-            if let Err(e) = insert_mentions(&self.pool, event, channel_id).await {
+            if let Err(e) = insert_mentions(&self.pool, community_id, event, channel_id).await {
                 tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
             }
         }
@@ -322,15 +419,21 @@ impl Db {
     /// Atomically insert an event AND its thread metadata in a single transaction.
     pub async fn insert_event_with_thread_metadata(
         &self,
+        community_id: CommunityId,
         event: &nostr::Event,
         channel_id: Option<Uuid>,
         thread_meta: Option<event::ThreadMetadataParams<'_>>,
     ) -> Result<(StoredEvent, bool)> {
-        let result =
-            event::insert_event_with_thread_metadata(&self.pool, event, channel_id, thread_meta)
-                .await?;
+        let result = event::insert_event_with_thread_metadata(
+            &self.pool,
+            community_id,
+            event,
+            channel_id,
+            thread_meta,
+        )
+        .await?;
         if result.1 {
-            if let Err(e) = insert_mentions(&self.pool, event, channel_id).await {
+            if let Err(e) = insert_mentions(&self.pool, community_id, event, channel_id).await {
                 tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
             }
         }
@@ -340,6 +443,7 @@ impl Db {
     /// Creates a new channel, bootstraps the creator as owner, and returns the record.
     pub async fn create_channel(
         &self,
+        community_id: CommunityId,
         name: &str,
         channel_type: channel::ChannelType,
         visibility: channel::ChannelVisibility,
@@ -349,6 +453,7 @@ impl Db {
     ) -> Result<channel::ChannelRecord> {
         channel::create_channel(
             &self.pool,
+            community_id,
             name,
             channel_type,
             visibility,
@@ -365,6 +470,7 @@ impl Db {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_channel_with_id(
         &self,
+        community_id: CommunityId,
         channel_id: Uuid,
         name: &str,
         channel_type: channel::ChannelType,
@@ -375,6 +481,7 @@ impl Db {
     ) -> Result<(channel::ChannelRecord, bool)> {
         channel::create_channel_with_id(
             &self.pool,
+            community_id,
             channel_id,
             name,
             channel_type,
@@ -404,22 +511,32 @@ impl Db {
     /// Adds a member to a channel.
     pub async fn add_member(
         &self,
+        community_id: CommunityId,
         channel_id: Uuid,
         pubkey: &[u8],
         role: channel::MemberRole,
         invited_by: Option<&[u8]>,
     ) -> Result<channel::MemberRecord> {
-        channel::add_member(&self.pool, channel_id, pubkey, role, invited_by).await
+        channel::add_member(
+            &self.pool,
+            community_id,
+            channel_id,
+            pubkey,
+            role,
+            invited_by,
+        )
+        .await
     }
 
     /// Removes a member from a channel.
     pub async fn remove_member(
         &self,
+        community_id: CommunityId,
         channel_id: Uuid,
         pubkey: &[u8],
         actor_pubkey: &[u8],
     ) -> Result<()> {
-        channel::remove_member(&self.pool, channel_id, pubkey, actor_pubkey).await
+        channel::remove_member(&self.pool, community_id, channel_id, pubkey, actor_pubkey).await
     }
 
     /// Returns `true` if the pubkey is an active member.
@@ -553,19 +670,45 @@ impl Db {
         event::claim_due_reminder(&self.pool, event_id, event_created_at).await
     }
 
+    /// Atomically claim a due reminder using a caller-supplied delivery stamp.
+    pub async fn claim_due_reminder_with_stamp(
+        &self,
+        event_id: &[u8],
+        event_created_at: chrono::DateTime<chrono::Utc>,
+        delivery_stamp: i64,
+    ) -> Result<bool> {
+        event::claim_due_reminder_with_stamp(&self.pool, event_id, event_created_at, delivery_stamp)
+            .await
+    }
+
+    /// Release a claimed due reminder after a publish failure.
+    pub async fn release_due_reminder(
+        &self,
+        event_id: &[u8],
+        event_created_at: chrono::DateTime<chrono::Utc>,
+        delivery_stamp: i64,
+    ) -> Result<bool> {
+        event::release_due_reminder(&self.pool, event_id, event_created_at, delivery_stamp).await
+    }
+
     /// Ensure a user record exists (upsert).
-    pub async fn ensure_user(&self, pubkey: &[u8]) -> Result<()> {
-        user::ensure_user(&self.pool, pubkey).await
+    pub async fn ensure_user(&self, community_id: CommunityId, pubkey: &[u8]) -> Result<()> {
+        user::ensure_user(&self.pool, community_id, pubkey).await
     }
 
     /// Get a single user record by pubkey.
-    pub async fn get_user(&self, pubkey: &[u8]) -> Result<Option<user::UserProfile>> {
-        user::get_user(&self.pool, pubkey).await
+    pub async fn get_user(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<user::UserProfile>> {
+        user::get_user(&self.pool, community_id, pubkey).await
     }
 
     /// Update a user's profile fields.
     pub async fn update_user_profile(
         &self,
+        community_id: CommunityId,
         pubkey: &[u8],
         display_name: Option<&str>,
         avatar_url: Option<&str>,
@@ -574,6 +717,7 @@ impl Db {
     ) -> Result<()> {
         user::update_user_profile(
             &self.pool,
+            community_id,
             pubkey,
             display_name,
             avatar_url,
@@ -586,43 +730,61 @@ impl Db {
     /// Look up a user by NIP-05 handle.
     pub async fn get_user_by_nip05(
         &self,
+        community_id: CommunityId,
         local_part: &str,
         domain: &str,
     ) -> Result<Option<user::UserProfile>> {
-        user::get_user_by_nip05(&self.pool, local_part, domain).await
+        user::get_user_by_nip05(&self.pool, community_id, local_part, domain).await
     }
 
     /// Search users by display name, NIP-05 handle, or pubkey prefix.
     pub async fn search_users(
         &self,
+        community_id: CommunityId,
         query: &str,
         limit: u32,
     ) -> Result<Vec<user::UserSearchProfile>> {
-        user::search_users(&self.pool, query, limit).await
+        user::search_users(&self.pool, community_id, query, limit).await
     }
 
     /// Atomically set agent owner — only if no owner is currently assigned.
     /// Returns Ok(true) if set, Ok(false) if an owner already exists.
-    pub async fn set_agent_owner(&self, agent_pubkey: &[u8], owner_pubkey: &[u8]) -> Result<bool> {
-        user::set_agent_owner(&self.pool, agent_pubkey, owner_pubkey).await
+    pub async fn set_agent_owner(
+        &self,
+        community_id: CommunityId,
+        agent_pubkey: &[u8],
+        owner_pubkey: &[u8],
+    ) -> Result<bool> {
+        user::set_agent_owner(&self.pool, community_id, agent_pubkey, owner_pubkey).await
     }
 
     /// Get the channel_add_policy and agent_owner_pubkey for a user.
     pub async fn get_agent_channel_policy(
         &self,
+        community_id: CommunityId,
         pubkey: &[u8],
     ) -> Result<Option<(String, Option<Vec<u8>>)>> {
-        user::get_agent_channel_policy(&self.pool, pubkey).await
+        user::get_agent_channel_policy(&self.pool, community_id, pubkey).await
     }
 
     /// Check whether `actor_pubkey` is the agent owner of `target_pubkey`.
-    pub async fn is_agent_owner(&self, target_pubkey: &[u8], actor_pubkey: &[u8]) -> Result<bool> {
-        user::is_agent_owner(&self.pool, target_pubkey, actor_pubkey).await
+    pub async fn is_agent_owner(
+        &self,
+        community_id: CommunityId,
+        target_pubkey: &[u8],
+        actor_pubkey: &[u8],
+    ) -> Result<bool> {
+        user::is_agent_owner(&self.pool, community_id, target_pubkey, actor_pubkey).await
     }
 
     /// Set the channel_add_policy for a user.
-    pub async fn set_channel_add_policy(&self, pubkey: &[u8], policy: &str) -> Result<()> {
-        user::set_channel_add_policy(&self.pool, pubkey, policy).await
+    pub async fn set_channel_add_policy(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+        policy: &str,
+    ) -> Result<()> {
+        user::set_channel_add_policy(&self.pool, community_id, pubkey, policy).await
     }
 
     /// Find an existing DM by its participant hash.
@@ -1088,6 +1250,7 @@ impl Db {
     /// Create a new workflow.
     pub async fn create_workflow(
         &self,
+        community_id: CommunityId,
         channel_id: Option<Uuid>,
         owner_pubkey: &[u8],
         name: &str,
@@ -1096,6 +1259,7 @@ impl Db {
     ) -> Result<Uuid> {
         workflow::create_workflow(
             &self.pool,
+            community_id,
             channel_id,
             owner_pubkey,
             name,
@@ -1131,6 +1295,51 @@ impl Db {
     /// List all active, enabled schedule-triggered workflows.
     pub async fn list_all_enabled_workflows(&self) -> Result<Vec<workflow::WorkflowRecord>> {
         workflow::list_all_enabled_workflows(&self.pool).await
+    }
+
+    /// Claim a scheduled workflow fire for an authoritative schedule instant.
+    ///
+    /// Returns `Some` only for the first pod to claim `(workflow_id,
+    /// scheduled_for)`; all other pods must skip creating a run. The claim SQL
+    /// resolves `community_id` from the workflow row; callers never supply it.
+    pub async fn claim_scheduled_workflow_fire(
+        &self,
+        workflow_id: Uuid,
+        scheduled_for: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<workflow::ScheduledWorkflowFireClaim>> {
+        workflow::claim_scheduled_workflow_fire(&self.pool, workflow_id, scheduled_for).await
+    }
+
+    /// Fetch the latest claimed schedule instant for interval trigger anchoring.
+    pub async fn latest_scheduled_workflow_fire(
+        &self,
+        workflow_id: Uuid,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        workflow::latest_scheduled_workflow_fire(&self.pool, workflow_id).await
+    }
+
+    /// Attach the workflow run id created from a won scheduled-fire claim.
+    pub async fn attach_scheduled_workflow_run(
+        &self,
+        workflow_id: Uuid,
+        scheduled_for: chrono::DateTime<chrono::Utc>,
+        workflow_run_id: Uuid,
+    ) -> Result<bool> {
+        workflow::attach_scheduled_workflow_run(
+            &self.pool,
+            workflow_id,
+            scheduled_for,
+            workflow_run_id,
+        )
+        .await
+    }
+
+    /// Delete old scheduled workflow fire claims before a retention cutoff.
+    pub async fn prune_scheduled_workflow_fires_before(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        workflow::prune_scheduled_workflow_fires_before(&self.pool, older_than).await
     }
 
     /// Update a workflow's name, definition, and hash.
@@ -1487,6 +1696,7 @@ impl Db {
     /// skip fan-out/dispatch when `was_inserted` is false.
     pub async fn replace_addressable_event(
         &self,
+        community_id: CommunityId,
         event: &nostr::Event,
         channel_id: Option<Uuid>,
     ) -> Result<(StoredEvent, bool)> {
@@ -1501,6 +1711,10 @@ impl Db {
         // Collisions cause extra serialization, not incorrect behavior.
         let lock_key = {
             let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+            for b in community_id.as_uuid().as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
             for b in kind_i32.to_le_bytes() {
                 h ^= b as u64;
                 h = h.wrapping_mul(0x100000001b3); // FNV prime
@@ -1531,11 +1745,12 @@ impl Db {
         // historical data where prior bugs may have left multiple live rows.
         let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = sqlx::query_as(
             "SELECT created_at, id FROM events \
-             WHERE kind = $1 AND pubkey = $2 \
-             AND channel_id IS NOT DISTINCT FROM $3 \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 \
+             AND channel_id IS NOT DISTINCT FROM $4 \
              AND deleted_at IS NULL \
              ORDER BY created_at DESC, id ASC LIMIT 1",
         )
+        .bind(community_id.as_uuid())
         .bind(kind_i32)
         .bind(pubkey_bytes.as_slice())
         .bind(channel_id)
@@ -1562,10 +1777,11 @@ impl Db {
         // Soft-delete the old event (if any). IS NOT DISTINCT FROM for NULL safety.
         sqlx::query(
             "UPDATE events SET deleted_at = NOW() \
-             WHERE kind = $1 AND pubkey = $2 \
-             AND channel_id IS NOT DISTINCT FROM $3 \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 \
+             AND channel_id IS NOT DISTINCT FROM $4 \
              AND deleted_at IS NULL",
         )
+        .bind(community_id.as_uuid())
         .bind(kind_i32)
         .bind(pubkey_bytes.as_slice())
         .bind(channel_id)
@@ -1579,10 +1795,11 @@ impl Db {
         let d_tag = crate::event::extract_d_tag(event);
 
         let insert_result = sqlx::query(
-            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+            "INSERT INTO events (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT DO NOTHING",
         )
+        .bind(community_id.as_uuid())
         .bind(event.id.as_bytes().as_slice())
         .bind(pubkey_bytes.as_slice())
         .bind(created_at)
@@ -1611,7 +1828,7 @@ impl Db {
 
         // Mentions are a denormalized index — safe outside the transaction.
         // insert_event() normally handles this, but we inlined the INSERT above.
-        if let Err(e) = crate::insert_mentions(&self.pool, event, channel_id).await {
+        if let Err(e) = crate::insert_mentions(&self.pool, community_id, event, channel_id).await {
             tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
         }
 
@@ -1640,6 +1857,7 @@ impl Db {
     /// this function instead, where the author's pubkey + d-tag is the natural key.
     pub async fn replace_parameterized_event(
         &self,
+        community_id: CommunityId,
         event: &nostr::Event,
         d_tag: &str,
         channel_id: Option<Uuid>,
@@ -1654,6 +1872,10 @@ impl Db {
         // Same algorithm as replace_addressable_event — deterministic across processes.
         let lock_key = {
             let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+            for b in community_id.as_uuid().as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
             for b in kind_i32.to_le_bytes() {
                 h ^= b as u64;
                 h = h.wrapping_mul(0x100000001b3);
@@ -1679,9 +1901,10 @@ impl Db {
         // Check for existing event with same (kind, pubkey, d_tag).
         let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = sqlx::query_as(
             "SELECT created_at, id FROM events \
-             WHERE kind = $1 AND pubkey = $2 AND d_tag = $3 AND deleted_at IS NULL \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 AND deleted_at IS NULL \
              ORDER BY created_at DESC, id ASC LIMIT 1",
         )
+        .bind(community_id.as_uuid())
         .bind(kind_i32)
         .bind(pubkey_bytes.as_slice())
         .bind(d_tag)
@@ -1705,8 +1928,9 @@ impl Db {
             // Soft-delete the older event(s).
             sqlx::query(
                 "UPDATE events SET deleted_at = NOW() \
-                 WHERE kind = $1 AND pubkey = $2 AND d_tag = $3 AND deleted_at IS NULL",
+                 WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 AND deleted_at IS NULL",
             )
+            .bind(community_id.as_uuid())
             .bind(kind_i32)
             .bind(pubkey_bytes.as_slice())
             .bind(d_tag)
@@ -1720,10 +1944,11 @@ impl Db {
         let received_at = chrono::Utc::now();
 
         let insert_result = sqlx::query(
-            "INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+            "INSERT INTO events (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT DO NOTHING",
         )
+        .bind(community_id.as_uuid())
         .bind(event.id.as_bytes().as_slice())
         .bind(pubkey_bytes.as_slice())
         .bind(created_at)
@@ -1750,7 +1975,7 @@ impl Db {
         tx.commit().await?;
 
         // Mentions are a denormalized index — safe outside the transaction.
-        if let Err(e) = crate::insert_mentions(&self.pool, event, channel_id).await {
+        if let Err(e) = crate::insert_mentions(&self.pool, community_id, event, channel_id).await {
             tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
         }
 
