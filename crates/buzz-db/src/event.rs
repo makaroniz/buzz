@@ -71,6 +71,36 @@ pub struct EventQuery {
     pub max_limit: Option<i64>,
 }
 
+impl EventQuery {
+    /// Construct an unconstrained query inside a server-resolved community.
+    ///
+    /// `community_id` has no safe default. This keeps call sites concise while
+    /// making tenant provenance explicit at construction.
+    #[must_use]
+    pub const fn for_community(community_id: CommunityId) -> Self {
+        Self {
+            community_id,
+            channel_id: None,
+            kinds: None,
+            pubkey: None,
+            since: None,
+            until: None,
+            limit: None,
+            offset: None,
+            p_tag_hex: None,
+            d_tag: None,
+            d_tags: None,
+            before_id: None,
+            global_only: false,
+            authors: None,
+            ids: None,
+            e_tags: None,
+            channel_ids: None,
+            max_limit: None,
+        }
+    }
+}
+
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
 /// anything beyond this is either a bug or abuse.
 pub const D_TAG_MAX_LEN: usize = 1024;

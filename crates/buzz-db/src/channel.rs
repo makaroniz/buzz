@@ -733,10 +733,12 @@ pub struct BotChannelEntry {
 }
 
 /// A channel archived by the ephemeral-channel reaper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReapedEphemeralChannel {
     /// Community that owns the archived channel.
     pub community_id: CommunityId,
+    /// Normalized host mapped to that community.
+    pub host: String,
     /// Archived channel UUID.
     pub channel_id: Uuid,
 }
@@ -1325,17 +1327,19 @@ pub async fn bump_ttl_deadline(
 
 /// Archive ephemeral channels whose TTL deadline has passed.
 ///
-/// Returns the `(community_id, channel_id)` list that was archived. Idempotent — the
+/// Returns the `(community_id, host, channel_id)` list that was archived. Idempotent — the
 /// `archived_at IS NULL` guard prevents double-archiving even if called
 /// concurrently from multiple relay pods.
 pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<ReapedEphemeralChannel>> {
     let rows = sqlx::query(
-        "UPDATE channels SET archived_at = NOW() \
-         WHERE ttl_seconds IS NOT NULL \
-           AND ttl_deadline < NOW() \
-           AND archived_at IS NULL \
-           AND deleted_at IS NULL \
-         RETURNING community_id, id",
+        "UPDATE channels AS ch SET archived_at = NOW() \
+         FROM communities AS c \
+         WHERE ch.community_id = c.id \
+           AND ch.ttl_seconds IS NOT NULL \
+           AND ch.ttl_deadline < NOW() \
+           AND ch.archived_at IS NULL \
+           AND ch.deleted_at IS NULL \
+         RETURNING ch.community_id, c.host, ch.id",
     )
     .fetch_all(pool)
     .await?;
@@ -1343,9 +1347,11 @@ pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<Reaped
     rows.into_iter()
         .map(|row| {
             let community_id: Uuid = row.try_get("community_id")?;
+            let host: String = row.try_get("host")?;
             let channel_id: Uuid = row.try_get("id")?;
             Ok(ReapedEphemeralChannel {
                 community_id: CommunityId::from_uuid(community_id),
+                host,
                 channel_id,
             })
         })
@@ -1637,6 +1643,57 @@ mod tests {
                 .iter()
                 .any(|row| row.community_id == community && row.channel_id == channel.id),
             "reaper should not immediately rearchive renewed channel"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn reap_expired_ephemeral_channels_returns_row_community_and_host() {
+        let pool = setup_pool().await;
+        let community_id = make_test_community(&pool).await;
+        let community = CommunityId::from_uuid(community_id);
+        let expected_host: String =
+            sqlx::query_scalar("SELECT host FROM communities WHERE id = $1")
+                .bind(community_id)
+                .fetch_one(&pool)
+                .await
+                .expect("load community host");
+        let owner_pk = random_pubkey();
+        ensure_user(&pool, community, &owner_pk)
+            .await
+            .expect("ensure owner");
+        let channel = create_test_channel(
+            &pool,
+            community_id,
+            "test-reaper-host-provenance",
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            &owner_pk,
+            Some(60),
+        )
+        .await
+        .expect("create ephemeral channel");
+
+        sqlx::query(
+            "UPDATE channels SET ttl_deadline = NOW() - interval '1 second' WHERE community_id = $1 AND id = $2",
+        )
+        .bind(community_id)
+        .bind(channel.id)
+        .execute(&pool)
+        .await
+        .expect("expire channel");
+
+        let reaped = reap_expired_ephemeral_channels(&pool)
+            .await
+            .expect("run reaper");
+        assert!(
+            reaped.iter().any(|row| {
+                row.community_id == community
+                    && row.host == expected_host
+                    && row.channel_id == channel.id
+            }),
+            "reaper should carry the archived row's community id and host"
         );
     }
 
