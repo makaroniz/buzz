@@ -79,13 +79,6 @@ const overrides = new Map([
   ["src-tauri/src/nostr_convert.rs", 1126],
   ["src/shared/api/relayClientSession.ts", 1022],
   ["src-tauri/src/migration.rs", 1449],
-  // persona-events rebase: boot-time event-sync wiring (run_boot_migrations
-  // syncs team-dir edits before all personas.json readers; run_event_sync
-  // signs the persona/team retention events post-identity) layered on top of
-  // main's growth. Load-bearing feature growth, queued to split with the list.
-  // Bumped 1034→1035 to match origin/main (ca50d832 grew this file by a line
-  // via the GNOME-notifications fix #1246 without bumping the override).
-  ["src-tauri/src/lib.rs", 1035],
   // onMarkRead + isUnread prop threading (mirrors the onMarkUnread prop
   // already here) for the single-toggle mark-read/unread menu item — a small
   // overage from load-bearing per-message plumbing, not generic debt growth.
