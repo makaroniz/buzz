@@ -6,6 +6,7 @@ import {
   duplicatePersonaDialogState,
   editPersonaDialogState,
   importPersonaDialogState,
+  saveAsPersonaTemplateDialogState,
 } from "./personaDialogState.ts";
 
 test("createPersonaDialogState returns a fresh empty draft", () => {
@@ -227,4 +228,108 @@ test("importPersonaDialogState preserves provider=anthropic", () => {
   });
 
   assert.equal(state.initialValues.provider, "anthropic");
+});
+
+// ── saveAsPersonaTemplateDialogState (promote an agent → persona template) ────
+
+/** Minimal ManagedAgent fixture; only the fields the builder reads matter. */
+function makeAgent(overrides = {}) {
+  return {
+    pubkey: "npub-agent",
+    name: "Scout",
+    personaId: null,
+    relayUrl: "wss://relay",
+    acpCommand: "",
+    agentCommand: "/usr/local/bin/goose-acp",
+    agentArgs: [],
+    mcpCommand: "",
+    turnTimeoutSeconds: 320,
+    idleTimeoutSeconds: null,
+    maxTurnDurationSeconds: null,
+    parallelism: 24,
+    systemPrompt: "Scout the codebase.",
+    model: "claude-sonnet",
+    mcpToolsets: null,
+    envVars: { ANTHROPIC_API_KEY: "sk-test" },
+    status: "stopped",
+    pid: null,
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: "2025-01-02T00:00:00Z",
+    lastStartedAt: null,
+    lastStoppedAt: null,
+    lastExitCode: null,
+    lastError: null,
+    ...overrides,
+  };
+}
+
+test("saveAsPersonaTemplateDialogState uses persona-template vocabulary", () => {
+  const state = saveAsPersonaTemplateDialogState(makeAgent(), []);
+
+  assert.equal(state.title, "Save as persona template");
+  assert.equal(state.submitLabel, "Save as persona template");
+  assert.equal(state.description, "Reuse this setup to create more agents.");
+});
+
+test("saveAsPersonaTemplateDialogState reverse-maps agentCommand to a runtime id", () => {
+  // commandsMatch compares basenames, so the absolute agentCommand path
+  // resolves to the catalog runtime whose command shares that basename.
+  const state = saveAsPersonaTemplateDialogState(makeAgent(), [
+    { id: "claude", label: "Claude", command: "claude-code-acp" },
+    { id: "goose", label: "Goose", command: "goose-acp" },
+  ]);
+
+  assert.equal(state.initialValues.runtime, "goose");
+});
+
+test("saveAsPersonaTemplateDialogState leaves runtime undefined when nothing matches", () => {
+  // Graceful fallback: an unknown command (or an empty/unloaded catalog)
+  // yields no runtime, and the dialog falls back to its default behavior.
+  const noMatch = saveAsPersonaTemplateDialogState(makeAgent(), [
+    { id: "claude", label: "Claude", command: "claude-code-acp" },
+  ]);
+  const empty = saveAsPersonaTemplateDialogState(makeAgent(), []);
+
+  assert.equal(noMatch.initialValues.runtime, undefined);
+  assert.equal(empty.initialValues.runtime, undefined);
+});
+
+test("saveAsPersonaTemplateDialogState ignores catalog entries with a null command", () => {
+  const state = saveAsPersonaTemplateDialogState(makeAgent(), [
+    { id: "not-installed", label: "Not Installed", command: null },
+    { id: "goose", label: "Goose", command: "goose-acp" },
+  ]);
+
+  assert.equal(state.initialValues.runtime, "goose");
+});
+
+test("saveAsPersonaTemplateDialogState carries name, prompt, model, and envVars", () => {
+  const state = saveAsPersonaTemplateDialogState(makeAgent(), []);
+
+  assert.equal(state.initialValues.displayName, "Scout");
+  assert.equal(state.initialValues.systemPrompt, "Scout the codebase.");
+  assert.equal(state.initialValues.model, "claude-sonnet");
+  assert.deepEqual(state.initialValues.envVars, {
+    ANTHROPIC_API_KEY: "sk-test",
+  });
+  // namePool is persona-only and starts empty for the user to fill.
+  assert.deepEqual(state.initialValues.namePool, []);
+});
+
+test("saveAsPersonaTemplateDialogState omits provider (no top-level field on ManagedAgent)", () => {
+  // A ManagedAgent has no top-level provider, so there is nothing lossless to
+  // carry — the builder must not invent one.
+  const state = saveAsPersonaTemplateDialogState(makeAgent(), []);
+
+  assert.equal("provider" in state.initialValues, false);
+});
+
+test("saveAsPersonaTemplateDialogState tolerates null systemPrompt and model", () => {
+  const state = saveAsPersonaTemplateDialogState(
+    makeAgent({ systemPrompt: null, model: null }),
+    [],
+  );
+
+  assert.equal(state.initialValues.systemPrompt, "");
+  assert.equal(state.initialValues.model, undefined);
 });

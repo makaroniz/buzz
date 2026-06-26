@@ -14,6 +14,8 @@ import {
 import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { EditAgentDialog } from "@/features/agents/ui/EditAgentDialog";
+import { PersonaDialog } from "@/features/agents/ui/PersonaDialog";
+import { useSaveAsPersonaTemplate } from "@/features/agents/ui/useSaveAsPersonaTemplate";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import {
@@ -242,6 +244,17 @@ export function UserProfilePanel({
     setEditAgentOpen(true);
   }, []);
 
+  const saveAsTemplate = useSaveAsPersonaTemplate();
+  const canSaveAsTemplate =
+    canEditAgent &&
+    managedAgent !== undefined &&
+    managedAgent.personaId === null;
+  const handleSaveAsTemplate = React.useCallback(() => {
+    if (managedAgent) {
+      saveAsTemplate.open(managedAgent);
+    }
+  }, [managedAgent, saveAsTemplate]);
+
   const handleOpenActivity = React.useCallback(() => {
     onClose();
     onOpenAgentSession?.(pubkey);
@@ -353,6 +366,8 @@ export function UserProfilePanel({
           handleEditAgent={handleEditAgent}
           handleMessage={handleMessage}
           handleOpenActivity={handleOpenActivity}
+          handleSaveAsTemplate={handleSaveAsTemplate}
+          canSaveAsTemplate={canSaveAsTemplate}
           isBot={isBot}
           isFollowing={isFollowing}
           isOwner={isOwner}
@@ -405,6 +420,10 @@ export function UserProfilePanel({
       />
     ) : null;
 
+  const saveAsTemplateDialog = saveAsTemplate.dialogState ? (
+    <PersonaDialog {...saveAsTemplate.dialogProps} />
+  ) : null;
+
   if (isSplitLayout) {
     return (
       <>
@@ -416,6 +435,7 @@ export function UserProfilePanel({
           {profileBody}
         </div>
         {editAgentDialog}
+        {saveAsTemplateDialog}
       </>
     );
   }
@@ -481,6 +501,7 @@ export function UserProfilePanel({
         {profileBody}
       </aside>
       {editAgentDialog}
+      {saveAsTemplateDialog}
     </>
   );
 }

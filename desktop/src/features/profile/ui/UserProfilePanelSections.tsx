@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Activity,
   ArrowUpRight,
+  BookmarkPlus,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -73,6 +74,8 @@ export type ProfileSummaryViewProps = {
   handleEditAgent: () => void;
   handleMessage: () => void;
   handleOpenActivity: () => void;
+  handleSaveAsTemplate: () => void;
+  canSaveAsTemplate: boolean;
   isBot: boolean;
   isFollowing: boolean;
   isOwner: boolean | undefined;
@@ -108,6 +111,8 @@ export function ProfileSummaryView({
   handleEditAgent,
   handleMessage,
   handleOpenActivity,
+  handleSaveAsTemplate,
+  canSaveAsTemplate,
   isBot,
   isFollowing,
   isOwner,
@@ -174,8 +179,10 @@ export function ProfileSummaryView({
       {!isSelf ? (
         <ProfilePrimaryActions
           canEditAgent={canEditAgent}
+          canSaveAsTemplate={canSaveAsTemplate}
           followMutation={followMutation}
           onEditAgent={handleEditAgent}
+          onSaveAsTemplate={handleSaveAsTemplate}
           isFollowing={isFollowing}
           onMessage={onOpenDm ? handleMessage : undefined}
           pubkey={pubkey}
@@ -427,17 +434,21 @@ function ProfileHeroDescription({ about }: { about: string }) {
 
 function ProfilePrimaryActions({
   canEditAgent,
+  canSaveAsTemplate,
   followMutation,
   isFollowing,
   onEditAgent,
+  onSaveAsTemplate,
   onMessage,
   pubkey,
   unfollowMutation,
 }: {
   canEditAgent: boolean;
+  canSaveAsTemplate: boolean;
   followMutation: ReturnType<typeof useFollowMutation>;
   isFollowing: boolean;
   onEditAgent: () => void;
+  onSaveAsTemplate: () => void;
   onMessage?: () => void;
   pubkey: string;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
@@ -479,6 +490,14 @@ function ProfilePrimaryActions({
           label="Edit"
           onClick={onEditAgent}
           testId="user-profile-edit-agent"
+        />
+      ) : null}
+      {canSaveAsTemplate ? (
+        <ProfileQuickAction
+          icon={BookmarkPlus}
+          label="Save as template"
+          onClick={onSaveAsTemplate}
+          testId="user-profile-save-as-template"
         />
       ) : null}
     </div>

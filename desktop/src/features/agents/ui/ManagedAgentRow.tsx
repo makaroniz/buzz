@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import {
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Clipboard,
@@ -39,6 +40,8 @@ import { EditAgentDialog } from "./EditAgentDialog";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ModelPicker } from "./ModelPicker";
+import { PersonaDialog } from "./PersonaDialog";
+import { useSaveAsPersonaTemplate } from "./useSaveAsPersonaTemplate";
 import { truncatePubkey } from "./agentUi";
 
 export function ManagedAgentRow({
@@ -423,6 +426,7 @@ function AgentActionsMenu({
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
 }) {
   const [editOpen, setEditOpen] = React.useState(false);
+  const saveAsTemplate = useSaveAsPersonaTemplate();
 
   return (
     <>
@@ -480,6 +484,13 @@ function AgentActionsMenu({
             <DropdownMenuItem onClick={() => setEditOpen(true)}>
               <Pencil className="h-4 w-4" />
               Edit
+            </DropdownMenuItem>
+          ) : null}
+
+          {agent.personaId === null ? (
+            <DropdownMenuItem onClick={() => saveAsTemplate.open(agent)}>
+              <BookmarkPlus className="h-4 w-4" />
+              Save as persona template
             </DropdownMenuItem>
           ) : null}
 
@@ -541,6 +552,10 @@ function AgentActionsMenu({
           onOpenChange={setEditOpen}
           open={editOpen}
         />
+      ) : null}
+
+      {saveAsTemplate.dialogState ? (
+        <PersonaDialog {...saveAsTemplate.dialogProps} />
       ) : null}
     </>
   );

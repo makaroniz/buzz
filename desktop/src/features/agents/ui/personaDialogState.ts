@@ -1,7 +1,10 @@
+import { commandsMatch } from "@/features/agents/agentReuse";
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
 import type {
+  AcpRuntimeCatalogEntry,
   AgentPersona,
   CreatePersonaInput,
+  ManagedAgent,
   UpdatePersonaInput,
 } from "@/shared/api/types";
 
@@ -52,6 +55,60 @@ export function duplicatePersonaDialogState(
       // them if they want a blank template.
       namePool: persona.namePool ?? [],
       envVars: persona.envVars ?? {},
+    },
+  };
+}
+
+/**
+ * Reverse-map a managed agent's resolved harness command back to an ACP
+ * runtime ID, so the persona dialog can pre-select the matching runtime.
+ * Returns `undefined` when no runtime matches (or none are loaded yet) — the
+ * dialog then falls back to its default-runtime behavior.
+ */
+function runtimeIdForAgentCommand(
+  agentCommand: string,
+  runtimes: readonly AcpRuntimeCatalogEntry[],
+): string | undefined {
+  const match = runtimes.find(
+    (runtime) =>
+      runtime.command !== null && commandsMatch(runtime.command, agentCommand),
+  );
+  return match?.id;
+}
+
+/**
+ * Dialog state for the opt-in "Save as persona template" action on an existing
+ * agent. Prefills the persona editor from the agent so the user reviews and
+ * confirms before a persona template is created — nothing is minted silently.
+ *
+ * Near-lossless promote: name, system prompt, model, and env vars copy
+ * straight across; the harness command reverse-maps to a runtime ID.
+ * `namePool` is persona-only and starts empty — the user can fill it in the
+ * same dialog (it's how a template bulk-adds bots later).
+ *
+ * Note: "persona template" is the UI name for what the backend calls a
+ * `persona` (kind:30175). This builder produces a backend `CreatePersonaInput`.
+ * `provider` is intentionally not carried: a `ManagedAgent` does not expose a
+ * top-level provider field (it lives in backend/provider config), so there is
+ * nothing lossless to copy here.
+ */
+export function saveAsPersonaTemplateDialogState(
+  agent: ManagedAgent,
+  runtimes: readonly AcpRuntimeCatalogEntry[],
+): PersonaDialogState {
+  return {
+    title: "Save as persona template",
+    description: "Reuse this setup to create more agents.",
+    submitLabel: "Save as persona template",
+    initialValues: {
+      displayName: agent.name,
+      avatarUrl: "",
+      systemPrompt: agent.systemPrompt ?? "",
+      runtime: runtimeIdForAgentCommand(agent.agentCommand, runtimes),
+      model: agent.model ?? undefined,
+      // namePool is persona-only; start empty so the user fills it here.
+      namePool: [],
+      envVars: agent.envVars ?? {},
     },
   };
 }

@@ -1,3 +1,23 @@
+/**
+ * UI copy for the persona library surfaces.
+ *
+ * ── Vocabulary boundary (UI ↔ backend) ──────────────────────────────────────
+ * The product-facing term is **"persona template"**: a reusable setup a user
+ * can save once and reuse to create more agents. The backend has no separate
+ * "template" concept — a persona template IS a **`persona`** (Nostr
+ * **kind:30175**). There is intentionally zero drift between the two:
+ *
+ *   UI string                backend entity / mutation
+ *   ───────────────────────  ────────────────────────────────────────────────
+ *   "persona template"   ⇄   `persona` (kind:30175)
+ *   "Save as persona     ⇄   `createPersonaMutation` / `CreatePersonaInput`
+ *    template"
+ *
+ * So every "...persona template" label here, in `CreateAgentDialog`'s opt-in
+ * toggle, and in the `useSaveAsPersonaTemplate` / `saveAsPersonaTemplateDialogState`
+ * save-as flow maps to the same backend `persona`. Keep new persona-template
+ * copy in this file and keep the mapping above current if the vocabulary moves.
+ */
 export const personaLibraryCopy = {
   title: "My agents",
   description:
