@@ -49,8 +49,20 @@ fn verify_bridge_auth(
             .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "invalid NIP-98 event JSON"))?;
         let event_id_bytes = event.id.to_bytes();
 
-        let pubkey = buzz_auth::verify_nip98_event(&event_json, url, method, body)
-            .map_err(|e| api_error(StatusCode::UNAUTHORIZED, &format!("NIP-98: {e}")))?;
+        let pubkey =
+            buzz_auth::verify_nip98_event(&event_json, url, method, body).map_err(|e| {
+                // Existence-oracle policy P1+P2 (audit/auth-error-payload-policy):
+                // do NOT stringify the AuthError chain — Internal variants can
+                // carry community-prefixed Redis keys, and a distinguishable
+                // Nip98Replay reply would be a presence oracle on community-
+                // scoped activity. Log detail, return category-only.
+                tracing::warn!(
+                    auth_error = %e,
+                    "NIP-98 verification failed at HTTP bridge",
+                );
+                let (status, body) = crate::auth_wire::auth_error_wire(&e).http_response();
+                (status, body)
+            })?;
 
         return Ok((pubkey, event_id_bytes));
     }

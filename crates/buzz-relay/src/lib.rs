@@ -6,6 +6,7 @@
 pub mod api;
 /// WebSocket audio relay for huddle voice channels.
 pub mod audio;
+pub mod auth_wire;
 /// Relay configuration from environment variables.
 pub mod config;
 /// WebSocket connection lifecycle and state.
