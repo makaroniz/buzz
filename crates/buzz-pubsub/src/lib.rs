@@ -25,6 +25,8 @@
 pub mod cache_invalidation;
 /// Error types for pub/sub operations.
 pub mod error;
+/// Redis-backed NIP-98 replay seen-set.
+pub mod nip98_replay;
 /// Online/offline presence tracking in Redis.
 pub mod presence;
 /// Redis PUBLISH for channel event fan-out.
