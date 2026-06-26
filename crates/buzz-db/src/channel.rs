@@ -9,6 +9,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::error::{DbError, Result};
+use buzz_core::CommunityId;
 
 // Re-export the canonical enum definitions from buzz-core.
 // These live in core (zero I/O deps) so the SDK can share them
@@ -84,6 +85,7 @@ pub struct MemberRecord {
 /// Creates a new channel, bootstraps the creator as owner, and returns the record.
 pub async fn create_channel(
     pool: &PgPool,
+    community_id: CommunityId,
     name: &str,
     channel_type: ChannelType,
     visibility: ChannelVisibility,
@@ -104,12 +106,13 @@ pub async fn create_channel(
 
     sqlx::query(
         r#"
-        INSERT INTO channels (id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
-        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6, $7,
-                CASE WHEN $7 IS NOT NULL THEN NOW() + ($7 || ' seconds')::interval ELSE NULL END)
+        INSERT INTO channels (id, community_id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+        VALUES ($1, $2, $3, $4::channel_type, $5::channel_visibility, $6, $7, $8,
+                CASE WHEN $8 IS NOT NULL THEN NOW() + ($8 || ' seconds')::interval ELSE NULL END)
         "#,
     )
     .bind(id)
+    .bind(community_id.as_uuid())
     .bind(name)
     .bind(channel_type.as_str())
     .bind(visibility.as_str())
@@ -121,14 +124,15 @@ pub async fn create_channel(
 
     sqlx::query(
         r#"
-        INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-        VALUES ($1, $2, 'owner', $3)
-        ON CONFLICT (channel_id, pubkey) DO UPDATE SET
+        INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
+        VALUES ($1, $2, $3, 'owner', $4)
+        ON CONFLICT (community_id, channel_id, pubkey) DO UPDATE SET
             removed_at = NULL,
             removed_by = NULL,
             role = EXCLUDED.role
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(id)
     .bind(created_by)
     .bind(created_by)
@@ -144,9 +148,10 @@ pub async fn create_channel(
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at,
                ttl_seconds, ttl_deadline
-        FROM channels WHERE id = $1
+        FROM channels WHERE community_id = $1 AND id = $2
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
@@ -163,6 +168,7 @@ pub async fn create_channel(
 #[allow(clippy::too_many_arguments)]
 pub async fn create_channel_with_id(
     pool: &PgPool,
+    community_id: CommunityId,
     channel_id: Uuid,
     name: &str,
     channel_type: ChannelType,
@@ -188,13 +194,14 @@ pub async fn create_channel_with_id(
 
     let rows_affected = sqlx::query(
         r#"
-        INSERT INTO channels (id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
-        VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6, $7,
-                CASE WHEN $7 IS NOT NULL THEN NOW() + ($7 || ' seconds')::interval ELSE NULL END)
-        ON CONFLICT (id) DO NOTHING
+        INSERT INTO channels (id, community_id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+        VALUES ($1, $2, $3, $4::channel_type, $5::channel_visibility, $6, $7, $8,
+                CASE WHEN $8 IS NOT NULL THEN NOW() + ($8 || ' seconds')::interval ELSE NULL END)
+        ON CONFLICT (community_id, id) DO NOTHING
         "#,
     )
     .bind(channel_id)
+    .bind(community_id.as_uuid())
     .bind(name)
     .bind(channel_type.as_str())
     .bind(visibility.as_str())
@@ -211,14 +218,15 @@ pub async fn create_channel_with_id(
         // Bootstrap the creator as owner.
         sqlx::query(
             r#"
-            INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-            VALUES ($1, $2, 'owner', $3)
-            ON CONFLICT (channel_id, pubkey) DO UPDATE SET
+            INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
+            VALUES ($1, $2, $3, 'owner', $4)
+            ON CONFLICT (community_id, channel_id, pubkey) DO UPDATE SET
                 removed_at = NULL,
                 removed_by = NULL,
                 role = EXCLUDED.role
             "#,
         )
+        .bind(community_id.as_uuid())
         .bind(channel_id)
         .bind(created_by)
         .bind(created_by)
@@ -235,9 +243,10 @@ pub async fn create_channel_with_id(
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at,
                ttl_seconds, ttl_deadline
-        FROM channels WHERE id = $1
+        FROM channels WHERE community_id = $1 AND id = $2
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(channel_id)
     .fetch_one(&mut *tx)
     .await?;
@@ -305,6 +314,7 @@ pub async fn set_canvas(pool: &PgPool, channel_id: Uuid, canvas: Option<&str>) -
 /// races (e.g. the inviter being removed between the role check and the INSERT).
 pub async fn add_member(
     pool: &PgPool,
+    community_id: CommunityId,
     channel_id: Uuid,
     pubkey: &[u8],
     role: MemberRole,
@@ -330,7 +340,7 @@ pub async fn add_member(
         let is_creator_bootstrap = inviter == pubkey && inviter == channel.created_by.as_slice();
 
         if !is_creator_bootstrap {
-            let inviter_role_str = get_active_role_tx(&mut tx, channel_id, inviter)
+            let inviter_role_str = get_active_role_tx(&mut tx, community_id, channel_id, inviter)
                 .await?
                 .ok_or_else(|| {
                     DbError::AccessDenied("inviter is not an active member".to_string())
@@ -354,7 +364,7 @@ pub async fn add_member(
         // elevated roles. Self-join always gets Member.
         if role.is_elevated() {
             let granter_role = match invited_by {
-                Some(inv) => get_active_role_tx(&mut tx, channel_id, inv).await?,
+                Some(inv) => get_active_role_tx(&mut tx, community_id, channel_id, inv).await?,
                 None => None,
             };
             match granter_role.as_deref() {
@@ -372,14 +382,15 @@ pub async fn add_member(
 
     sqlx::query(
         r#"
-        INSERT INTO channel_members (channel_id, pubkey, role, invited_by)
-        VALUES ($1, $2, $3::member_role, $4)
-        ON CONFLICT (channel_id, pubkey) DO UPDATE SET
+        INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
+        VALUES ($1, $2, $3, $4::member_role, $5)
+        ON CONFLICT (community_id, channel_id, pubkey) DO UPDATE SET
             removed_at = NULL,
             removed_by = NULL,
             role = EXCLUDED.role
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(channel_id)
     .bind(pubkey)
     .bind(effective_role.as_str())
@@ -390,9 +401,10 @@ pub async fn add_member(
     let row = sqlx::query(
         r#"
         SELECT channel_id, pubkey, role::text AS role, joined_at, invited_by, removed_at
-        FROM channel_members WHERE channel_id = $1 AND pubkey = $2
+        FROM channel_members WHERE community_id = $1 AND channel_id = $2 AND pubkey = $3
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(channel_id)
     .bind(pubkey)
     .fetch_one(&mut *tx)
@@ -415,6 +427,7 @@ pub async fn add_member(
 /// because `agent_owner_pubkey` is immutable (set once at token mint).
 pub async fn remove_member(
     pool: &PgPool,
+    community_id: CommunityId,
     channel_id: Uuid,
     pubkey: &[u8],
     actor_pubkey: &[u8],
@@ -423,7 +436,7 @@ pub async fn remove_member(
 
     let is_self_remove = pubkey == actor_pubkey;
     if !is_self_remove {
-        let actor_role_str = get_active_role_tx(&mut tx, channel_id, actor_pubkey)
+        let actor_role_str = get_active_role_tx(&mut tx, community_id, channel_id, actor_pubkey)
             .await?
             .ok_or_else(|| DbError::AccessDenied("actor is not an active member".to_string()))?;
         let actor_role: MemberRole = actor_role_str.parse().map_err(|_| {
@@ -432,7 +445,7 @@ pub async fn remove_member(
         // Safe to query outside the transaction: agent_owner_pubkey is immutable
         // (set once at token mint, first-mint-wins).
         if !actor_role.is_elevated()
-            && !crate::user::is_agent_owner(pool, pubkey, actor_pubkey).await?
+            && !crate::user::is_agent_owner(pool, community_id, pubkey, actor_pubkey).await?
         {
             return Err(DbError::AccessDenied(
                 "only owners/admins or the agent's owner may remove other members".to_string(),
@@ -443,12 +456,13 @@ pub async fn remove_member(
     // Defense-in-depth: prevent removing the last owner regardless of caller.
     // Callers (REST handlers, NIP-29 handlers) also check this, but the DB
     // layer enforces it as the final safety net.
-    let target_role = get_active_role_tx(&mut tx, channel_id, pubkey).await?;
+    let target_role = get_active_role_tx(&mut tx, community_id, channel_id, pubkey).await?;
     if target_role.as_deref() == Some("owner") {
         let row = sqlx::query(
             "SELECT COUNT(*) as cnt FROM channel_members \
-             WHERE channel_id = $1 AND role = 'owner' AND removed_at IS NULL",
+             WHERE community_id = $1 AND channel_id = $2 AND role = 'owner' AND removed_at IS NULL",
         )
+        .bind(community_id.as_uuid())
         .bind(channel_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -464,10 +478,11 @@ pub async fn remove_member(
         r#"
         UPDATE channel_members
         SET removed_at = NOW(), removed_by = $1
-        WHERE channel_id = $2 AND pubkey = $3 AND removed_at IS NULL
+        WHERE community_id = $2 AND channel_id = $3 AND pubkey = $4 AND removed_at IS NULL
         "#,
     )
     .bind(actor_pubkey)
+    .bind(community_id.as_uuid())
     .bind(channel_id)
     .bind(pubkey)
     .execute(&mut *tx)
@@ -619,13 +634,15 @@ pub async fn list_channels(pool: &PgPool, visibility: Option<&str>) -> Result<Ve
 /// Transaction-aware variant of [`get_active_role_tx`].
 async fn get_active_role_tx(
     tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
     channel_id: Uuid,
     pubkey: &[u8],
 ) -> Result<Option<String>> {
     let row = sqlx::query(
         "SELECT role::text AS role FROM channel_members \
-         WHERE channel_id = $1 AND pubkey = $2 AND removed_at IS NULL",
+         WHERE community_id = $1 AND channel_id = $2 AND pubkey = $3 AND removed_at IS NULL",
     )
+    .bind(community_id.as_uuid())
     .bind(channel_id)
     .bind(pubkey)
     .fetch_optional(&mut **tx)
@@ -1235,28 +1252,97 @@ mod tests {
         Keys::generate().public_key().to_bytes().to_vec()
     }
 
+    async fn make_test_community(pool: &PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        let host = format!("channel-test-{}.example", id.simple());
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(host)
+            .execute(pool)
+            .await
+            .expect("insert test community");
+        id
+    }
+
+    async fn create_test_channel(
+        pool: &PgPool,
+        community_id: Uuid,
+        name: &str,
+        channel_type: ChannelType,
+        visibility: ChannelVisibility,
+        description: Option<&str>,
+        created_by: &[u8],
+        ttl_seconds: Option<i32>,
+    ) -> Result<ChannelRecord> {
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO channels
+                (id, community_id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+            VALUES
+                ($1, $2, $3, $4::channel_type, $5::channel_visibility, $6, $7, $8,
+                 CASE WHEN $8 IS NOT NULL THEN NOW() + ($8 || ' seconds')::interval ELSE NULL END)
+            "#,
+        )
+        .bind(id)
+        .bind(community_id)
+        .bind(name)
+        .bind(channel_type.as_str())
+        .bind(visibility.as_str())
+        .bind(description)
+        .bind(created_by)
+        .bind(ttl_seconds)
+        .execute(pool)
+        .await
+        .expect("insert test channel");
+
+        sqlx::query(
+            r#"
+            INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
+            VALUES ($1, $2, $3, 'owner', $4)
+            "#,
+        )
+        .bind(community_id)
+        .bind(id)
+        .bind(created_by)
+        .bind(created_by)
+        .execute(pool)
+        .await
+        .expect("insert owner membership");
+
+        get_channel(pool, id).await
+    }
+
     /// Agent owner (non-admin) can remove their own bot from a channel.
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn test_agent_owner_can_remove_bot() {
         let pool = setup_pool().await;
+        let community_id = make_test_community(&pool).await;
+        let community = CommunityId::from_uuid(community_id);
         let owner_pk = random_pubkey();
         let agent_pk = random_pubkey();
 
         // Create users and set agent ownership
-        ensure_user(&pool, &owner_pk).await.expect("ensure owner");
-        ensure_user(&pool, &agent_pk).await.expect("ensure agent");
-        set_agent_owner(&pool, &agent_pk, &owner_pk)
+        ensure_user(&pool, community, &owner_pk)
+            .await
+            .expect("ensure owner");
+        ensure_user(&pool, community, &agent_pk)
+            .await
+            .expect("ensure agent");
+        set_agent_owner(&pool, community, &agent_pk, &owner_pk)
             .await
             .expect("set agent owner");
 
         // Create a channel owned by someone else entirely
         let channel_owner_pk = random_pubkey();
-        ensure_user(&pool, &channel_owner_pk)
+        ensure_user(&pool, community, &channel_owner_pk)
             .await
             .expect("ensure channel owner");
-        let channel = create_channel(
+        let channel = create_test_channel(
             &pool,
+            community_id,
             "test-bot-remove",
             ChannelType::Stream,
             ChannelVisibility::Open,
@@ -1268,15 +1354,29 @@ mod tests {
         .expect("create channel");
 
         // Add owner and agent as regular members
-        add_member(&pool, channel.id, &owner_pk, MemberRole::Member, None)
-            .await
-            .expect("add owner as member");
-        add_member(&pool, channel.id, &agent_pk, MemberRole::Member, None)
-            .await
-            .expect("add agent as member");
+        add_member(
+            &pool,
+            community,
+            channel.id,
+            &owner_pk,
+            MemberRole::Member,
+            None,
+        )
+        .await
+        .expect("add owner as member");
+        add_member(
+            &pool,
+            community,
+            channel.id,
+            &agent_pk,
+            MemberRole::Member,
+            None,
+        )
+        .await
+        .expect("add agent as member");
 
         // Owner should be able to remove their agent
-        remove_member(&pool, channel.id, &agent_pk, &owner_pk)
+        remove_member(&pool, community, channel.id, &agent_pk, &owner_pk)
             .await
             .expect("agent owner should be able to remove their bot");
 
@@ -1295,11 +1395,16 @@ mod tests {
     #[ignore = "requires Postgres"]
     async fn test_unarchive_expired_ephemeral_channel_renews_ttl_deadline() {
         let pool = setup_pool().await;
+        let community_id = make_test_community(&pool).await;
+        let community = CommunityId::from_uuid(community_id);
         let owner_pk = random_pubkey();
-        ensure_user(&pool, &owner_pk).await.expect("ensure owner");
+        ensure_user(&pool, community, &owner_pk)
+            .await
+            .expect("ensure owner");
 
-        let channel = create_channel(
+        let channel = create_test_channel(
             &pool,
+            community_id,
             "test-unarchive-renews-ttl",
             ChannelType::Stream,
             ChannelVisibility::Open,
@@ -1311,8 +1416,9 @@ mod tests {
         .expect("create ephemeral channel");
 
         sqlx::query(
-            "UPDATE channels SET archived_at = NOW(), ttl_deadline = NOW() - interval '1 second' WHERE id = $1",
+            "UPDATE channels SET archived_at = NOW(), ttl_deadline = NOW() - interval '1 second' WHERE community_id = $1 AND id = $2",
         )
+        .bind(community_id)
         .bind(channel.id)
         .execute(&pool)
         .await
@@ -1348,25 +1454,34 @@ mod tests {
     #[ignore = "requires Postgres"]
     async fn test_random_user_cannot_remove_bot() {
         let pool = setup_pool().await;
+        let community_id = make_test_community(&pool).await;
+        let community = CommunityId::from_uuid(community_id);
         let owner_pk = random_pubkey();
         let agent_pk = random_pubkey();
         let random_pk = random_pubkey();
 
         // Create users and set agent ownership
-        ensure_user(&pool, &owner_pk).await.expect("ensure owner");
-        ensure_user(&pool, &agent_pk).await.expect("ensure agent");
-        ensure_user(&pool, &random_pk).await.expect("ensure random");
-        set_agent_owner(&pool, &agent_pk, &owner_pk)
+        ensure_user(&pool, community, &owner_pk)
+            .await
+            .expect("ensure owner");
+        ensure_user(&pool, community, &agent_pk)
+            .await
+            .expect("ensure agent");
+        ensure_user(&pool, community, &random_pk)
+            .await
+            .expect("ensure random");
+        set_agent_owner(&pool, community, &agent_pk, &owner_pk)
             .await
             .expect("set agent owner");
 
         // Create a channel
         let channel_owner_pk = random_pubkey();
-        ensure_user(&pool, &channel_owner_pk)
+        ensure_user(&pool, community, &channel_owner_pk)
             .await
             .expect("ensure channel owner");
-        let channel = create_channel(
+        let channel = create_test_channel(
             &pool,
+            community_id,
             "test-bot-no-remove",
             ChannelType::Stream,
             ChannelVisibility::Open,
@@ -1378,15 +1493,29 @@ mod tests {
         .expect("create channel");
 
         // Add random user and agent as regular members
-        add_member(&pool, channel.id, &random_pk, MemberRole::Member, None)
-            .await
-            .expect("add random as member");
-        add_member(&pool, channel.id, &agent_pk, MemberRole::Member, None)
-            .await
-            .expect("add agent as member");
+        add_member(
+            &pool,
+            community,
+            channel.id,
+            &random_pk,
+            MemberRole::Member,
+            None,
+        )
+        .await
+        .expect("add random as member");
+        add_member(
+            &pool,
+            community,
+            channel.id,
+            &agent_pk,
+            MemberRole::Member,
+            None,
+        )
+        .await
+        .expect("add agent as member");
 
         // Random user should NOT be able to remove the agent
-        let result = remove_member(&pool, channel.id, &agent_pk, &random_pk).await;
+        let result = remove_member(&pool, community, channel.id, &agent_pk, &random_pk).await;
         assert!(
             result.is_err(),
             "random user should not be able to remove someone else's bot"

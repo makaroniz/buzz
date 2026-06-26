@@ -659,7 +659,7 @@ pub async fn get_thread_metadata_by_event(
 mod tests {
     use super::*;
     use crate::{
-        channel::{create_channel, ChannelType, ChannelVisibility},
+        channel::{ChannelType, ChannelVisibility},
         event::{insert_event_with_thread_metadata, ThreadMetadataParams},
     };
     use nostr::{EventBuilder, Keys, Kind};
@@ -687,12 +687,76 @@ mod tests {
             .expect("event timestamp is valid")
     }
 
+    async fn make_test_community(pool: &PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        let host = format!("thread-test-{}.example", id.simple());
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(host)
+            .execute(pool)
+            .await
+            .expect("insert test community");
+        id
+    }
+
+    async fn create_test_channel(
+        pool: &PgPool,
+        name: &str,
+        channel_type: ChannelType,
+        visibility: ChannelVisibility,
+        description: Option<&str>,
+        created_by: &[u8],
+        ttl_seconds: Option<i32>,
+    ) -> crate::error::Result<(crate::channel::ChannelRecord, buzz_core::CommunityId)> {
+        let id = Uuid::new_v4();
+        let community_id = make_test_community(pool).await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO channels
+                (id, community_id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+            VALUES
+                ($1, $2, $3, $4::channel_type, $5::channel_visibility, $6, $7, $8,
+                 CASE WHEN $8 IS NOT NULL THEN NOW() + ($8 || ' seconds')::interval ELSE NULL END)
+            "#,
+        )
+        .bind(id)
+        .bind(community_id)
+        .bind(name)
+        .bind(channel_type.as_str())
+        .bind(visibility.as_str())
+        .bind(description)
+        .bind(created_by)
+        .bind(ttl_seconds)
+        .execute(pool)
+        .await
+        .expect("insert test channel");
+
+        sqlx::query(
+            r#"
+            INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
+            VALUES ($1, $2, $3, 'owner', $4)
+            "#,
+        )
+        .bind(community_id)
+        .bind(id)
+        .bind(created_by)
+        .bind(created_by)
+        .execute(pool)
+        .await
+        .expect("insert owner membership");
+
+        crate::channel::get_channel(pool, id)
+            .await
+            .map(|channel| (channel, buzz_core::CommunityId::from_uuid(community_id)))
+    }
+
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn get_thread_replies_reconstructs_stored_events() {
         let pool = setup_pool().await;
         let author = Keys::generate();
-        let channel = create_channel(
+        let (channel, community) = create_test_channel(
             &pool,
             &format!("thread-replies-{}", Uuid::new_v4()),
             ChannelType::Stream,
@@ -706,7 +770,7 @@ mod tests {
 
         let root = make_stream_event(&author, "root");
         let root_created_at = event_created_at(&root);
-        insert_event_with_thread_metadata(&pool, &root, Some(channel.id), None)
+        insert_event_with_thread_metadata(&pool, community, &root, Some(channel.id), None)
             .await
             .expect("insert root event");
 
@@ -715,6 +779,7 @@ mod tests {
         let reply_id = reply.id.to_hex();
         insert_event_with_thread_metadata(
             &pool,
+            community,
             &reply,
             Some(channel.id),
             Some(ThreadMetadataParams {
@@ -752,7 +817,7 @@ mod tests {
     async fn get_thread_replies_skips_unreconstructable_row() {
         let pool = setup_pool().await;
         let author = Keys::generate();
-        let channel = create_channel(
+        let (channel, community) = create_test_channel(
             &pool,
             &format!("thread-replies-corrupt-{}", Uuid::new_v4()),
             ChannelType::Stream,
@@ -766,7 +831,7 @@ mod tests {
 
         let root = make_stream_event(&author, "root");
         let root_created_at = event_created_at(&root);
-        insert_event_with_thread_metadata(&pool, &root, Some(channel.id), None)
+        insert_event_with_thread_metadata(&pool, community, &root, Some(channel.id), None)
             .await
             .expect("insert root event");
 
@@ -776,6 +841,7 @@ mod tests {
         let good_created_at = event_created_at(&good);
         insert_event_with_thread_metadata(
             &pool,
+            community,
             &good,
             Some(channel.id),
             Some(ThreadMetadataParams {
@@ -797,6 +863,7 @@ mod tests {
         let bad_created_at = event_created_at(&bad);
         insert_event_with_thread_metadata(
             &pool,
+            community,
             &bad,
             Some(channel.id),
             Some(ThreadMetadataParams {

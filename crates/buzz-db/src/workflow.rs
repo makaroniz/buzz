@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use buzz_core::CommunityId;
+
 use crate::error::{DbError, Result};
 
 // -- Token hashing ------------------------------------------------------------
@@ -163,6 +165,8 @@ impl FromStr for ApprovalStatus {
 pub struct WorkflowRecord {
     /// Unique workflow identifier.
     pub id: Uuid,
+    /// Server-resolved community that owns this workflow.
+    pub community_id: CommunityId,
     /// Human-readable workflow name.
     pub name: String,
     /// Compressed public key bytes of the workflow owner.
@@ -211,6 +215,23 @@ pub struct WorkflowRunRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// A winning scheduled workflow fire claim.
+///
+/// The primary identity is `(workflow_id, scheduled_for)`. `community_id` is
+/// resolved from the workflow row inside the claim SQL and returned for scoped
+/// audit/logging; callers never supply it as a claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledWorkflowFireClaim {
+    /// Community that owns this scheduled fire.
+    pub community_id: CommunityId,
+    /// Workflow definition that should run.
+    pub workflow_id: Uuid,
+    /// Authoritative schedule instant this claim represents.
+    pub scheduled_for: DateTime<Utc>,
+    /// Database timestamp for when this pod won the claim.
+    pub claimed_at: DateTime<Utc>,
+}
+
 /// A pending or resolved approval gate for a workflow step.
 #[derive(Debug, Clone)]
 pub struct ApprovalRecord {
@@ -244,6 +265,7 @@ pub struct ApprovalRecord {
 /// New workflows start as `active` and `enabled = TRUE`.
 pub async fn create_workflow(
     pool: &PgPool,
+    community_id: CommunityId,
     channel_id: Option<Uuid>,
     owner_pubkey: &[u8],
     name: &str,
@@ -255,11 +277,12 @@ pub async fn create_workflow(
     sqlx::query(
         r#"
         INSERT INTO workflows
-            (id, name, owner_pubkey, channel_id, definition, definition_hash, status, enabled)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'active', TRUE)
+            (id, community_id, name, owner_pubkey, channel_id, definition, definition_hash, status, enabled)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'active', TRUE)
         "#,
     )
     .bind(id)
+    .bind(community_id.as_uuid())
     .bind(name)
     .bind(owner_pubkey)
     .bind(channel_id)
@@ -275,7 +298,7 @@ pub async fn create_workflow(
 pub async fn get_workflow(pool: &PgPool, id: Uuid) -> Result<WorkflowRecord> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+        SELECT id, community_id, name, owner_pubkey, channel_id, definition, definition_hash,
                status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE id = $1
@@ -304,7 +327,7 @@ pub async fn list_channel_workflows(
 
     let rows = sqlx::query(
         r#"
-        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+        SELECT id, community_id, name, owner_pubkey, channel_id, definition, definition_hash,
                status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE channel_id = $1
@@ -333,7 +356,7 @@ pub async fn list_enabled_channel_workflows(
 ) -> Result<Vec<WorkflowRecord>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+        SELECT id, community_id, name, owner_pubkey, channel_id, definition, definition_hash,
                status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE channel_id = $1
@@ -359,7 +382,7 @@ pub async fn list_enabled_channel_workflows(
 pub async fn list_all_enabled_workflows(pool: &PgPool) -> Result<Vec<WorkflowRecord>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+        SELECT id, community_id, name, owner_pubkey, channel_id, definition, definition_hash,
                status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE status = 'active'
@@ -374,6 +397,125 @@ pub async fn list_all_enabled_workflows(pool: &PgPool) -> Result<Vec<WorkflowRec
     .await?;
 
     rows.into_iter().map(row_to_workflow_record).collect()
+}
+
+/// Claim a scheduled workflow fire for an authoritative schedule instant.
+///
+/// Returns `Some` only for the first pod that claims `(workflow_id,
+/// scheduled_for)`. All other pods receive `None` and must skip creating a
+/// workflow run. The `scheduled_for` value must come from an external
+/// schedule anchor (cron expression) or DB-authoritative interval anchor; a
+/// per-pod in-memory timestamp is not safe because different pods can compute
+/// different claim keys.
+pub async fn claim_scheduled_workflow_fire(
+    pool: &PgPool,
+    workflow_id: Uuid,
+    scheduled_for: DateTime<Utc>,
+) -> Result<Option<ScheduledWorkflowFireClaim>> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO scheduled_workflow_fires (community_id, workflow_id, scheduled_for)
+        SELECT w.community_id, w.id, $2
+        FROM workflows w
+        WHERE w.id = $1
+        ON CONFLICT (community_id, workflow_id, scheduled_for) DO NOTHING
+        RETURNING community_id, workflow_id, scheduled_for, claimed_at
+        "#,
+    )
+    .bind(workflow_id)
+    .bind(scheduled_for)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|row| {
+        let community_id: Uuid = row.try_get("community_id")?;
+        Ok(ScheduledWorkflowFireClaim {
+            community_id: CommunityId::from_uuid(community_id),
+            workflow_id: row.try_get("workflow_id")?,
+            scheduled_for: row.try_get("scheduled_for")?,
+            claimed_at: row.try_get("claimed_at")?,
+        })
+    })
+    .transpose()
+}
+
+/// Fetch the greatest claimed schedule instant for a workflow.
+///
+/// Interval schedulers use this as their DB-authoritative `last_fired` anchor.
+/// It makes all pods compute the same next interval instant after a successful
+/// claim, and preserves the interval clock across pod restarts. This intentionally
+/// reads from `scheduled_workflow_fires`, not `workflow_runs`, because the claim
+/// row is the source of truth for schedule deduplication.
+pub async fn latest_scheduled_workflow_fire(
+    pool: &PgPool,
+    workflow_id: Uuid,
+) -> Result<Option<DateTime<Utc>>> {
+    let row = sqlx::query(
+        r#"
+        SELECT MAX(scheduled_for) AS scheduled_for
+        FROM scheduled_workflow_fires
+        WHERE workflow_id = $1
+        "#,
+    )
+    .bind(workflow_id)
+    .fetch_one(pool)
+    .await?;
+
+    row.try_get("scheduled_for").map_err(Into::into)
+}
+
+/// Link a won scheduled-fire claim to the workflow run it created.
+///
+/// This is for ops/audit forensics only; the claim row remains the dedupe
+/// boundary. If run creation succeeds, callers should attach the run id before
+/// spawning execution. If run creation fails, leaving `workflow_run_id` NULL is
+/// intentional: the schedule instant was claimed and must not duplicate later.
+pub async fn attach_scheduled_workflow_run(
+    pool: &PgPool,
+    workflow_id: Uuid,
+    scheduled_for: DateTime<Utc>,
+    workflow_run_id: Uuid,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE scheduled_workflow_fires
+        SET workflow_run_id = $3
+        WHERE workflow_id = $1
+          AND scheduled_for = $2
+          AND workflow_run_id IS NULL
+        "#,
+    )
+    .bind(workflow_id)
+    .bind(scheduled_for)
+    .bind(workflow_run_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+/// Delete old scheduled workflow fire claims for retention.
+///
+/// Schedule claim rows are correctness metadata, but they grow with every fire.
+/// The relay/ops janitor should retain enough history for audits and interval
+/// anchoring: the cutoff must be older than the largest interval schedule the
+/// deployment supports, or interval workflows can lose their DB-authoritative
+/// anchor after pruning.
+pub async fn prune_scheduled_workflow_fires_before(
+    pool: &PgPool,
+    older_than: DateTime<Utc>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM scheduled_workflow_fires
+        WHERE claimed_at < $1
+        "#,
+    )
+    .bind(older_than)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
 }
 
 /// Update a workflow's name, definition, and definition_hash.
@@ -765,8 +907,11 @@ fn row_to_workflow_record(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> 
 
     let enabled: bool = row.try_get("enabled")?;
 
+    let community_id: Uuid = row.try_get("community_id")?;
+
     Ok(WorkflowRecord {
         id,
+        community_id: CommunityId::from_uuid(community_id),
         name: row.try_get("name")?,
         owner_pubkey: row.try_get("owner_pubkey")?,
         channel_id,
@@ -831,7 +976,7 @@ pub async fn find_by_owner_and_name(
 ) -> Result<Option<WorkflowRecord>> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+        SELECT id, community_id, name, owner_pubkey, channel_id, definition, definition_hash,
                status::text AS status, enabled, created_at, updated_at
         FROM workflows
         WHERE owner_pubkey = $1 AND name = $2
@@ -955,8 +1100,11 @@ mod tests {
             "steps": [{ "id": "s1", "action": "send_message", "text": "hi" }]
         });
 
+        let community_id = CommunityId::from_uuid(Uuid::new_v4());
+
         let record = WorkflowRecord {
             id,
+            community_id,
             name: "My Workflow".to_owned(),
             owner_pubkey: vec![0xab; 32],
             channel_id: Some(channel_id),
@@ -969,6 +1117,7 @@ mod tests {
         };
 
         assert_eq!(record.id, id);
+        assert_eq!(record.community_id, community_id);
         assert_eq!(record.name, "My Workflow");
         assert_eq!(record.owner_pubkey, vec![0xab; 32]);
         assert_eq!(record.channel_id, Some(channel_id));
@@ -985,6 +1134,7 @@ mod tests {
 
         let record = WorkflowRecord {
             id,
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
             name: "Global Workflow".to_owned(),
             owner_pubkey: vec![0x00; 32],
             channel_id: None,
@@ -1006,6 +1156,7 @@ mod tests {
 
         let record = WorkflowRecord {
             id,
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
             name: "Original".to_owned(),
             owner_pubkey: vec![0x01; 32],
             channel_id: None,
@@ -1034,6 +1185,7 @@ mod tests {
         ] {
             let record = WorkflowRecord {
                 id: Uuid::new_v4(),
+                community_id: CommunityId::from_uuid(Uuid::new_v4()),
                 name: "Test".to_owned(),
                 owner_pubkey: vec![],
                 channel_id: None,
@@ -1053,6 +1205,7 @@ mod tests {
         let now = Utc::now();
         let record = WorkflowRecord {
             id: Uuid::new_v4(),
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
             name: "Paused".to_owned(),
             owner_pubkey: vec![],
             channel_id: None,
@@ -1301,5 +1454,252 @@ mod tests {
 
         assert_eq!(record.status, ApprovalStatus::Pending);
         assert_eq!(cloned.status, ApprovalStatus::Granted);
+    }
+
+    // -- F1 / S1 attack surface for scheduled workflow claims ------------------
+    //
+    // These tests pin the locked spec from Eva [13] / Mari [12]:
+    //
+    //   1. `workflows.community_id` is row-owned, NOT NULL, immutable.
+    //   2. Claim resolves `community_id` server-side via `workflow_id`.
+    //   3. Claim uniqueness is `(workflow_id, scheduled_for)` — `workflow_id`
+    //      is globally unique, so adding `community_id` to the key weakens it.
+    //   4. `latest_scheduled_workflow_fire` drops caller-supplied community.
+    //
+    // Until that lands, `claim_for_workflow_in_other_community_no_ops` is the
+    // S1 regression lock: today the schema permits a caller in community A to
+    // claim a workflow owned by community B and have `claimed.community_id`
+    // come back as A. That is a cross-tenant write surface (Theorem S1,
+    // `docs/multi-tenant-relay.md:248`: "the claimed community never appears
+    // in this function — only the resolved one").
+    //
+    // The other two tests are characterization guards: same-window race must
+    // yield exactly one claim winner, and the retention primitive's docstring
+    // caveat (pruning below the largest interval breaks `latest_*`) is
+    // load-bearing for the §5c deployment-config rule Sami flagged.
+
+    use crate::user::ensure_user;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    async fn setup_pool() -> PgPool {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+
+        PgPool::connect(&database_url)
+            .await
+            .expect("connect to test DB")
+    }
+
+    /// Insert a community with a unique host. Returns its `CommunityId`.
+    async fn make_community(pool: &PgPool) -> CommunityId {
+        let id = Uuid::new_v4();
+        let host = format!("test-{}.example", id.simple());
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(&host)
+            .execute(pool)
+            .await
+            .expect("insert community");
+        CommunityId::from_uuid(id)
+    }
+
+    /// Insert a channel under a community. Returns the channel id.
+    async fn make_channel(pool: &PgPool, community: CommunityId, owner: &[u8]) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO channels (id, community_id, name, created_by)
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(id)
+        .bind(community.as_uuid())
+        .bind(format!("ch-{}", id.simple()))
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("insert channel");
+        id
+    }
+
+    /// Insert a workflow whose tenant is `community`'s channel. Returns the
+    /// workflow id and the owning community for callers that want to assert
+    /// the resolved tenant.
+    async fn make_workflow_in(pool: &PgPool, community: CommunityId) -> (Uuid, CommunityId) {
+        let owner = vec![0xa1; 32];
+        ensure_user(pool, community, &owner)
+            .await
+            .expect("ensure owner");
+        let channel_id = make_channel(pool, community, &owner).await;
+        let workflow_id = create_workflow(
+            pool,
+            community,
+            Some(channel_id),
+            &owner,
+            "f1-attack-workflow",
+            r#"{"trigger":{"on":"schedule"},"steps":[]}"#,
+            &[0u8; 32],
+        )
+        .await
+        .expect("create workflow");
+        (workflow_id, community)
+    }
+
+    /// F1 attack: a caller in community A must NOT be able to claim a fire
+    /// for a workflow owned by community B and have the claim resolve under
+    /// A's tenant. The resolved community on the returned claim row MUST
+    /// equal the workflow's actual tenant (B).
+    ///
+    /// Post-fix (`1fa3d837f`) the claim signature no longer accepts a caller
+    /// tenant — the SQL resolves `community_id` from the `workflows` row via
+    /// `INSERT ... SELECT w.community_id, w.id, $2 FROM workflows w WHERE
+    /// w.id = $1`. This test still creates an "attacker_community" that the
+    /// caller is *not* permitted to name on the wire; the assertion is that
+    /// the resolved tenant equals the workflow owner's community, never the
+    /// attacker's. With the pre-fix signature this test was RED (the row's
+    /// `community_id` came back as the attacker's); under the locked spec it
+    /// must be GREEN.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn claim_for_workflow_in_other_community_no_ops() {
+        let pool = setup_pool().await;
+
+        // The attacker community exists in the schema but the caller has no
+        // way to pass it to the claim API anymore — that *is* the S1 fix.
+        // Keeping the row in this test makes the no-influence invariant
+        // explicit: even with two real tenants in play, the resolved
+        // community is the workflow's owner.
+        let _attacker_community = make_community(&pool).await;
+        let owner_community = make_community(&pool).await;
+        let (workflow_id, expected_community) = make_workflow_in(&pool, owner_community).await;
+
+        let scheduled_for = Utc.with_ymd_and_hms(2026, 6, 27, 0, 0, 0).unwrap();
+
+        let claim = claim_scheduled_workflow_fire(&pool, workflow_id, scheduled_for)
+            .await
+            .expect("claim should not error")
+            .expect("claim should succeed exactly once");
+
+        assert_eq!(
+            claim.community_id,
+            expected_community,
+            "claim must resolve community from workflow_id (server-side); \
+             resolved={resolved:?} expected={expected_community:?}",
+            resolved = claim.community_id,
+        );
+        assert_eq!(claim.workflow_id, workflow_id);
+        assert_eq!(claim.scheduled_for, scheduled_for);
+    }
+
+    /// Same `(workflow_id, scheduled_for)` claimed concurrently by N tasks
+    /// must yield exactly one `Some` winner. Post-fix the PK is
+    /// `(workflow_id, scheduled_for)` (`workflow_id` is globally unique,
+    /// `community_id` is a scoped/audit label only) — exactly the locked
+    /// spec. Characterization guard: protects the dedup boundary against
+    /// regressions in the claim SQL.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn concurrent_same_window_claims_exactly_one_wins() {
+        let pool = setup_pool().await;
+
+        let community = make_community(&pool).await;
+        let (workflow_id, _) = make_workflow_in(&pool, community).await;
+        let scheduled_for = Utc.with_ymd_and_hms(2026, 6, 27, 0, 1, 0).unwrap();
+
+        const N: usize = 8;
+        let mut handles = Vec::with_capacity(N);
+        for _ in 0..N {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                claim_scheduled_workflow_fire(&pool, workflow_id, scheduled_for).await
+            }));
+        }
+
+        let mut winners = 0usize;
+        for h in handles {
+            let result = h.await.expect("task did not panic").expect("claim ok");
+            if result.is_some() {
+                winners += 1;
+            }
+        }
+        assert_eq!(
+            winners, 1,
+            "exactly one task must win the claim race for (workflow_id, scheduled_for)"
+        );
+    }
+
+    /// Documents the retention-vs-interval coupling Sami flagged for §5c:
+    /// pruning every claim below the workflow's interval makes
+    /// `latest_scheduled_workflow_fire` return `None`, which re-introduces the
+    /// per-pod-clock anchor bug F5 was meant to fix. Test is GREEN today and
+    /// MUST stay green — it pins the deployment-config rule that the janitor
+    /// cutoff must exceed `MAX(interval_secs) + safety margin`. If a future
+    /// change makes `latest_*` resilient to pruning (e.g. by reading the most
+    /// recent workflow_run instead, or by retaining a sentinel row), this
+    /// test's assertion encodes the contract that must be updated alongside.
+    ///
+    /// Test isolation: the prune primitive is global (filters only on
+    /// `claimed_at`), so to avoid colliding with parallel claim tests we
+    /// back-date this workflow's `claimed_at` into the deep past and use a
+    /// past cutoff that cannot match any other test's `claimed_at = NOW()`.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn latest_after_prune_below_interval_breaks_anchor() {
+        let pool = setup_pool().await;
+
+        let community = make_community(&pool).await;
+        let (workflow_id, _) = make_workflow_in(&pool, community).await;
+        let scheduled_for = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+
+        claim_scheduled_workflow_fire(&pool, workflow_id, scheduled_for)
+            .await
+            .expect("claim ok")
+            .expect("first claim wins");
+
+        // Backdate this row's `claimed_at` so the global prune below targets
+        // only this workflow's row and cannot race-delete other tests' rows.
+        let backdated_claimed_at = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+        sqlx::query(
+            "UPDATE scheduled_workflow_fires SET claimed_at = $1 \
+             WHERE community_id = $2 AND workflow_id = $3 AND scheduled_for = $4",
+        )
+        .bind(backdated_claimed_at)
+        .bind(community.as_uuid())
+        .bind(workflow_id)
+        .bind(scheduled_for)
+        .execute(&pool)
+        .await
+        .expect("backdate ok");
+
+        let latest_before = latest_scheduled_workflow_fire(&pool, workflow_id)
+            .await
+            .expect("latest ok");
+        assert_eq!(
+            latest_before,
+            Some(scheduled_for),
+            "latest must reflect the claim before pruning",
+        );
+
+        // Janitor cutoff above only the back-dated row: prunes the anchor row
+        // without touching anything claimed at wall-clock NOW.
+        let cutoff = backdated_claimed_at + chrono::Duration::seconds(1);
+        let pruned = prune_scheduled_workflow_fires_before(&pool, cutoff)
+            .await
+            .expect("prune ok");
+        assert!(
+            pruned >= 1,
+            "expected at least one row pruned, got {pruned}"
+        );
+
+        let latest_after = latest_scheduled_workflow_fire(&pool, workflow_id)
+            .await
+            .expect("latest ok");
+        assert_eq!(
+            latest_after, None,
+            "pruning below the largest interval breaks the DB anchor; \
+             retention cutoff MUST exceed MAX(interval_secs) + safety margin (§5c)",
+        );
     }
 }

@@ -12,13 +12,15 @@ use uuid::Uuid;
 use buzz_core::kind::{
     event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH, KIND_EVENT_REMINDER,
 };
-use buzz_core::StoredEvent;
+use buzz_core::{CommunityId, StoredEvent};
 
 use crate::error::{DbError, Result};
 
 /// Optional filters for [`query_events`].
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct EventQuery {
+    /// Server-resolved community scope.
+    pub community_id: CommunityId,
     /// Restrict results to this channel.
     pub channel_id: Option<Uuid>,
     /// Restrict results to these kind values (stored as `i32` in Postgres).
@@ -123,6 +125,7 @@ pub fn extract_not_before(event: &Event) -> Option<i64> {
 /// Returns `(StoredEvent, was_inserted)` — `was_inserted` is `false` on duplicate.
 pub async fn insert_event(
     pool: &PgPool,
+    community_id: CommunityId,
     event: &Event,
     channel_id: Option<Uuid>,
 ) -> Result<(StoredEvent, bool)> {
@@ -150,11 +153,12 @@ pub async fn insert_event(
     let not_before = extract_not_before(event);
     let result = sqlx::query(
         r#"
-        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        INSERT INTO events (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT DO NOTHING
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(id_bytes.as_slice())
     .bind(pubkey_bytes.as_slice())
     .bind(created_at)
@@ -220,16 +224,22 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
             "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, \
              e.sig, e.received_at, e.channel_id \
              FROM events e \
-             INNER JOIN event_mentions m ON e.id = m.event_id \
-             WHERE e.deleted_at IS NULL AND m.pubkey_hex = ",
+             INNER JOIN event_mentions m \
+                ON e.community_id = m.community_id AND e.id = m.event_id \
+             WHERE e.community_id = ",
         );
+        b.push_bind(q.community_id.as_uuid());
+        b.push(" AND e.deleted_at IS NULL AND m.pubkey_hex = ");
         b.push_bind(p_hex.to_ascii_lowercase());
         b
     } else {
-        QueryBuilder::new(
+        let mut b = QueryBuilder::new(
             "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-             FROM events WHERE deleted_at IS NULL",
-        )
+             FROM events WHERE community_id = ",
+        );
+        b.push_bind(q.community_id.as_uuid());
+        b.push(" AND deleted_at IS NULL");
+        b
     };
 
     // Use unqualified column names when no join, qualified when joined.
@@ -444,13 +454,19 @@ pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
     let mut qb: QueryBuilder<sqlx::Postgres> = if let Some(ref p_hex) = q.p_tag_hex {
         let mut b = QueryBuilder::new(
             "SELECT COUNT(*) as cnt FROM events e \
-             INNER JOIN event_mentions m ON e.id = m.event_id \
-             WHERE e.deleted_at IS NULL AND m.pubkey_hex = ",
+             INNER JOIN event_mentions m \
+                ON e.community_id = m.community_id AND e.id = m.event_id \
+             WHERE e.community_id = ",
         );
+        b.push_bind(q.community_id.as_uuid());
+        b.push(" AND e.deleted_at IS NULL AND m.pubkey_hex = ");
         b.push_bind(p_hex.to_ascii_lowercase());
         b
     } else {
-        QueryBuilder::new("SELECT COUNT(*) as cnt FROM events WHERE deleted_at IS NULL")
+        let mut b = QueryBuilder::new("SELECT COUNT(*) as cnt FROM events WHERE community_id = ");
+        b.push_bind(q.community_id.as_uuid());
+        b.push(" AND deleted_at IS NULL");
+        b
     };
 
     let col_prefix = if q.p_tag_hex.is_some() { "e." } else { "" };
@@ -842,6 +858,7 @@ pub struct ThreadMetadataParams<'a> {
 /// Returns `(StoredEvent, was_inserted)`.
 pub async fn insert_event_with_thread_metadata(
     pool: &PgPool,
+    community_id: CommunityId,
     event: &Event,
     channel_id: Option<Uuid>,
     thread_meta: Option<ThreadMetadataParams<'_>>,
@@ -871,11 +888,12 @@ pub async fn insert_event_with_thread_metadata(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        INSERT INTO events (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag, not_before)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT DO NOTHING
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(id_bytes.as_slice())
     .bind(pubkey_bytes.as_slice())
     .bind(created_at)
@@ -899,14 +917,15 @@ pub async fn insert_event_with_thread_metadata(
             let tm_result = sqlx::query(
                 r#"
                 INSERT INTO thread_metadata
-                    (event_created_at, event_id, channel_id,
+                    (community_id, event_created_at, event_id, channel_id,
                      parent_event_id, parent_event_created_at,
                      root_event_id, root_event_created_at,
                      depth, broadcast)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT DO NOTHING
                 "#,
             )
+            .bind(community_id.as_uuid())
             .bind(meta.event_created_at)
             .bind(meta.event_id)
             .bind(meta.channel_id)
@@ -931,14 +950,15 @@ pub async fn insert_event_with_thread_metadata(
                     sqlx::query(
                         r#"
                         INSERT INTO thread_metadata
-                            (event_created_at, event_id, channel_id,
+                            (community_id, event_created_at, event_id, channel_id,
                              parent_event_id, parent_event_created_at,
                              root_event_id, root_event_created_at,
                              depth, broadcast)
-                        VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, 0, false)
+                        VALUES ($1, $2, $3, $4, NULL, NULL, NULL, NULL, 0, false)
                         ON CONFLICT DO NOTHING
                         "#,
                     )
+                    .bind(community_id.as_uuid())
                     .bind(parent_ts)
                     .bind(pid)
                     .bind(meta.channel_id)
@@ -953,14 +973,15 @@ pub async fn insert_event_with_thread_metadata(
                             sqlx::query(
                                 r#"
                                 INSERT INTO thread_metadata
-                                    (event_created_at, event_id, channel_id,
+                                    (community_id, event_created_at, event_id, channel_id,
                                      parent_event_id, parent_event_created_at,
                                      root_event_id, root_event_created_at,
                                      depth, broadcast)
-                                VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, 0, false)
+                                VALUES ($1, $2, $3, $4, NULL, NULL, NULL, NULL, 0, false)
                                 ON CONFLICT DO NOTHING
                                 "#,
                             )
+                            .bind(community_id.as_uuid())
                             .bind(root_ts)
                             .bind(root_id)
                             .bind(meta.channel_id)
@@ -973,9 +994,10 @@ pub async fn insert_event_with_thread_metadata(
                         r#"
                         UPDATE thread_metadata
                         SET reply_count = reply_count + 1, last_reply_at = NOW()
-                        WHERE event_id = $1
+                        WHERE community_id = $1 AND event_id = $2
                         "#,
                     )
+                    .bind(community_id.as_uuid())
                     .bind(pid)
                     .execute(&mut *tx)
                     .await?;
@@ -985,9 +1007,10 @@ pub async fn insert_event_with_thread_metadata(
                             r#"
                             UPDATE thread_metadata
                             SET descendant_count = descendant_count + 1
-                            WHERE event_id = $1
+                            WHERE community_id = $1 AND event_id = $2
                             "#,
                         )
+                        .bind(community_id.as_uuid())
                         .bind(root_id)
                         .execute(&mut *tx)
                         .await?;
@@ -1083,7 +1106,19 @@ pub async fn claim_due_reminder(
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
 ) -> Result<bool> {
-    let now_epoch = Utc::now().timestamp();
+    claim_due_reminder_with_stamp(pool, event_id, event_created_at, Utc::now().timestamp()).await
+}
+
+/// Atomically claim a due reminder using a caller-supplied delivery stamp.
+///
+/// The same stamp should be passed to [`release_due_reminder`] if the publish
+/// side effect fails, so rollback can compare-and-clear only this pod's claim.
+pub async fn claim_due_reminder_with_stamp(
+    pool: &PgPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    delivery_stamp: i64,
+) -> Result<bool> {
     let result = sqlx::query(
         r#"
         UPDATE events
@@ -1091,13 +1126,42 @@ pub async fn claim_due_reminder(
         WHERE created_at = $2 AND id = $3 AND delivered_at IS NULL
         "#,
     )
-    .bind(now_epoch)
+    .bind(delivery_stamp)
     .bind(event_created_at)
     .bind(event_id)
     .execute(pool)
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Release a previously claimed reminder when publish fails.
+///
+/// The `delivery_stamp` must be the exact value written by the claiming pod;
+/// that compare-and-clear prevents one pod from rolling back another pod's
+/// later claim after a retry/race.
+pub async fn release_due_reminder(
+    pool: &PgPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    delivery_stamp: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE events
+        SET delivered_at = NULL
+        WHERE created_at = $1
+          AND id = $2
+          AND delivered_at = $3
+        "#,
+    )
+    .bind(event_created_at)
+    .bind(event_id)
+    .bind(delivery_stamp)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
 }
 
 #[cfg(test)]

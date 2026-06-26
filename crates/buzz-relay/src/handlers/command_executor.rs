@@ -612,10 +612,20 @@ async fn handle_workflow_def(
         PersistResult::Inserted(tx) => tx,
     };
 
-    // 4. Execute: create_workflow
+    // 4. Execute: create_workflow. The workflow's community is resolved from
+    // the server-owned channel row, not from the client-supplied event. The DB
+    // also enforces `(community_id, channel_id)` as a composite FK.
+    let community_id = state
+        .db
+        .community_of_channel(channel_id)
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: db channel community lookup: {e}")))?
+        .ok_or_else(|| IngestError::Rejected("invalid: workflow channel not found".into()))?;
+
     let workflow_id = state
         .db
         .create_workflow(
+            community_id,
             Some(channel_id),
             &self_bytes,
             &workflow_name,
