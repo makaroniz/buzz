@@ -1447,6 +1447,147 @@ mod tests {
                 "audit must NOT record the relay signer as the actor"
             );
         }
+
+        /// Integrated isolation: a community resolved from the request's
+        /// `TenantContext` at relay ingest lands in *that* community's audit
+        /// chain and nothing else. This is the conformance `audit_log` row's
+        /// "one chain per community" obligation proven through the *relay* path
+        /// (`dispatch_persistent_event`), not just the direct `AuditService::log`
+        /// call that `buzz_audit::service::tests::chains_are_independent_per_community`
+        /// covers — it pins that the host→`TenantContext`→chain wiring keeps
+        /// tenants isolated end-to-end. No WS-AUTH in the loop, so it is not
+        /// blocked on the NIP-42 work: it drives the dispatch fn directly with
+        /// two explicit tenants.
+        #[tokio::test]
+        async fn audit_chain_is_isolated_per_tenant_through_relay_ingest() {
+            use buzz_audit::AuditService;
+            use buzz_core::event::StoredEvent;
+            use buzz_core::tenant::{CommunityId, TenantContext};
+
+            let Some((state, audit_shutdown, pool)) = super::fanout_access::audit_state().await
+            else {
+                eprintln!("skipping audit isolation test: Postgres/Redis unavailable");
+                return;
+            };
+
+            // Two communities on the same relay process / same Postgres.
+            let mut tenants = Vec::new();
+            for label in ["a", "b"] {
+                let id = Uuid::new_v4();
+                let host = format!("audit-iso-{label}-{}.example", id.simple());
+                sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+                    .bind(id)
+                    .bind(&host)
+                    .execute(&pool)
+                    .await
+                    .expect("seed community");
+                tenants.push((
+                    id,
+                    TenantContext::resolved(CommunityId::from_uuid(id), host),
+                ));
+            }
+            let (a_id, tenant_a) = &tenants[0];
+            let (b_id, tenant_b) = &tenants[1];
+
+            // Ingest one event under each tenant. Each event is signed by an
+            // arbitrary actor; the audit community comes from the *tenant*, not
+            // the event — that is the property under test. The two events carry
+            // distinct content so they get distinct ids: that is what makes the
+            // cross-leak assertions below non-trivial (each id must appear only
+            // in its own community's chain).
+            let actor = Keys::generate();
+            let actor_hex = actor.public_key().to_hex();
+            let ingest = |tenant: &TenantContext, content: &str| {
+                let event = EventBuilder::new(Kind::from(KIND_PRESENCE_UPDATE as u16), content)
+                    .sign_with_keys(&actor)
+                    .expect("sign event");
+                let object_id = event.id.to_hex();
+                let stored = StoredEvent::new(event, None);
+                (object_id, stored, tenant.clone())
+            };
+            let (a_object, a_stored, ta) = ingest(tenant_a, "online-a");
+            let (b_object, b_stored, tb) = ingest(tenant_b, "online-b");
+            assert_ne!(
+                a_object, b_object,
+                "test precondition: the two events must have distinct ids"
+            );
+
+            super::super::dispatch_persistent_event(
+                &ta,
+                &state,
+                &a_stored,
+                KIND_PRESENCE_UPDATE,
+                &actor_hex,
+            )
+            .await;
+            super::super::dispatch_persistent_event(
+                &tb,
+                &state,
+                &b_stored,
+                KIND_PRESENCE_UPDATE,
+                &actor_hex,
+            )
+            .await;
+
+            audit_shutdown
+                .drain(std::time::Duration::from_secs(5))
+                .await;
+
+            // Read each chain back through the operator-internal API.
+            let svc = AuditService::new(pool.clone());
+            let a_rows = svc
+                .get_entries(CommunityId::from_uuid(*a_id), 1, 1000)
+                .await
+                .expect("read A chain");
+            let b_rows = svc
+                .get_entries(CommunityId::from_uuid(*b_id), 1, 1000)
+                .await
+                .expect("read B chain");
+
+            // A's chain contains A's event and never B's; reverse holds too.
+            assert!(
+                a_rows.iter().all(|e| e.community_id == *a_id),
+                "A read leaked another community's rows"
+            );
+            assert!(
+                a_rows
+                    .iter()
+                    .any(|e| e.object_id.as_deref() == Some(a_object.as_str())),
+                "A's ingested event is missing from A's chain"
+            );
+            assert!(
+                !a_rows
+                    .iter()
+                    .any(|e| e.object_id.as_deref() == Some(b_object.as_str())),
+                "B's event id appeared in A's audit chain — tenant isolation broken"
+            );
+            assert!(
+                b_rows.iter().all(|e| e.community_id == *b_id),
+                "B read leaked another community's rows"
+            );
+            assert!(
+                !b_rows
+                    .iter()
+                    .any(|e| e.object_id.as_deref() == Some(a_object.as_str())),
+                "A's event id appeared in B's audit chain — tenant isolation broken"
+            );
+
+            // Each chain verifies independently over its own range.
+            let a_max = a_rows.iter().map(|e| e.seq).max().expect("A has entries");
+            let b_max = b_rows.iter().map(|e| e.seq).max().expect("B has entries");
+            assert!(
+                svc.verify_chain(CommunityId::from_uuid(*a_id), 1, a_max)
+                    .await
+                    .expect("verify A"),
+                "A's chain must verify independently"
+            );
+            assert!(
+                svc.verify_chain(CommunityId::from_uuid(*b_id), 1, b_max)
+                    .await
+                    .expect("verify B"),
+                "B's chain must verify independently"
+            );
+        }
     }
 
     mod fanout_access {

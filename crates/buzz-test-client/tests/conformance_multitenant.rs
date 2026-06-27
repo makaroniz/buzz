@@ -457,19 +457,59 @@ mod mesh_agents_cli {
 // Audit log and observability (Dawn — buzz-audit)
 // ---------------------------------------------------------------------------
 mod audit_log {
-    use super::*;
-
-    /// Obligation: audit reads verify exactly one community chain
-    /// (`(community_id, seq)` / `(community_id, hash)`); error strings must not
-    /// leak cross-community IDs, constraint names, or existence facts.
-    #[tokio::test]
-    #[ignore]
-    async fn audit_chain_is_single_community_and_errors_dont_leak() {
-        pending_lane(
-            "buzz-audit",
-            "verify one chain per community; no cross-community id/constraint in error text",
-        );
-    }
+    //! Obligation: audit reads verify exactly one community chain
+    //! (`(community_id, seq)` / `(community_id, hash)`); error strings must not
+    //! leak cross-community IDs, constraint names, or existence facts.
+    //!
+    //! **This row is doc-only — and that is the strongest statement in the file.**
+    //!
+    //! Every other row here proves a black-box property: the relay serves a wire
+    //! response, and the test asserts that response denies a cross-community
+    //! oracle. The audit log has no such response to assert against — it has **no
+    //! client-reachable wire surface at all**. There is no `/audit` route in
+    //! `crates/buzz-relay/src/router.rs` (the route list is `/`, `/info`,
+    //! `/.well-known/nostr.json`, the health probes, `/events`, `/query`,
+    //! `/count`, `/hooks`, the media and git sub-routers, and the audio WS — no
+    //! audit endpoint). Audit is written as an ingest side-effect
+    //! (`handlers/event.rs`, `dispatch_persistent_event`) and read only via
+    //! `buzz_audit::AuditService::{verify_chain, get_entries}`, which are
+    //! operator-internal (consumed by `buzz-admin`). `crates/buzz-audit/src/
+    //! error.rs` states it directly: `AuditError` is "never relayed to a client
+    //! on the wire," and "no variant embeds a `community_id`."
+    //!
+    //! So where other rows prove *the oracle is denied*, audit proves *the
+    //! oracle's surface does not exist* — a strictly stronger isolation claim,
+    //! and the honest way to state it is to cite the facts, not to invent a wire
+    //! observation that the architecture does not offer. Reaching behind the
+    //! wire into Postgres here would also break this file's black-box contract
+    //! (its deps are `buzz-ws-client`/`reqwest`/`tokio-tungstenite`/`s3` — no
+    //! `sqlx`, no `buzz-audit`), and a DB-direct read can never catch a
+    //! wire-layer bug because it never traverses the wire read path.
+    //!
+    //! The two halves of the obligation are proven in their proper homes, where
+    //! direct Postgres access is in-convention:
+    //!
+    //!   1. **One chain per community** —
+    //!      `buzz_audit::service::tests::chains_are_independent_per_community`
+    //!      (direct `AuditService::log`) proves interleaved A/B writes keep
+    //!      independent `(community_id, seq)` chains, each starting at seq 1 with
+    //!      its own `prev_hash`, and that `verify_chain`/`get_entries` scoped to
+    //!      one community never traverse another. The *integrated* path — that a
+    //!      community resolved from the request's `TenantContext` at relay ingest
+    //!      lands in the correct chain and stays isolated — is proven by
+    //!      `buzz_relay::handlers::event::tests::
+    //!      audit_chain_is_isolated_per_tenant_through_relay_ingest`, driving
+    //!      `dispatch_persistent_event` under two tenants against a shared
+    //!      Postgres (no WS-AUTH dependency).
+    //!   2. **Errors don't leak** —
+    //!      `buzz_audit::error::tests::audit_error_text_carries_no_community_id_or_constraint`
+    //!      asserts no `AuditError` variant's rendered text embeds a
+    //!      `community_id`, constraint name, or cross-community object id.
+    //!
+    //! Substrate on PR head: `crates/buzz-audit/src/entry.rs` keys `AuditEntry`
+    //! `(community_id, seq)` with per-community `prev_hash`; `NewAuditEntry.
+    //! community_id` is typed `CommunityId` (server-resolved, never client
+    //! input).
 }
 
 // ---------------------------------------------------------------------------
