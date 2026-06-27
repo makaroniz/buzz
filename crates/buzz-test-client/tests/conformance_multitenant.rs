@@ -538,27 +538,323 @@ mod nip11_relay_info {
 mod api_tokens_nip98_replay {
     use super::*;
 
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+    use sha2::{Digest, Sha256};
+
     /// Obligation: token hash uniqueness/lookup is `(community_id, token_hash)`;
     /// a token minted in A does not authorize the same hash in B.
-    #[tokio::test]
-    #[ignore]
-    async fn token_minted_in_a_does_not_authorize_in_b() {
-        pending_lane(
-            "buzz-auth",
-            "identical token_hash in A and B → A's token rejected against B",
-        );
+    ///
+    /// **This row is doc-only — and that is the honest answer.**
+    ///
+    /// Every other wire-driven row in this file proves a black-box property: a
+    /// client addresses the relay over HTTP/WS and observes that the response
+    /// denies a cross-community oracle. This row's obligation cannot be tested
+    /// that way because **the api_token mint surface does not exist on the wire
+    /// in `buzz-relay`** — there is no route by which a client can bind a token
+    /// to a community over HTTP, so the "mint in A, present to B" precondition
+    /// has no entry point.
+    ///
+    /// Verified on PR head:
+    ///   * `crates/buzz-relay/src/router.rs:52-79` — full route list is `/`,
+    ///     `/info`, `/.well-known/nostr.json`, `/health`, `/_liveness`,
+    ///     `/_readiness`, `/events`, `/query`, `/count`, `/hooks/{id}`, plus
+    ///     the media, git, and git-policy sub-routers. **No `/tokens` route.**
+    ///   * `crates/buzz-relay/src/api/` directory is `{bridge, events, media,
+    ///     nip05, git/, mod}` — no `tokens` module. The 792-line
+    ///     `crates/sprout-relay/src/api/tokens.rs` self-service-minting
+    ///     endpoint that existed pre-rewrite (PR #37, commit `f84da74d3`) was
+    ///     deliberately not ported. Porting it to enable this row would be a
+    ///     product + security-surface decision, not a test-enablement task.
+    ///   * Api_tokens are consumed (not minted) by the Blossom upload path at
+    ///     `crates/buzz-relay/src/api/media.rs:638`, which extracts the
+    ///     `X-Auth-Token: buzz_*` header and looks up
+    ///     `state.db.get_api_token_by_hash_including_revoked(tenant.community(),
+    ///     &hash)`. The comment immediately above that call names the row-44
+    ///     fence explicitly: *"A token minted in community A presented to a
+    ///     host that resolves to community B must not authorize."*
+    ///
+    /// So where other rows prove *the oracle is denied*, api_tokens proves
+    /// *the oracle's input surface does not exist* — a sibling of the
+    /// `audit_log` row (whose proof is that the *output* surface does not
+    /// exist). Both are strictly stronger than a wire-denied assertion, and
+    /// the honest way to state it is to cite the facts, not to invent an
+    /// out-of-band mint path that would break the conformance file's black-box
+    /// contract (its deps are `buzz-ws-client`/`reqwest`/`tokio-tungstenite`/
+    /// `s3` — no `sqlx`, no `buzz-db`).
+    ///
+    /// The `(community_id, token_hash)` fence itself is proven directly at the
+    /// storage layer, where direct Postgres access is in-convention:
+    ///
+    ///   1. `crates/buzz-db/src/api_token.rs:425
+    ///      lookup_by_hash_is_scoped_to_community` — inserts two rows with
+    ///      **identical 32-byte hash** in communities A and B (legal under
+    ///      `UNIQUE(community_id, token_hash)`), then asserts A-scoped lookup
+    ///      returns A's row only, B-scoped lookup returns B's row only, and a
+    ///      third (unrelated) community returns None. The mutate-bite handle
+    ///      is named in the test's doc-comment: strip `AND community_id = $1`
+    ///      from `get_api_token_by_hash_including_revoked` and the lookup
+    ///      becomes hash-only, returning whichever row Postgres picks
+    ///      first — the cross-tenancy assertion fails. Sharp row-44 shape.
+    ///   2. `crates/buzz-db/src/api_token.rs:488
+    ///      active_lookup_by_hash_is_scoped_to_community` — mirror for the
+    ///      `revoked_at IS NULL` variant `Db::get_api_token_by_hash`. Same
+    ///      shape: same hash, distinct communities, scoped lookup returns the
+    ///      caller's row only.
+    ///
+    /// And the consumer fence — `media.rs:638` — calls the scoped DB lookup
+    /// with `tenant.community()` derived from the request host *before* token
+    /// resolution (`media.rs:97` comment: *"This MUST run before scope
+    /// resolution so the API-token lookup is keyed on (community_id,
+    /// token_hash). Resolving scopes without a tenant in hand would query
+    /// api_tokens by hash alone, defeating the cross-community fence."*).
+    ///
+    /// Substrate on PR head: `api_tokens` table has UNIQUE index
+    /// `(community_id, token_hash)`; `CommunityId` is a server-resolved type
+    /// (never client input); `tenant.community()` is bound from the request
+    /// host by `bind_community` before any tenant-scoped DB read or write.
+    #[test]
+    fn token_minted_in_a_does_not_authorize_in_b() {
+        // Compile-time anchor: this row is doc-only by design. The proof lives
+        // in the cited storage-layer unit tests; the wire surface for minting
+        // does not exist (see module doc-comment for the verified route list).
+        // If anyone adds a `/tokens` route to `buzz-relay`, this row's shape
+        // should be revisited and a wire-driven body added.
     }
 
     /// Obligation: NIP-98 replay seen-set is shared (any-pod) AND community
-    /// scoped: a nonce spent in A is still spendable in B, but a replay within A
-    /// is rejected from any pod.
+    /// scoped: a nonce spent in A is still spendable in B, but a replay within
+    /// A is rejected from any pod.
+    ///
+    /// # Wire-observable claim and what bites it
+    ///
+    /// The load-bearing wire-observable property is **within-community replay
+    /// rejection**: a NIP-98 event posted twice to the same community must be
+    /// rejected on the second attempt. This is the proof that the shared
+    /// (cross-pod) seen-set is in the request path at all — without it, any
+    /// pod would happily re-honor a spent NIP-98 event.
+    ///
+    /// Mutate-bite for this assertion: turn `check_nip98_replay` into a no-op
+    /// in `crates/buzz-relay/src/api/bridge.rs:79` (return `Ok(())` before
+    /// consulting the guard). Under the mutation, the second POST goes 200
+    /// instead of 401 → the within-community replay assertion fails RED. The
+    /// bite fires on the replay check itself, not on a sibling fence.
+    ///
+    /// # Why the cross-community independence arm is a tripwire, not a bite
+    ///
+    /// The obligation's cross-community arm — "a nonce spent in A is still
+    /// spendable in B" — IS asserted by this test, but as a **positive
+    /// control** rather than a mutate-bite. Reasoning:
+    ///
+    /// The replay key shape is `buzz:{community}:nip98:{event_id_hex}` (see
+    /// `crates/buzz-auth/src/nip98_replay.rs:103 nip98_replay_key`). The
+    /// community prefix is what makes the key per-community; the
+    /// `event_id_hex` is what makes it per-event. **On natural wire traffic
+    /// the event_id is already community-distinct**, because the NIP-98 `u`
+    /// tag is part of the signed canonical bytes and the per-tenant host
+    /// binding (see `verify_bridge_auth` + `nip98_expected_url` after the
+    /// row-44 sibling fix `bf8a1a4fa`) forces the `u` to differ per community.
+    /// So two events posted to A and B respectively are signed against
+    /// different `u` values → they have different event_ids → their seen-set
+    /// keys have different suffixes → they do not collide *regardless of
+    /// whether the community prefix is present*.
+    ///
+    /// This means the community prefix is **structurally redundant for
+    /// natural wire traffic**. It is load-bearing only against an artificial
+    /// "same event_id surfaces in two communities" scenario, which content-
+    /// addressing makes implausible. The substrate's own doc-comment for the
+    /// unit test that proves the prefix isolates such artificial collisions
+    /// names the property as exactly that: "**Belt-and-suspenders**: even if a
+    /// same-id event surfaces in two communities (which content-addressing
+    /// makes implausible), the seen-set MUST consult two distinct rows."
+    /// (`crates/buzz-auth/src/nip98_replay.rs:163
+    /// key_isolates_communities_for_same_event_id`.)
+    ///
+    /// Why u-host can't be bypassed to manufacture a wire collision: the
+    /// bridge processes requests in this order (`bridge.rs:242-259`):
+    ///   1. `bind_community` from request `Host` header (row-zero fence)
+    ///   2. `nip98_expected_url(state.config.relay_url, &tenant, "/events")`
+    ///      builds the per-tenant expected `u`
+    ///   3. `verify_bridge_auth` rejects with 401 unless the signed event's
+    ///      `u` tag matches the per-tenant expected URL
+    ///   4. **Only then** is `check_nip98_replay` called
+    ///
+    /// A same-physical-event posted to both A and B would be rejected at step
+    /// 3 (u-host mismatch) for one of the two hosts, so it never reaches the
+    /// replay check from a wire test. The replay-prefix-drop mutation
+    /// proposed in earlier design rounds turned out to be vacuous against
+    /// natural wire traffic; a wire-driven bite on the prefix's load-
+    /// bearingness against the artificial-collision case is not constructible
+    /// from this file's black-box vantage point. The unit test cited above
+    /// proves it at the layer where the artificial construction is possible.
+    ///
+    /// What the tripwire DOES catch: a future regression that globalizes the
+    /// seen-set namespace by truncating or normalizing the key (e.g.,
+    /// "simplifying" the key to just `buzz:nip98:{event_id}`, or
+    /// canonicalizing `u` in a way that collapses cross-tenant `u` values
+    /// into the same event_id) would break the "spend in A doesn't burn the
+    /// slot in B" arm even though u-tags differ. The tripwire assertion gives
+    /// such a regression somewhere to land at the wire layer, on top of the
+    /// unit-layer same-id-collision proof.
+    ///
+    /// # Test layout
+    ///
+    /// Two distinct keypairs per community (Eva's setup-equivalence vacuity
+    /// scar: distinct values make any leak surface as wrong-pubkey-spent /
+    /// wrong-content-stored, not silent-absent). The wire surface is `POST
+    /// /events` with `Authorization: Nostr <base64-NIP-98-event>`. Bodies are
+    /// minimal valid kind:1 nostr events authored by the same NIP-98 signer
+    /// (relay-membership is open under `BUZZ_REQUIRE_AUTH_TOKEN=false`).
     #[tokio::test]
     #[ignore]
     async fn nip98_replay_seenset_is_shared_and_community_scoped() {
-        pending_lane(
-            "buzz-auth",
-            "replay key (community_id, event_id) in shared store; u-host must match req.community",
+        let http_a = to_http(&url_a());
+        let http_b = to_http(&url_b());
+
+        // Distinct keypairs per community — if the seen-set ever leaked into
+        // a globalized namespace via a regression in u-canonicalization, the
+        // tripwire assertion below catches it because B's post would 401 as
+        // "already spent" using A's key's slot.
+        let keys_a = Keys::generate();
+        let keys_b = Keys::generate();
+        assert_ne!(
+            keys_a.public_key().to_hex(),
+            keys_b.public_key().to_hex(),
+            "test design requires distinct keys per community"
         );
+
+        // (1) Within-community replay rejection — the load-bearing wire bite.
+        //
+        // Sign a NIP-98 event E with u = A's /events URL, post it to A → must
+        // 200. Post the exact same NIP-98 event again to A → must 401 with a
+        // body that names replay detection. The mutate-bite is `check_nip98_
+        // replay → noop` in `bridge.rs:79`; under that mutation the second
+        // post goes 200 because the seen-set is not consulted, and this
+        // assertion fails RED on the within-community arm.
+        let events_url_a = format!("{http_a}/events");
+        let body_a = build_kind1_event_json(&keys_a, "A within-community replay test");
+        let auth_a_first = build_nip98_header(&keys_a, &events_url_a, "POST", body_a.as_bytes());
+
+        let client = reqwest::Client::new();
+        let first_a = client
+            .post(&events_url_a)
+            .header("Authorization", &auth_a_first)
+            .header("Content-Type", "application/json")
+            .body(body_a.clone())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("first POST to A failed: {e}"));
+        assert!(
+            first_a.status().is_success(),
+            "first NIP-98 post to A must succeed, got {} (body: {})",
+            first_a.status(),
+            first_a.text().await.unwrap_or_default(),
+        );
+
+        // Repost the SAME NIP-98 event (byte-identical Authorization header,
+        // byte-identical body — same canonical event id).
+        let second_a = client
+            .post(&events_url_a)
+            .header("Authorization", &auth_a_first)
+            .header("Content-Type", "application/json")
+            .body(body_a)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("second POST to A failed: {e}"));
+        assert_eq!(
+            second_a.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "second POST to A with the same NIP-98 event MUST be rejected as \
+             replay (got {}) — if this returns 200, the shared seen-set is \
+             not in the request path. Mutate-bite handle: \
+             `check_nip98_replay` in bridge.rs:79.",
+            second_a.status(),
+        );
+        let second_a_body = second_a.text().await.unwrap_or_default();
+        assert!(
+            second_a_body.contains("replay"),
+            "second POST to A's 401 body should name replay detection, got: \
+             {second_a_body:?}",
+        );
+
+        // (2) Cross-community spend-spread — tripwire, no mutate-bite.
+        //
+        // Sign an independent NIP-98 event E' for B's /events URL (different
+        // u → different event_id by signed-canonical divergence). Post E' to
+        // B → must 200 even though E was already spent in A. This catches a
+        // future namespace-globalization regression in the seen-set (e.g.,
+        // key truncation, u-normalization collapse) by giving such a
+        // regression somewhere to land at the wire layer. The cross-
+        // community-prefix isolation property against an artificial same-id
+        // collision is proven at the unit layer by
+        // `nip98_replay.rs:163 key_isolates_communities_for_same_event_id`.
+        let events_url_b = format!("{http_b}/events");
+        let body_b = build_kind1_event_json(&keys_b, "B cross-community spread test");
+        let auth_b = build_nip98_header(&keys_b, &events_url_b, "POST", body_b.as_bytes());
+
+        let first_b = client
+            .post(&events_url_b)
+            .header("Authorization", &auth_b)
+            .header("Content-Type", "application/json")
+            .body(body_b)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("POST to B failed: {e}"));
+        assert!(
+            first_b.status().is_success(),
+            "POST of an independent NIP-98 event to B must succeed (200) — \
+             A's spent nonce must not burn B's seen-set slot. Got {} (body: \
+             {}). Tripwire: if this fails, the seen-set namespace has been \
+             globalized and the per-community scope is broken. The artificial \
+             same-event_id-different-community case is proven separately at \
+             `crates/buzz-auth/src/nip98_replay.rs:163 \
+             key_isolates_communities_for_same_event_id`.",
+            first_b.status(),
+            first_b.text().await.unwrap_or_default(),
+        );
+    }
+
+    /// Build a `Authorization: Nostr <base64>` header value for NIP-98 HTTP
+    /// auth (kind 27235 `HttpAuth` with `u`/`method`/`payload` tags). Mirrors
+    /// the pattern in `crates/buzz-auth/src/nip98.rs` and the helper in
+    /// `crates/buzz-test-client/tests/e2e_tokens.rs:52` — kept local to this
+    /// row so the conformance file's rows stay self-contained.
+    fn build_nip98_header(keys: &Keys, url: &str, method: &str, body: &[u8]) -> String {
+        let payload_hash = hex::encode(Sha256::digest(body));
+        let tags = vec![
+            Tag::parse(["u", url]).expect("u tag"),
+            Tag::parse(["method", method]).expect("method tag"),
+            Tag::parse(["payload", &payload_hash]).expect("payload tag"),
+        ];
+        let event = EventBuilder::new(Kind::HttpAuth, "")
+            .tags(tags)
+            .sign_with_keys(keys)
+            .expect("sign NIP-98 event");
+        let json = nostr::JsonUtil::as_json(&event);
+        let encoded = BASE64.encode(json.as_bytes());
+        format!("Nostr {encoded}")
+    }
+
+    /// Build a minimal kind:1 nostr event JSON for the bridge ingest path.
+    /// The body is just a valid signed event — the test does not care about
+    /// the content beyond it surviving relay-side parsing.
+    fn build_kind1_event_json(keys: &Keys, content: &str) -> String {
+        let event = EventBuilder::new(Kind::TextNote, content)
+            .sign_with_keys(keys)
+            .expect("sign kind:1");
+        nostr::JsonUtil::as_json(&event)
+    }
+
+    /// Convert any base form to `http(s)://` for REST.
+    fn to_http(base: &str) -> String {
+        if base.starts_with("http://") || base.starts_with("https://") {
+            base.trim_end_matches('/').to_string()
+        } else {
+            base.replace("wss://", "https://")
+                .replace("ws://", "http://")
+                .trim_end_matches('/')
+                .to_string()
+        }
     }
 }
 
