@@ -586,26 +586,330 @@ mod membership_allowlist {
 mod users_profiles_nip05 {
     use super::*;
 
+    use buzz_test_client::BuzzTestClient;
+    use nostr::{EventBuilder, Keys, Kind};
+
+    /// Convert any base form to `ws(s)://` for WS connect.
+    fn to_ws(base: &str) -> String {
+        if base.starts_with("ws://") || base.starts_with("wss://") {
+            base.trim_end_matches('/').to_string()
+        } else {
+            base.replace("https://", "wss://")
+                .replace("http://", "ws://")
+                .trim_end_matches('/')
+                .to_string()
+        }
+    }
+
+    /// Convert any base form to `http(s)://` for REST.
+    fn to_http(base: &str) -> String {
+        if base.starts_with("http://") || base.starts_with("https://") {
+            base.trim_end_matches('/').to_string()
+        } else {
+            base.replace("wss://", "https://")
+                .replace("ws://", "http://")
+                .trim_end_matches('/')
+                .to_string()
+        }
+    }
+
+    /// Publish a kind:0 (Metadata) event via WS for `keys`, with the supplied
+    /// JSON content. Returns the event id hex. Latest kind:0 per
+    /// `(community_id, pubkey)` wins under NIP-01 replaceable semantics; the
+    /// relay's ingest side-effect at `crates/buzz-relay/src/handlers/side_effects.rs::handle_kind0_profile`
+    /// also syncs the parsed fields into `users` via
+    /// `update_user_profile(tenant.community(), pubkey, ...)`.
+    async fn publish_kind0(client: &mut BuzzTestClient, keys: &Keys, content_json: &str) -> String {
+        let event = EventBuilder::new(Kind::Metadata, content_json)
+            .sign_with_keys(keys)
+            .unwrap();
+        let id_hex = event.id.to_hex();
+        let ok = client.send_event(event).await.expect("send kind:0");
+        assert!(ok.accepted, "kind:0 not accepted: {}", ok.message);
+        id_hex
+    }
+
+    /// Query latest kind:0 for `pubkey_hex` via REST `POST /query` (relay's
+    /// bridge endpoint; with `BUZZ_REQUIRE_AUTH_TOKEN=false` the dev-mode
+    /// `X-Pubkey` header is sufficient — no NIP-98 mint needed). Returns the
+    /// list of event JSON values (typically 0 or 1 since kind:0 is
+    /// NIP-01-replaceable).
+    async fn query_kind0(http_base: &str, pubkey_hex: &str) -> Vec<serde_json::Value> {
+        let client = reqwest::Client::new();
+        let filters = serde_json::json!([{
+            "kinds": [0],
+            "authors": [pubkey_hex],
+            "limit": 1,
+        }]);
+        let resp = client
+            .post(format!("{http_base}/query"))
+            .header("X-Pubkey", pubkey_hex)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&filters).unwrap())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("POST /query against {http_base} failed: {e}"));
+        assert!(
+            resp.status().is_success(),
+            "POST /query against {http_base} returned {}",
+            resp.status()
+        );
+        resp.json().await.expect("parse /query JSON")
+    }
+
+    /// Extract the NIP-11 / extract_domain form of a host. Mirrors
+    /// `crates/buzz-relay/src/api/nip05.rs::extract_domain` — strips the
+    /// scheme prefix and any port, returning the bare hostname. The relay's
+    /// `canonicalize_nip05` requires a kind:0 `nip05` value to end in
+    /// `@<this domain>`. On the two-host harness with
+    /// `RELAY_URL=ws://localhost:3100`, that domain is `localhost`, so handles
+    /// must be registered as `local@localhost`.
+    fn extract_relay_domain(relay_url_env: &str) -> String {
+        // Match the relay's logic exactly: strip wss/ws, then take everything
+        // before the first ':' or '/' (port and path).
+        let s = relay_url_env
+            .trim_start_matches("wss://")
+            .trim_start_matches("ws://")
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        s.split([':', '/']).next().unwrap_or(s).to_string()
+    }
+
     /// Obligation: same pubkey can hold a different profile per community; kind:0
     /// replacement is scoped by `(community_id, pubkey)`.
+    ///
+    /// Wire-observable shape: the same keypair publishes kind:0 with
+    /// community-distinct content (`{"display_name":"A profile"}` vs
+    /// `{"display_name":"B profile"}`) on each host's WS-AUTH'd connection.
+    /// NIP-01 replaceable semantics mean the latest kind:0 per `(community_id,
+    /// pubkey)` is what subsequent queries return — REST `POST /query` on each
+    /// host returns the kind:0 *its* community has, never the other's.
+    ///
+    /// Sibling-not-replacement framing: this row asserts the *per-community*
+    /// view of the profile (the obligation text). The underlying SQL fence at
+    /// `crates/buzz-db/src/user.rs:140` (`UPDATE users SET ... WHERE
+    /// community_id = $N AND pubkey = $M`) AND the event-storage fence at
+    /// `crates/buzz-db/src/event.rs::get_events_by_ids` (or the equivalent
+    /// REQ-path filter) both contribute — same defense-in-depth shape Quinn
+    /// caught in `search_fts` (see that row's doc-comment). The mutate-bite
+    /// here drops the read-side community fence on kind:0 retrieval (the
+    /// query.rs / event.rs path that materialises `POST /query` results); a
+    /// dropped-fence leak surfaces as the other community's content in the
+    /// response. Distinct content per community is what makes the leak
+    /// observable on the wire (different content → different Nostr event id;
+    /// without distinct content, the symmetric setup-equivalence vacuity Dawn
+    /// caught in `audit_log` would collapse the leak into a same-id
+    /// indistinguishable wire return).
+    ///
+    /// Same pubkey on both connections is required by the obligation itself
+    /// ("same pubkey ... different profile per community"); it is what proves
+    /// the fence is `community_id`, not `pubkey`.
     #[tokio::test]
     #[ignore]
     async fn same_pubkey_distinct_profiles_in_two_communities() {
-        pending_lane(
-            "buzz-auth",
-            "kind:0 replace scoped by (community_id, pubkey); no cross-community inheritance",
+        let ws_a = to_ws(&url_a());
+        let ws_b = to_ws(&url_b());
+        let http_a = to_http(&url_a());
+        let http_b = to_http(&url_b());
+
+        // Same key on both connections — that's the property under test.
+        let keys = Keys::generate();
+        let pubkey_hex = keys.public_key().to_hex();
+
+        // Community-distinct content. Same JSON shape, different display_name:
+        // the difference is what makes a cross-community leak observable on
+        // the wire (a leak that returns the *other* community's kind:0 shows
+        // up as a different display_name string in the response).
+        let content_a = serde_json::json!({"display_name": "A profile"}).to_string();
+        let content_b = serde_json::json!({"display_name": "B profile"}).to_string();
+
+        // Connect each side, publish each side's kind:0.
+        let mut client_a = BuzzTestClient::connect(&ws_a, &keys)
+            .await
+            .expect("connect A");
+        let _id_a = publish_kind0(&mut client_a, &keys, &content_a).await;
+
+        let mut client_b = BuzzTestClient::connect(&ws_b, &keys)
+            .await
+            .expect("connect B");
+        let _id_b = publish_kind0(&mut client_b, &keys, &content_b).await;
+
+        // Let the ingest side-effect settle (handle_kind0_profile is async on
+        // the DB write path).
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // (1) Query on A: must return exactly one kind:0, whose content is
+        // A's. A leak that surfaces B's row would show up as content_b in this
+        // response.
+        let hits_a = query_kind0(&http_a, &pubkey_hex).await;
+        assert_eq!(
+            hits_a.len(),
+            1,
+            "A's /query for kind:0 by pubkey returned {} events; expected exactly 1. \
+             contents: {:?}",
+            hits_a.len(),
+            hits_a
+                .iter()
+                .map(|e| e["content"].as_str().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
         );
+        let a_content = hits_a[0]["content"].as_str().unwrap_or("");
+        assert_eq!(
+            a_content, content_a,
+            "A's kind:0 content is not A's profile — B's profile leaked through. \
+             got: {a_content:?}"
+        );
+
+        // (2) Mirror: query on B returns B's profile, not A's.
+        let hits_b = query_kind0(&http_b, &pubkey_hex).await;
+        assert_eq!(
+            hits_b.len(),
+            1,
+            "B's /query for kind:0 by pubkey returned {} events; expected exactly 1. \
+             contents: {:?}",
+            hits_b.len(),
+            hits_b
+                .iter()
+                .map(|e| e["content"].as_str().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
+        );
+        let b_content = hits_b[0]["content"].as_str().unwrap_or("");
+        assert_eq!(
+            b_content, content_b,
+            "B's kind:0 content is not B's profile — A's profile leaked through. \
+             got: {b_content:?}"
+        );
+
+        client_a.disconnect().await.expect("disconnect A");
+        client_b.disconnect().await.expect("disconnect B");
     }
 
     /// Obligation: the same NIP-05 local part can exist on two hosts; lookup only
     /// resolves handles for the requested host/community.
+    ///
+    /// Wire-observable shape: same local-part `alice` registered in BOTH
+    /// communities, but owned by **distinct** pubkeys (one per community).
+    /// `GET /.well-known/nostr.json?name=alice` against host A returns A's
+    /// pubkey; same query against host B returns B's pubkey. A cross-community
+    /// leak surfaces on the wire as wrong-pubkey-returned (not just
+    /// count-changes) — exactly the setup-equivalence vacuity defense Dawn
+    /// established in `audit_log` (distinct keys per community = the wrong
+    /// answer is observable in the response, not just absent from it).
+    ///
+    /// Registration mechanism: kind:0 (Metadata) publish over WS with
+    /// `{"nip05":"alice@<domain>"}`. The relay's side-effect handler at
+    /// `crates/buzz-relay/src/handlers/side_effects.rs::handle_kind0_profile`
+    /// validates the handle via `crates/buzz-relay/src/api/nip05.rs::canonicalize_nip05`
+    /// against `extract_domain(state.config.relay_url)` (the relay's configured
+    /// host) and then calls `update_user_profile(tenant.community(), pubkey, ...,
+    /// Some(handle))`. The domain piece is config-pinned (e.g. `"localhost"`
+    /// for `RELAY_URL=ws://localhost:3100`); the **community** scope is what
+    /// isolates, and that's what this row exercises.
+    ///
+    /// Mutate-bite (would-it-fail-without-the-fix): drop `community_id = $1`
+    /// from `crates/buzz-db/src/user.rs::get_user_by_nip05` (line 185 form
+    /// `WHERE community_id = $1 AND LOWER(nip05_handle) = LOWER($2)`). With
+    /// the community fence dropped, `LOWER(handle) = LOWER('alice@localhost')`
+    /// matches BOTH communities' rows; the LIMIT 1 picks one
+    /// non-deterministically — either A's or B's pubkey. From either host the
+    /// `GET /.well-known/nostr.json?name=alice` response will sometimes
+    /// resolve to the *other* community's pubkey (≠ the registered local
+    /// pubkey). The assertion `resolved_pubkey == own_community_pubkey` reds
+    /// because the resolved hex no longer matches the host's own user.
     #[tokio::test]
     #[ignore]
     async fn same_nip05_local_part_on_two_hosts_is_independent() {
-        pending_lane(
-            "buzz-auth",
-            "NIP-05 unique (community_id, lower(handle)); host A lookup never resolves B's",
+        let ws_a = to_ws(&url_a());
+        let ws_b = to_ws(&url_b());
+        let http_a = to_http(&url_a());
+        let http_b = to_http(&url_b());
+
+        // Distinct keys per community — the same local-part must resolve to
+        // each community's *own* pubkey. With identical keys, a leak would
+        // return the same pubkey from either host (indistinguishable on the
+        // wire). Distinct keys make the leak observable as
+        // wrong-pubkey-returned.
+        let keys_a = Keys::generate();
+        let keys_b = Keys::generate();
+        let pk_a_hex = keys_a.public_key().to_hex();
+        let pk_b_hex = keys_b.public_key().to_hex();
+        assert_ne!(pk_a_hex, pk_b_hex, "test design requires distinct pubkeys");
+
+        // Same local-part `alice` in both communities. The handle's domain
+        // piece must match `extract_domain(state.config.relay_url)` for
+        // `canonicalize_nip05` to accept — extract it dynamically rather than
+        // hard-code, so the test still works if RELAY_URL changes.
+        //
+        // `state.config.relay_url` isn't exposed over the wire; we read it
+        // from the env the harness was started with. The conformance recipe
+        // sets `RELAY_URL=ws://localhost:3100`, so the canonical domain is
+        // `localhost`. Fall back to `localhost` for the common case.
+        let relay_url_env =
+            std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3100".to_string());
+        let domain = extract_relay_domain(&relay_url_env);
+        let local = format!("alice_{}", uuid::Uuid::new_v4().simple());
+        let handle = format!("{local}@{domain}");
+        let content = serde_json::json!({"display_name": local, "nip05": handle}).to_string();
+
+        // Register each pubkey under the same local-part in its own community.
+        let mut client_a = BuzzTestClient::connect(&ws_a, &keys_a)
+            .await
+            .expect("connect A");
+        let _ = publish_kind0(&mut client_a, &keys_a, &content).await;
+
+        let mut client_b = BuzzTestClient::connect(&ws_b, &keys_b)
+            .await
+            .expect("connect B");
+        let _ = publish_kind0(&mut client_b, &keys_b, &content).await;
+
+        // Let the side-effect (handle_kind0_profile → update_user_profile)
+        // settle.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // (1) NIP-05 lookup on A: must resolve `alice` to A's pubkey, not B's.
+        let nip05_url_a = format!("{http_a}/.well-known/nostr.json?name={local}");
+        let resp_a = reqwest::get(&nip05_url_a)
+            .await
+            .unwrap_or_else(|e| panic!("GET {nip05_url_a} failed: {e}"));
+        assert_eq!(
+            resp_a.status(),
+            reqwest::StatusCode::OK,
+            "NIP-05 lookup on A must return 200"
         );
+        let body_a: serde_json::Value = resp_a.json().await.expect("parse NIP-05 JSON from A");
+        let resolved_a = body_a["names"][&local].as_str();
+        assert_eq!(
+            resolved_a,
+            Some(pk_a_hex.as_str()),
+            "NIP-05 lookup on A for local-part {local:?} must resolve to A's pubkey \
+             ({pk_a_hex}); got {resolved_a:?}. If this is B's pubkey ({pk_b_hex}), \
+             the community fence on `get_user_by_nip05` has been dropped and B's \
+             user leaked through A's lookup."
+        );
+
+        // (2) Mirror: same local-part on B resolves to B's pubkey, not A's.
+        let nip05_url_b = format!("{http_b}/.well-known/nostr.json?name={local}");
+        let resp_b = reqwest::get(&nip05_url_b)
+            .await
+            .unwrap_or_else(|e| panic!("GET {nip05_url_b} failed: {e}"));
+        assert_eq!(
+            resp_b.status(),
+            reqwest::StatusCode::OK,
+            "NIP-05 lookup on B must return 200"
+        );
+        let body_b: serde_json::Value = resp_b.json().await.expect("parse NIP-05 JSON from B");
+        let resolved_b = body_b["names"][&local].as_str();
+        assert_eq!(
+            resolved_b,
+            Some(pk_b_hex.as_str()),
+            "NIP-05 lookup on B for local-part {local:?} must resolve to B's pubkey \
+             ({pk_b_hex}); got {resolved_b:?}. If this is A's pubkey ({pk_a_hex}), \
+             the community fence on `get_user_by_nip05` has been dropped and A's \
+             user leaked through B's lookup."
+        );
+
+        client_a.disconnect().await.expect("disconnect A");
+        client_b.disconnect().await.expect("disconnect B");
     }
 }
 
