@@ -84,12 +84,31 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
             return Err(MediaError::HashMismatch);
         }
 
-        // 4. Resolve scopes (API token or dev mode)
-        let scopes = resolve_upload_scopes(headers, state, &auth_event.pubkey).await?;
+        // 4. Row zero: bind this upload to its community from the request host,
+        // identical to the WS door in `router.rs` and the bridge door in
+        // `bridge.rs`. Fail-closed: an unmapped host or lookup failure is a
+        // generic `NotFound` (404) — never a default tenant, never echoing the
+        // host, so an unauthenticated caller cannot probe which communities
+        // exist on this deployment.
+        //
+        // This MUST run before scope resolution so the API-token lookup is
+        // keyed on (community_id, token_hash) — see Gap 2 / row-44 conformance
+        // obligation. Resolving scopes without a tenant in hand would query
+        // api_tokens by hash alone, defeating the cross-community fence.
+        let raw_host = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let tenant = crate::tenant::bind_community(&state.db, raw_host)
+            .await
+            .map_err(|_| MediaError::NotFound)?;
+
+        // 5. Resolve scopes (API token or dev mode), scoped to the bound tenant.
+        let scopes = resolve_upload_scopes(headers, state, &tenant, &auth_event.pubkey).await?;
         buzz_auth::require_scope(&scopes, Scope::FilesWrite)
             .map_err(|_| MediaError::InsufficientScope)?;
 
-        // 5. Relay membership gate (NIP-43).
+        // 6. Relay membership gate (NIP-43).
         let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
         crate::api::relay_members::enforce_relay_membership(
             state,
@@ -98,20 +117,6 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         )
         .await
         .map_err(|_| MediaError::RelayMembershipRequired)?;
-
-        // 6. Row zero: bind this upload to its community from the request host,
-        // identical to the WS door in `router.rs` and the bridge door in
-        // `bridge.rs`. Fail-closed: an unmapped host or lookup failure is a
-        // generic `NotFound` (404) — never a default tenant, never echoing the
-        // host, so an unauthenticated caller cannot probe which communities
-        // exist on this deployment.
-        let raw_host = headers
-            .get(header::HOST)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let tenant = crate::tenant::bind_community(&state.db, raw_host)
-            .await
-            .map_err(|_| MediaError::NotFound)?;
 
         Ok(AuthenticatedUpload {
             auth_event,
@@ -605,14 +610,20 @@ fn extract_blossom_auth(headers: &HeaderMap) -> Result<nostr::Event, MediaError>
     Ok(event)
 }
 
-/// Resolve permission scopes for an upload caller.
+/// Resolve permission scopes for an upload caller, scoped to the request's tenant.
 ///
 /// Resolution order:
 /// 1. `X-Auth-Token: buzz_*` header — API token path (validates owner matches Blossom signer)
 /// 2. If `require_auth_token` is false (dev mode) — check pubkey allowlist, then grant file scopes
+///
+/// The token lookup is keyed on `(tenant.community(), token_hash)` — see
+/// [`buzz_db::api_token::get_api_token_by_hash_including_revoked`] for the
+/// row-44 conformance rationale. A token minted in community A presented to a
+/// host that resolves to community B must not authorize.
 async fn resolve_upload_scopes(
     headers: &HeaderMap,
     state: &AppState,
+    tenant: &TenantContext,
     blossom_pubkey: &nostr::PublicKey,
 ) -> Result<Vec<Scope>, MediaError> {
     // 1. API token path — desktop sends Blossom auth in Authorization + token in X-Auth-Token.
@@ -624,7 +635,7 @@ async fn resolve_upload_scopes(
         let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         let record = state
             .db
-            .get_api_token_by_hash_including_revoked(&hash)
+            .get_api_token_by_hash_including_revoked(tenant.community(), &hash)
             .await
             .map_err(|_| MediaError::Unauthorized)?
             .ok_or(MediaError::Unauthorized)?;

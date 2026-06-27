@@ -1289,8 +1289,10 @@ impl Db {
     }
 
     /// Create a new API token record.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_api_token(
         &self,
+        community_id: CommunityId,
         token_hash: &[u8],
         owner_pubkey: &[u8],
         name: &str,
@@ -1300,6 +1302,7 @@ impl Db {
     ) -> Result<Uuid> {
         api_token::create_api_token(
             &self.pool,
+            *community_id.as_uuid(),
             token_hash,
             owner_pubkey,
             name,
@@ -1310,9 +1313,11 @@ impl Db {
         .await
     }
 
-    /// Atomic conditional INSERT with 10-token limit.
+    /// Atomic conditional INSERT with 10-token limit (per (community, owner)).
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_api_token_if_under_limit(
         &self,
+        community_id: CommunityId,
         token_hash: &[u8],
         owner_pubkey: &[u8],
         name: &str,
@@ -1322,6 +1327,7 @@ impl Db {
     ) -> Result<Option<Uuid>> {
         api_token::create_api_token_if_under_limit(
             &self.pool,
+            *community_id.as_uuid(),
             token_hash,
             owner_pubkey,
             name,
@@ -1332,16 +1338,26 @@ impl Db {
         .await
     }
 
-    /// Look up an active (non-revoked) API token by its SHA-256 hash.
-    pub async fn get_api_token_by_hash(&self, hash: &[u8]) -> Result<Option<ApiTokenRecord>> {
+    /// Look up an active (non-revoked) API token by its SHA-256 hash,
+    /// scoped to the request's community.
+    ///
+    /// See [`api_token::get_api_token_by_hash_including_revoked`] for the
+    /// row-44 conformance rationale — the `(community_id, token_hash)` key
+    /// is enforced both by the storage UNIQUE index and by this WHERE clause.
+    pub async fn get_api_token_by_hash(
+        &self,
+        community_id: CommunityId,
+        hash: &[u8],
+    ) -> Result<Option<ApiTokenRecord>> {
         let row = sqlx::query(
             r#"
             SELECT id, token_hash, owner_pubkey, name, scopes, channel_ids,
                    created_at, expires_at, last_used_at, revoked_at
             FROM api_tokens
-            WHERE token_hash = $1 AND revoked_at IS NULL
+            WHERE community_id = $1 AND token_hash = $2 AND revoked_at IS NULL
             "#,
         )
+        .bind(community_id.as_uuid())
         .bind(hash)
         .fetch_optional(&self.pool)
         .await?;
@@ -1352,39 +1368,53 @@ impl Db {
         }
     }
 
-    /// Look up an API token by hash, including revoked.
+    /// Look up an API token by hash, including revoked, scoped to community.
     pub async fn get_api_token_by_hash_including_revoked(
         &self,
+        community_id: CommunityId,
         hash: &[u8],
     ) -> Result<Option<ApiTokenRecord>> {
-        api_token::get_api_token_by_hash_including_revoked(&self.pool, hash).await
+        api_token::get_api_token_by_hash_including_revoked(
+            &self.pool,
+            *community_id.as_uuid(),
+            hash,
+        )
+        .await
     }
 
-    /// Record a token usage (update `last_used_at`).
-    pub async fn touch_api_token(&self, hash: &[u8]) -> Result<()> {
-        sqlx::query("UPDATE api_tokens SET last_used_at = NOW() WHERE token_hash = $1")
-            .bind(hash)
-            .execute(&self.pool)
-            .await?;
+    /// Record a token usage (update `last_used_at`), scoped to community.
+    pub async fn touch_api_token(&self, community_id: CommunityId, hash: &[u8]) -> Result<()> {
+        sqlx::query(
+            "UPDATE api_tokens SET last_used_at = NOW() WHERE community_id = $1 AND token_hash = $2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(hash)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    /// Alias for [`touch_api_token`].
-    pub async fn update_token_last_used(&self, hash: &[u8]) -> Result<()> {
-        self.touch_api_token(hash).await
+    /// Alias for [`Self::touch_api_token`].
+    pub async fn update_token_last_used(
+        &self,
+        community_id: CommunityId,
+        hash: &[u8],
+    ) -> Result<()> {
+        self.touch_api_token(community_id, hash).await
     }
 
-    /// List all active (non-revoked) tokens, newest first.
-    pub async fn list_active_tokens(&self) -> Result<Vec<TokenSummary>> {
+    /// List all active (non-revoked) tokens in a community, newest first.
+    pub async fn list_active_tokens(&self, community_id: CommunityId) -> Result<Vec<TokenSummary>> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, owner_pubkey, scopes, created_at, expires_at
             FROM api_tokens
-            WHERE revoked_at IS NULL
+            WHERE community_id = $1 AND revoked_at IS NULL
             ORDER BY created_at DESC
             LIMIT 1000
             "#,
         )
+        .bind(community_id.as_uuid())
         .fetch_all(&self.pool)
         .await?;
 
@@ -1407,24 +1437,47 @@ impl Db {
         Ok(out)
     }
 
-    /// List all tokens for a pubkey (including revoked).
-    pub async fn list_tokens_by_owner(&self, pubkey: &[u8]) -> Result<Vec<ApiTokenRecord>> {
-        api_token::list_tokens_by_owner(&self.pool, pubkey).await
+    /// List all tokens for a (community, owner) pair (including revoked).
+    pub async fn list_tokens_by_owner(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Vec<ApiTokenRecord>> {
+        api_token::list_tokens_by_owner(&self.pool, *community_id.as_uuid(), pubkey).await
     }
 
-    /// Revoke a single token by ID.
+    /// Revoke a single token by ID, scoped to (community, owner).
     pub async fn revoke_token(
         &self,
+        community_id: CommunityId,
         id: Uuid,
         owner_pubkey: &[u8],
         revoked_by: &[u8],
     ) -> Result<bool> {
-        api_token::revoke_token(&self.pool, id, owner_pubkey, revoked_by).await
+        api_token::revoke_token(
+            &self.pool,
+            *community_id.as_uuid(),
+            id,
+            owner_pubkey,
+            revoked_by,
+        )
+        .await
     }
 
-    /// Revoke all active tokens for a pubkey.
-    pub async fn revoke_all_tokens(&self, owner_pubkey: &[u8], revoked_by: &[u8]) -> Result<u64> {
-        api_token::revoke_all_tokens(&self.pool, owner_pubkey, revoked_by).await
+    /// Revoke all active tokens for a (community, owner) pair.
+    pub async fn revoke_all_tokens(
+        &self,
+        community_id: CommunityId,
+        owner_pubkey: &[u8],
+        revoked_by: &[u8],
+    ) -> Result<u64> {
+        api_token::revoke_all_tokens(
+            &self.pool,
+            *community_id.as_uuid(),
+            owner_pubkey,
+            revoked_by,
+        )
+        .await
     }
 
     /// Create a new workflow.
