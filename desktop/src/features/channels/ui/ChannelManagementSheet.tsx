@@ -54,6 +54,7 @@ import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import {
   AuxiliaryPanelHeader,
+  AuxiliaryPanelHeaderActions,
   AuxiliaryPanelHeaderGroup,
   AuxiliaryPanelTitle,
   auxiliaryPanelContentPaddingClass,
@@ -320,7 +321,7 @@ export function ChannelManagementSheet({
             "h-full w-full cursor-default overflow-hidden border-l-0 p-0",
             animateSplitEnter && PANEL_ENTER_MOTION_CLASS,
             isDark
-              ? "bg-background/85 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75"
+              ? "bg-background/85 backdrop-blur-xl supports-backdrop-filter:bg-background/75"
               : "bg-background",
           )}
           data-testid="channel-management-sheet"
@@ -368,7 +369,7 @@ export function ChannelManagementSheet({
               PANEL_ENTER_MOTION_CLASS,
               "w-[380px] cursor-default overflow-hidden p-0 data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right data-[state=closed]:duration-200",
               isDark
-                ? "bg-background/85 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75"
+                ? "bg-background/85 backdrop-blur-xl supports-backdrop-filter:bg-background/75"
                 : "bg-background",
             )}
             data-testid="channel-management-sheet"
@@ -681,30 +682,25 @@ function ChannelManagementPanelContent({
     <>
       {isSplitLayout ? (
         <AuxiliaryPanelHeader>
-          <AuxiliaryPanelHeaderGroup>
-            {activeView === "canvas" ? (
-              <Button
-                aria-label="Back to channel"
-                className="shrink-0"
-                data-testid="channel-management-back"
-                onClick={() => setActiveView("summary")}
-                size="icon"
-                type="button"
-                variant="outline"
-              >
-                <ChevronLeft />
-              </Button>
-            ) : null}
+          <AuxiliaryPanelHeaderGroup
+            backButtonAriaLabel="Back to channel"
+            backButtonTestId="channel-management-back"
+            onBack={
+              activeView === "canvas"
+                ? () => setActiveView("summary")
+                : undefined
+            }
+          >
             <DialogPrimitive.Title asChild>
               <AuxiliaryPanelTitle>
                 {activeView === "canvas" ? "Canvas" : "Channel"}
               </AuxiliaryPanelTitle>
             </DialogPrimitive.Title>
           </AuxiliaryPanelHeaderGroup>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          <AuxiliaryPanelHeaderActions>
             <Button
               aria-label="Close channel management"
-              className="relative z-[60]"
+              className="relative z-60"
               data-testid="channel-management-close"
               onClick={() => onOpenChange(false)}
               onPointerDown={(event) => {
@@ -718,7 +714,7 @@ function ChannelManagementPanelContent({
             >
               <X />
             </Button>
-          </div>
+          </AuxiliaryPanelHeaderActions>
           <DialogPrimitive.Description className="sr-only">
             Channel settings
           </DialogPrimitive.Description>
@@ -728,8 +724,8 @@ function ChannelManagementPanelContent({
           className={cn(
             "relative z-10 flex min-h-11 flex-row items-center gap-3 space-y-0 border-b border-border/35 px-3 py-1.5 text-left shadow-none",
             isDark
-              ? "bg-background/70 backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
-              : "bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70",
+              ? "bg-background/70 backdrop-blur-xl supports-backdrop-filter:bg-background/55"
+              : "bg-background/80 backdrop-blur-md supports-backdrop-filter:bg-background/70",
           )}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -751,7 +747,7 @@ function ChannelManagementPanelContent({
           </div>
           <Button
             aria-label="Close channel management"
-            className="relative z-[60]"
+            className="relative z-60"
             data-testid="channel-management-close"
             onClick={() => onOpenChange(false)}
             onPointerDown={(event) => {

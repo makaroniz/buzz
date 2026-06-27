@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowLeft, CircleDot, Octagon, TerminalSquare, X } from "lucide-react";
+import { CircleDot, Octagon, Settings, TerminalSquare, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
@@ -12,9 +12,11 @@ import { useStickToBottom } from "@/shared/hooks/useStickToBottom";
 import { cn } from "@/shared/lib/cn";
 import {
   AuxiliaryPanelHeader,
+  AuxiliaryPanelHeaderActions,
   AuxiliaryPanelHeaderGroup,
   AuxiliaryPanelTitle,
   auxiliaryPanelContentPaddingClass,
+  auxiliaryPanelHeaderPaddingClass,
 } from "@/shared/layout/AuxiliaryPanelHeader";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -28,6 +30,12 @@ import {
 import { THREAD_PANEL_MIN_WIDTH_PX } from "@/shared/hooks/useThreadPanelWidth";
 import { Switch } from "@/shared/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import type { ChannelAgentSessionAgent } from "./useChannelAgentSessions";
 
 type AgentSessionThreadPanelProps = {
@@ -63,6 +71,7 @@ export function AgentSessionThreadPanel({
 
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
   const rawFeedScopeKey = `${agent.pubkey}:${channel?.id ?? "all"}`;
+  const rawFeedSwitchId = React.useId();
   const [rawFeedState, setRawFeedState] = React.useState(() => ({
     scopeKey: rawFeedScopeKey,
     show: false,
@@ -96,7 +105,7 @@ export function AgentSessionThreadPanel({
   }
 
   const agentHeaderActions = (
-    <div className="ml-auto flex shrink-0 items-center gap-2">
+    <AuxiliaryPanelHeaderActions>
       {isLive && isWorking ? (
         <Badge className="shrink-0 gap-1 px-2 py-0 text-2xs" variant="default">
           <CircleDot className="h-2.5 w-2.5" />
@@ -104,32 +113,57 @@ export function AgentSessionThreadPanel({
         </Badge>
       ) : null}
       {isLive ? (
-        <div
-          className="flex min-w-19 shrink-0 items-center justify-end gap-2"
-          title={
-            showRawFeed
-              ? "Hide raw JSON-RPC payloads."
-              : channel
-                ? "Show raw JSON-RPC payloads for this channel."
-                : "Show raw JSON-RPC payloads for this agent."
-          }
-        >
-          <label
-            className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground"
-            htmlFor="agent-session-raw-feed-switch"
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="Open activity settings"
+              data-testid="agent-session-settings-menu-trigger"
+              size="icon"
+              title="Activity settings"
+              type="button"
+              variant="ghost"
+            >
+              <Settings />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="min-w-56"
+            onCloseAutoFocus={(event) => event.preventDefault()}
           >
-            <TerminalSquare className="h-3 w-3" />
-            Raw
-          </label>
-          <Switch
-            aria-label={showRawFeed ? "Hide raw feed" : "Show raw feed"}
-            checked={showRawFeed}
-            className="shrink-0 data-[state=unchecked]:bg-muted-foreground/45 [&>span]:bg-white"
-            data-testid="agent-session-toggle-raw-feed"
-            id="agent-session-raw-feed-switch"
-            onCheckedChange={handleRawFeedChange}
-          />
-        </div>
+            <DropdownMenuItem
+              className="gap-3 pr-2"
+              onSelect={(event) => {
+                event.preventDefault();
+                handleRawFeedChange(!showRawFeed);
+              }}
+              title={
+                showRawFeed
+                  ? "Hide raw JSON-RPC payloads."
+                  : channel
+                    ? "Show raw JSON-RPC payloads for this channel."
+                    : "Show raw JSON-RPC payloads for this agent."
+              }
+            >
+              <TerminalSquare className="h-4 w-4 text-muted-foreground" />
+              <label
+                className="min-w-0 flex-1 text-sm font-medium"
+                htmlFor={rawFeedSwitchId}
+              >
+                Raw activity
+              </label>
+              <Switch
+                aria-label={showRawFeed ? "Hide raw feed" : "Show raw feed"}
+                checked={showRawFeed}
+                className="shrink-0 data-[state=unchecked]:bg-muted-foreground/45 [&>span]:bg-white"
+                data-testid="agent-session-toggle-raw-feed"
+                id={rawFeedSwitchId}
+                onCheckedChange={handleRawFeedChange}
+                onClick={(event) => event.stopPropagation()}
+              />
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : null}
       {isLive && isWorking ? (
         <Tooltip>
@@ -167,23 +201,16 @@ export function AgentSessionThreadPanel({
       >
         <X />
       </Button>
-    </div>
+    </AuxiliaryPanelHeaderActions>
   );
 
   const agentHeaderContent = (
     <>
-      <AuxiliaryPanelHeaderGroup>
-        <Button
-          aria-label="Back from activity"
-          className="shrink-0"
-          data-testid="agent-session-back"
-          onClick={onBackToProfile}
-          size="icon"
-          type="button"
-          variant="outline"
-        >
-          <ArrowLeft />
-        </Button>
+      <AuxiliaryPanelHeaderGroup
+        backButtonAriaLabel="Back from activity"
+        backButtonTestId="agent-session-back"
+        onBack={onBackToProfile}
+      >
         <AuxiliaryPanelTitle>
           {showRawFeed ? "Raw ACP Activity" : "Activity"}
         </AuxiliaryPanelTitle>
@@ -199,7 +226,7 @@ export function AgentSessionThreadPanel({
       className={cn(
         "min-h-0 flex-1 overflow-y-auto px-3 pb-4",
         isSplitLayout && auxiliaryPanelContentPaddingClass,
-        !isSplitLayout && (isFloatingOverlay ? "pt-4" : "pt-[3.25rem]"),
+        !isSplitLayout && (isFloatingOverlay ? "pt-4" : "pt-13"),
       )}
     >
       <ManagedAgentSessionPanel
@@ -248,7 +275,7 @@ export function AgentSessionThreadPanel({
         {!isOverlay ? (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[3.25rem] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
+            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-13 bg-background/75 backdrop-blur-md supports-backdrop-filter:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/35"
           />
         ) : null}
 
@@ -256,8 +283,8 @@ export function AgentSessionThreadPanel({
           className={cn(
             "flex cursor-default select-none items-center",
             isSinglePanelView
-              ? `relative ${PANEL_SINGLE_COLUMN_HEADER_LAYER_CLASS} -mb-[3.25rem] min-h-[3.25rem] shrink-0 gap-2.5 bg-background/80 px-4 py-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:pl-6 sm:pr-3 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55`
-              : "relative z-50 min-h-[3.25rem] shrink-0 gap-3 bg-background/80 px-5 py-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55",
+              ? `relative ${PANEL_SINGLE_COLUMN_HEADER_LAYER_CLASS} -mb-13 min-h-13 shrink-0 gap-2.5 bg-background/80 ${auxiliaryPanelHeaderPaddingClass} backdrop-blur-md supports-backdrop-filter:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/55`
+              : `relative z-50 min-h-13 shrink-0 gap-3 bg-background/80 ${auxiliaryPanelHeaderPaddingClass} backdrop-blur-md supports-backdrop-filter:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/55`,
           )}
           data-tauri-drag-region
         >
