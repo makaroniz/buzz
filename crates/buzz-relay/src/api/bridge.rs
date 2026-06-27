@@ -1165,6 +1165,85 @@ mod tests {
             .expect("same event id in a different community uses a distinct seen-set");
     }
 
+    /// Attack 3 same-pod regression guard: replacing the process-local moka
+    /// cache with a shared Redis seen-set must not weaken same-pod replay
+    /// rejection. A single guard instance, called twice with the same
+    /// `TenantContext` and the same event id, MUST reject the second call.
+    /// Bites if `try_mark`'s admit/reject mapping is reversed or no-op'd.
+    #[tokio::test]
+    #[ignore = "requires Redis"]
+    async fn nip98_replay_guard_rejects_same_pod_same_community_replay() {
+        let pool = redis_pool();
+        let pod = buzz_pubsub::RedisNip98ReplayGuard::new(pool);
+        let tenant = fresh_tenant("relay-a.example");
+        let event_id_bytes = fresh_nip98_event_id_bytes();
+
+        check_nip98_replay_with_guard(&pod, &tenant, event_id_bytes)
+            .await
+            .expect("first claim on a fresh event id must succeed");
+
+        let (status, _) = check_nip98_replay_with_guard(&pod, &tenant, event_id_bytes)
+            .await
+            .expect_err("same-pod replay of the same id+community must reject");
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// Attack 3 fail-closed guard: a stateless worker that loses Redis MUST
+    /// reject the request, never admit it. The shared seen-set is the
+    /// freshness fence; degrading to "best effort, allow on error" forfeits
+    /// the proof (per the `Nip98ReplayGuard` trait contract,
+    /// `buzz-auth/src/nip98_replay.rs:70-73`).
+    ///
+    /// This test does not require Redis — it injects a guard that always
+    /// returns `Err`, exercising the `Err =>` arm in
+    /// `check_nip98_replay_with_guard` directly. Bites if the arm is changed
+    /// to admit (`Ok(())` / `Ok(true)`) instead of returning 401.
+    #[tokio::test]
+    async fn nip98_replay_check_fails_closed_when_guard_errors() {
+        use buzz_auth::AuthError;
+        use nostr::EventId;
+        use std::future::Future;
+        use std::pin::Pin;
+
+        struct AlwaysErrGuard;
+        impl Nip98ReplayGuard for AlwaysErrGuard {
+            fn try_mark<'a>(
+                &'a self,
+                _ctx: &'a buzz_core::TenantContext,
+                _event_id: &'a EventId,
+                _ttl_secs: u64,
+            ) -> Pin<Box<dyn Future<Output = Result<bool, AuthError>> + Send + 'a>> {
+                Box::pin(async {
+                    Err(AuthError::Internal(
+                        "simulated Redis pool acquire failure".into(),
+                    ))
+                })
+            }
+        }
+
+        let guard = AlwaysErrGuard;
+        let tenant = fresh_tenant("relay-a.example");
+        let event_id_bytes = fresh_nip98_event_id_bytes();
+
+        let (status, body) = check_nip98_replay_with_guard(&guard, &tenant, event_id_bytes)
+            .await
+            .expect_err("guard error MUST fail closed, never admit");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "fail-closed must return 401"
+        );
+        let msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            msg.contains("replay check unavailable"),
+            "fail-closed body must carry the unavailable signal so callers can \
+             distinguish unavailability from replay; got body = {body:?}"
+        );
+    }
+
     /// Build a kind:30174 engram envelope authored by `agent`, tagged with `owner`.
     fn engram_envelope(agent: &Keys, owner_hex: &str) -> buzz_core::StoredEvent {
         let d_tag = Tag::custom(
