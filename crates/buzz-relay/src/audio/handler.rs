@@ -837,7 +837,7 @@ async fn emit_participant_event(
 
     // 2. Mark as locally-published before Redis broadcast to prevent
     //    double-delivery when the event echoes back through the subscriber loop.
-    state.mark_local_event(&event.id);
+    state.mark_local_event(tenant.community(), &event.id);
 
     // 3. Local fan-out to WS subscribers on this node, through the guarded send
     //    path so a stale subscription on a removed/non-member connection cannot
@@ -852,7 +852,9 @@ async fn emit_participant_event(
         .publish_event(tenant, EventTopic::Channel(parent_channel_id), &event)
         .await
     {
-        state.local_event_ids.invalidate(&event.id.to_bytes());
+        state
+            .local_event_ids
+            .invalidate(&(tenant.community(), event.id.to_bytes()));
         warn!(
             event_id = %event_id_hex,
             channel_id = %parent_channel_id,

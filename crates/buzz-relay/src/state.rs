@@ -226,11 +226,18 @@ pub struct AppState {
     /// Relay signing keypair — used to sign system messages (kind 40099).
     pub relay_keypair: nostr::Keys,
 
-    /// Recently-published event IDs for local-echo deduplication.
-    /// Events fanned out in-process are added here; the Redis subscriber
-    /// consumer skips them to avoid double delivery. Entries expire after
-    /// 60 seconds via moka's TTL eviction — bounded regardless of subscriber health.
-    pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
+    /// Recently-published event IDs for local-echo deduplication, keyed by
+    /// `(community_id, event_id)`. Events fanned out in-process are added here;
+    /// the Redis subscriber consumer skips them to avoid double delivery.
+    ///
+    /// The community is part of the key because the same Nostr event id can
+    /// legitimately exist in two communities (channel-less events, and
+    /// same-channel-UUID/same-`h` events across tenants). Keying on the bare id
+    /// would let a local publish in community A suppress delivery of a distinct
+    /// event with the same id arriving via Redis for community B — a
+    /// cross-community non-interference violation. Entries expire after 60
+    /// seconds via moka's TTL eviction — bounded regardless of subscriber health.
+    pub local_event_ids: Arc<moka::sync::Cache<(CommunityId, [u8; 32]), ()>>,
     /// Membership cache: (community_id, channel_id, pubkey_bytes) → is_member.
     /// Short TTL (10s) — membership changes are rare but must propagate.
     #[allow(clippy::type_complexity)]
@@ -429,10 +436,14 @@ impl AppState {
         )
     }
 
-    /// Record an event ID as locally-published for dedup.
-    /// Called before Redis publish so the multi-node consumer can skip the echo.
-    pub fn mark_local_event(&self, event_id: &nostr::EventId) {
-        self.local_event_ids.insert(event_id.to_bytes(), ());
+    /// Record an event ID as locally-published for dedup, scoped to the
+    /// community it was fanned out in. Called before Redis publish so the
+    /// multi-node consumer can skip the echo for *this* community only — a
+    /// same-id event in another community is a distinct delivery and must not
+    /// be suppressed.
+    pub fn mark_local_event(&self, community: CommunityId, event_id: &nostr::EventId) {
+        self.local_event_ids
+            .insert((community, event_id.to_bytes()), ());
     }
 
     /// Check channel membership with a 10-second cache. Falls back to DB on miss.

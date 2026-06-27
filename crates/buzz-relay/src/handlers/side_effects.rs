@@ -652,7 +652,7 @@ pub async fn emit_membership_notification(
     // the global membership notification and can subscribe to the new channel.
     // Use the nil UUID sentinel for globally-scoped events, matching
     // `dispatch_persistent_event` and `fan_out_pubsub_event`.
-    state.mark_local_event(&stored.event.id);
+    state.mark_local_event(tenant.community(), &stored.event.id);
     if let Err(e) = state
         .pubsub
         .publish_event(tenant, EventTopic::Global, &stored.event)
@@ -660,7 +660,7 @@ pub async fn emit_membership_notification(
     {
         state
             .local_event_ids
-            .invalidate(&stored.event.id.to_bytes());
+            .invalidate(&(tenant.community(), stored.event.id.to_bytes()));
         warn!(
             channel = %channel_id,
             target = %target_hex,

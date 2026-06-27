@@ -199,11 +199,14 @@ pub async fn fan_out_pubsub_event(state: &Arc<AppState>, channel_event: buzz_pub
     let stored = StoredEvent::new(channel_event.event, channel_id);
 
     // Skip events that were already fanned out in-process (local echo). The
-    // cache has TTL-based eviction (60s) so entries are bounded regardless of
-    // subscriber health.
+    // dedup key is `(community_id, event_id)` — a same-id event arriving for a
+    // *different* community is a distinct delivery and must not be suppressed.
+    // The cache has TTL-based eviction (60s) so entries are bounded regardless
+    // of subscriber health.
     let event_id_bytes = stored.event.id.to_bytes();
-    if state.local_event_ids.get(&event_id_bytes).is_some() {
-        state.local_event_ids.invalidate(&event_id_bytes);
+    let echo_key = (community_id, event_id_bytes);
+    if state.local_event_ids.get(&echo_key).is_some() {
+        state.local_event_ids.invalidate(&echo_key);
         return;
     }
 
@@ -257,7 +260,7 @@ pub(crate) async fn dispatch_persistent_event(
         Some(channel_id) => EventTopic::Channel(channel_id),
         None => EventTopic::Global,
     };
-    state.mark_local_event(&stored_event.event.id);
+    state.mark_local_event(tenant.community(), &stored_event.event.id);
     if let Err(e) = state
         .pubsub
         .publish_event(tenant, topic, &stored_event.event)
@@ -265,7 +268,7 @@ pub(crate) async fn dispatch_persistent_event(
     {
         state
             .local_event_ids
-            .invalidate(&stored_event.event.id.to_bytes());
+            .invalidate(&(tenant.community(), stored_event.event.id.to_bytes()));
         warn!(event_id = %event_id_hex, "Redis publish failed: {e}");
     }
 
@@ -687,14 +690,16 @@ async fn handle_ephemeral_event(
 
         // Mark as local before Redis publish to prevent double-delivery when
         // the event comes back through the Redis subscriber loop.
-        state.mark_local_event(&event.id);
+        state.mark_local_event(conn.tenant.community(), &event.id);
 
         if let Err(e) = state
             .pubsub
             .publish_event(&conn.tenant, EventTopic::Channel(ch_id), &event)
             .await
         {
-            state.local_event_ids.invalidate(&event.id.to_bytes());
+            state
+                .local_event_ids
+                .invalidate(&(conn.tenant.community(), event.id.to_bytes()));
             warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral publish failed: {e}");
         }
 
@@ -713,14 +718,16 @@ async fn handle_ephemeral_event(
         // The nil UUID is ONLY a Redis routing key — it never reaches the DB.
         // On the receiving end (main.rs subscriber loop), `is_nil()` is checked
         // and converted back to `None` so `fan_out()` uses the global index.
-        state.mark_local_event(&event.id);
+        state.mark_local_event(conn.tenant.community(), &event.id);
 
         if let Err(e) = state
             .pubsub
             .publish_event(&conn.tenant, EventTopic::Global, &event)
             .await
         {
-            state.local_event_ids.invalidate(&event.id.to_bytes());
+            state
+                .local_event_ids
+                .invalidate(&(conn.tenant.community(), event.id.to_bytes()));
             warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral global publish failed: {e}");
         }
 
@@ -887,13 +894,15 @@ async fn handle_agent_observer_event(
         }
     }
 
-    state.mark_local_event(&event.id);
+    state.mark_local_event(conn.tenant.community(), &event.id);
     if let Err(e) = state
         .pubsub
         .publish_event(&conn.tenant, EventTopic::Global, &event)
         .await
     {
-        state.local_event_ids.invalidate(&event.id.to_bytes());
+        state
+            .local_event_ids
+            .invalidate(&(conn.tenant.community(), event.id.to_bytes()));
         warn!(conn_id = %conn_id, event_id = %event_id_hex, "Agent observer publish failed: {e}");
     }
 
@@ -1214,11 +1223,12 @@ mod tests {
             let (_conn_id, mut rx) = register_presence_sub(&state, "presence");
             let event = presence_event("online");
 
-            state.mark_local_event(&event.id);
+            let community = buzz_core::tenant::CommunityId::from_uuid(Uuid::nil());
+            state.mark_local_event(community, &event.id);
             fan_out_pubsub_event(
                 &state,
                 ChannelEvent {
-                    community_id: buzz_core::tenant::CommunityId::from_uuid(Uuid::nil()),
+                    community_id: community,
                     topic: EventTopic::Global,
                     event,
                 },
@@ -1229,6 +1239,49 @@ mod tests {
                 rx.try_recv().is_err(),
                 "Redis echo of locally fanned-out presence must be suppressed"
             );
+        }
+
+        #[tokio::test]
+        async fn local_echo_suppression_is_scoped_to_its_community() {
+            // Non-interference: a local publish of event X in community A must
+            // NOT suppress delivery of a *distinct* event sharing X's id arriving
+            // via Redis for community B. The echo-dedup key is
+            // `(community_id, event_id)`, so marking A/X leaves B/X deliverable.
+            // Before this fix the cache was keyed on the bare event id, so an
+            // action in A would silently drop B's same-id delivery for the TTL.
+            let state = test_state().await;
+            let (_conn_id, mut rx) = register_presence_sub(&state, "presence");
+
+            // The subscriber registers under the nil community (see
+            // `register_global_sub`), so B — the community whose delivery must
+            // survive — is nil. A is a *foreign* community: a local mark there
+            // must be irrelevant to B's fan-out.
+            let community_a = buzz_core::tenant::CommunityId::from_uuid(Uuid::new_v4());
+            let community_b = buzz_core::tenant::CommunityId::from_uuid(Uuid::nil());
+
+            // Same Nostr event id, delivered for community B.
+            let event = presence_event("online");
+            let event_id = event.id;
+
+            // A locally published this id; mark it for A only.
+            state.mark_local_event(community_a, &event_id);
+
+            // B's same-id event arrives via the Redis subscriber path.
+            fan_out_pubsub_event(
+                &state,
+                ChannelEvent {
+                    community_id: community_b,
+                    topic: EventTopic::Global,
+                    event,
+                },
+            )
+            .await;
+
+            let delivered = event_from_ws_message(
+                rx.try_recv()
+                    .expect("B's same-id event must be delivered — A's local mark is B-irrelevant"),
+            );
+            assert_eq!(delivered.id, event_id);
         }
 
         #[tokio::test]
@@ -1332,7 +1385,7 @@ mod tests {
 
             let event = presence_event("online");
             let event_id = event.id;
-            origin.mark_local_event(&event.id);
+            origin.mark_local_event(tenant.community(), &event.id);
             origin
                 .pubsub
                 .publish_event(&tenant, EventTopic::Global, &event)

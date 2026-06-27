@@ -319,13 +319,15 @@ async fn publish_channelless_ephemeral(
     tenant: &TenantContext,
     event: &nostr::Event,
 ) {
-    state.mark_local_event(&event.id);
+    state.mark_local_event(tenant.community(), &event.id);
     if let Err(e) = state
         .pubsub
         .publish_event(tenant, buzz_pubsub::EventTopic::Global, event)
         .await
     {
-        state.local_event_ids.invalidate(&event.id.to_bytes());
+        state
+            .local_event_ids
+            .invalidate(&(tenant.community(), event.id.to_bytes()));
         tracing::warn!(event_id = %event.id, "mesh call-me-now global publish failed: {e}");
     }
     let stored = StoredEvent::new(event.clone(), None);
