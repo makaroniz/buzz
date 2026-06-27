@@ -64,8 +64,8 @@ Buzz is a Rust monorepo, licensed Apache 2.0 under Block, Inc.
      (multi-node fan-out wired; local-echo dedup via AppState.local_event_ids).
 
      ┌──────────────┐
-     │  Typesense   │  ← buzz-search (bounded worker queue)
-     │ (full-text   │
+     │  Postgres    │  ← buzz-search (FTS over the search_tsv
+     │ (full-text   │     generated column + GIN index)
      │   search)    │
      └──────────────┘
 ```
@@ -80,7 +80,7 @@ buzz-core    (zero I/O — types, verification, filter matching, kind registry)
     ├── buzz-db          (Postgres: events, channels, tokens, workflows, audit)
     ├── buzz-auth        (NIP-42, NIP-98, API tokens, scopes, rate limiting)
     ├── buzz-pubsub      (Redis pub/sub, presence, typing indicators)
-    ├── buzz-search      (Typesense: index, query, delete)
+    ├── buzz-search      (Postgres FTS: query, delete)
     ├── buzz-audit       (hash-chain tamper-evident log)
     └── buzz-workflow    (YAML-as-code automation engine)
          │
@@ -462,21 +462,32 @@ EXPIRE buzz:typing:{channel_id} 60
 
 ---
 
-### buzz-search — Typesense Integration
+### buzz-search — Postgres FTS Integration
 
-Full-text search via Typesense. All HTTP calls use `reqwest` with `X-TYPESENSE-API-KEY`. In multi-community mode, indexed documents and every query filter include `community_id`; the shared Typesense collection is infrastructure, not a cross-community result space.
-
-**Collection schema (7 fields):** `id`, `content`, `kind` (int32), `pubkey` (facet), `channel_id` (facet, optional), `created_at` (int64, default sort), `tags_flat` (string[]).
+Full-text search via Postgres FTS. Events are searchable through the
+`events.search_tsv` generated `tsvector` column (populated on insert, indexed
+by a GIN index) — there is no separate search service or out-of-band indexer.
+Privacy-sensitive kinds are excluded at the storage level (the `search_tsv`
+`CASE WHEN kind IN (...)` yields `NULL`, which never matches `@@`). In
+multi-community mode every query filter includes `community_id`, so the shared
+`events` table is infrastructure, not a cross-community result space; the relay
+re-authorizes every candidate hit before returning it.
 
 **Key behaviors:**
-- `ensure_collection()` is idempotent: handles 409 race condition (another process created it between check and create).
-- Tag flattening uses `\x1f` (ASCII unit separator) to avoid ambiguity with tag values containing colons (e.g., URLs in `r` tags).
-- Upsert indexing: `POST /documents?action=upsert` (single), `POST /documents/import?action=upsert` (batch JSONL).
-- `delete_event()` validates event ID (64-char hex) before constructing the URL — prevents path injection.
-- `delete_event()` is idempotent: 404 treated as success.
-- Permission filtering is **caller's responsibility** — `buzz-search` provides the `filter_by` mechanism but does not enforce access policy.
+- `SearchService::new(pool)` wraps a `PgPool`; `search(&SearchQuery)` runs a
+  parameterized FTS query against the `events.search_tsv` GIN index and returns
+  `SearchResult` (candidate `SearchHit`s).
+- `ChannelScope` makes the channel constraint explicit (`Any` /
+  `ChannelLessOnly` / `Channels` / `ChannelsOrChannelLess`), closing the
+  ambiguity the old `Option<Vec<Uuid>> + bool` matrix could not express.
+- Every query carries `community_id`; the FTS predicate is BitmapAnd-ed with
+  the community-leading btree filters so a query never crosses tenants.
+- Permission filtering is **caller's responsibility** — `buzz-search` returns
+  candidate hits; the relay re-authorizes each one (channel membership, `#p`,
+  owner gates) before delivering it.
 
-**Does NOT:** enforce channel membership or access control. Does NOT store events in Postgres.
+**Does NOT:** enforce channel membership or access control. Does NOT write
+events (indexing is the `search_tsv` generated column on the `events` insert).
 
 ---
 
@@ -652,7 +663,7 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | GET | `/api/channels/{channel_id}/messages` | List channel messages |
 | GET | `/api/channels/{channel_id}/threads/{event_id}` | Get message thread |
 | GET/POST | `/api/channels/{channel_id}/workflows` | List/create channel workflows |
-| GET | `/api/search` | Full-text search via Typesense |
+| GET | `/api/search` | Full-text search via Postgres FTS |
 | GET | `/api/agents` | List agent accounts |
 | GET/PUT | `/api/presence` | Presence status (bulk) / set presence |
 | GET | `/api/feed` | Personalized feed (mentions/needs-action/activity) |
@@ -831,9 +842,8 @@ Docker Compose provides the full local development stack. All services include h
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| Postgres | `postgres:17-alpine` | 5432 | Primary event store — events, channels, tokens, workflows, audit |
+| Postgres | `postgres:17-alpine` | 5432 | Primary event store — events, channels, tokens, workflows, audit; full-text search (`search_tsv` GIN) |
 | Redis | `redis:7-alpine` | 6379 | Pub/sub fan-out, presence (SET EX), typing (sorted sets) |
-| Typesense | `typesense/typesense:27.1` | 8108 | Full-text search index |
 | Adminer | `adminer` | 8082 | DB web UI (dev only) |
 | MinIO | `minio/minio` | 9000 (API), 9001 (console) | S3-compatible object storage (media) |
 | Prometheus | `prom/prometheus` | 9090 | Metrics collection |
@@ -859,9 +869,16 @@ Docker Compose provides the full local development stack. All services include h
 | `buzz:presence:{pubkey_hex}` | String | 90s | Online/away status (single-community form; shared multi-community Redis must scope by community) |
 | `buzz:typing:{channel_uuid}` | Sorted Set | 60s | Active typers (5s window; shared multi-community Redis must scope by community) |
 
-### Typesense Collection
+### Full-Text Search (Postgres FTS)
 
-Single collection (`events` by default, configurable via `TYPESENSE_COLLECTION`). Schema today: `id`, `content`, `kind` (int32), `pubkey` (facet), `channel_id` (facet, optional), `created_at` (int64, default sort), `tags_flat` (string[]). Multi-community mode adds faceted `community_id` and either prefixes document IDs with community or makes all upsert/delete/refetch paths carry community context.
+Search runs over the `events.search_tsv` generated `tsvector` column on the
+`events` table (no separate collection or service). The column is populated on
+insert — `to_tsvector('simple', content)` — and excludes privacy-sensitive
+kinds via `CASE WHEN kind IN (1059, 30300, 30622) THEN NULL`, so those rows are
+storage-level unsearchable (a `NULL` tsvector never matches `@@`). A GIN index
+(`idx_events_search_tsv`) backs the `@@` probe; in multi-community mode the
+community-leading btree filters BitmapAnd with the GIN probe so every query is
+fenced to its `community_id`.
 
 ---
 

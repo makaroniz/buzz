@@ -192,7 +192,7 @@ Not afterthoughts — ship blockers:
 | Throughput | ~600K events/day (~7/sec avg) |
 | Event store | Postgres 17, partitioned monthly |
 | Fan-out | Redis pub/sub, <50ms p99 |
-| Search | Typesense, permission-aware, full-text |
+| Search | Postgres FTS, permission-aware, full-text |
 | Audit | Hash-chain audit log, tamper-evident |
 | Accessibility | WCAG 2.1 AA minimum |
 

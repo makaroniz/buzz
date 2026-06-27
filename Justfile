@@ -427,13 +427,6 @@ migrate: _ensure-migrations
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
 
-# Rebuild Typesense docs for all kind:0 (user profile) events.
-# Required once after deploying the indexer change that flattens kind:0 content
-# for searchability; new/updated profiles are indexed correctly automatically.
-# Safe to run repeatedly — Typesense upserts.
-reindex-kind0:
-    cargo run --release -p buzz-relay --bin buzz-reindex-kind0
-
 # Remove build artifacts
 clean:
     cargo clean

@@ -405,7 +405,7 @@ async fn test_search_returns_indexed_event() {
 
     ws_client.disconnect().await.ok();
 
-    // Wait for the async search index to catch up. Typesense indexing is
+    // Wait for the async search index to catch up. FTS indexing is
     // fire-and-forget (tokio::spawn), so we need a generous delay.
     tokio::time::sleep(Duration::from_secs(2)).await;
 

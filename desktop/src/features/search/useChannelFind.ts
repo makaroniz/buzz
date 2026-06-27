@@ -57,7 +57,7 @@ export function useChannelFind({ channelId, messages }: UseChannelFindOptions) {
     return found;
   }, [messages, query]);
 
-  // Relay-backed search: full history via Typesense.
+  // Relay-backed search: full history via Postgres FTS.
   const relaySearch = useSearchMessagesQuery(debouncedQuery, {
     channelId: channelId ?? undefined,
     enabled: isOpen && debouncedQuery.length >= MIN_QUERY_LENGTH,
@@ -66,7 +66,7 @@ export function useChannelFind({ channelId, messages }: UseChannelFindOptions) {
 
   // Merge: start with client-side matches, then supplement with relay hits
   // that are loaded in the timeline but were missed by exact substring match
-  // (e.g. Typesense stemming). Only loaded messages are kept so the match
+  // (e.g. FTS stemming). Only loaded messages are kept so the match
   // count stays accurate relative to what's visible on screen.
   const loadedMessageIds = React.useMemo(
     () => new Set(messages.map((m) => m.id)),

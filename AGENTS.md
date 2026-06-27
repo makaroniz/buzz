@@ -42,7 +42,7 @@ crates/
   buzz-db             # Postgres event store and data access layer
   buzz-auth           # Authentication and authorization
   buzz-pubsub         # Redis pub/sub fan-out, presence, typing indicators
-  buzz-search         # Typesense-backed full-text search
+  buzz-search         # Postgres FTS full-text search
   buzz-audit          # Hash-chain audit log
   buzz-media          # Blossom/S3 media storage
   # Agent surface
@@ -130,7 +130,7 @@ to be duplicated:
 
 - `POST /events` — submit any signed event (same path the WebSocket uses).
 - `POST /query` — Nostr REQ filters over HTTP. NIP-50 `search` filters
-  are routed to `buzz-search` (Typesense-backed) automatically.
+  are routed to `buzz-search` (Postgres FTS) automatically.
 - `POST /count` — Nostr COUNT filters over HTTP.
 
 If you find yourself reaching for a new REST endpoint, first check whether

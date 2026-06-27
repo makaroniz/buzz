@@ -1700,8 +1700,8 @@ mod search_fts {
 
     /// Obligation: every search `filter` includes `community_id`; same
     /// channel/token in A and B return only same-community hits; deleting in A
-    /// does not delete the B document. Postgres FTS (search_tsv/GIN), not
-    /// Typesense.
+    /// does not delete the B document. Enforced in Postgres FTS
+    /// (search_tsv/GIN), not a separate search engine.
     ///
     /// Shape (designed so the wire-observable property is a *single*
     /// per-community row whose content is the community's own):

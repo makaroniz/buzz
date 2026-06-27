@@ -963,11 +963,9 @@ async fn test_nip10_thread_reply_not_in_top_level() {
 }
 
 /// Send a kind:1059 gift wrap AND a kind:9 message with the same unique content.
-/// Query Typesense directly to prove the gift wrap was NOT indexed while the
-/// kind:9 message WAS. This bypasses all relay-level filtering (channel_id, #p)
-/// and tests the actual indexing skip in dispatch_persistent_event.
-///
-/// Requires TYPESENSE_URL and TYPESENSE_API_KEY env vars (defaults to dev values).
+/// Use the relay NIP-50 search to prove the gift wrap was NOT indexed while
+/// the kind:9 message WAS, exercising the storage-level exclusion in the
+/// `events.search_tsv` generated column.
 #[tokio::test]
 #[ignore]
 async fn test_nip17_gift_wrap_not_searchable() {
@@ -1069,7 +1067,7 @@ async fn test_nip50_search_relevance_order() {
     send_rest_message(&keys, &channel, &msg2).await;
     send_rest_message(&keys, &channel, &msg3).await;
 
-    // Wait for Typesense indexing.
+    // Wait for FTS indexing.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let mut client = BuzzTestClient::connect(&url, &keys).await.expect("connect");
@@ -1674,7 +1672,7 @@ async fn test_nipdv_search_rejects_third_party() {
     let snapshot_id = snapshot.id.to_hex();
     client_a.disconnect().await.expect("disconnect A");
 
-    // Give Typesense a beat (it must NOT have indexed the snapshot).
+    // Give FTS a beat (it must NOT have indexed the snapshot).
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // B issues a kindless search filter carrying A's snapshot id — the bypass
