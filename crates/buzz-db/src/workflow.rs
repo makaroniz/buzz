@@ -423,27 +423,38 @@ pub async fn list_all_enabled_workflows(pool: &PgPool) -> Result<Vec<WorkflowRec
 
 /// Claim a scheduled workflow fire for an authoritative schedule instant.
 ///
-/// Returns `Some` only for the first pod that claims `(workflow_id,
-/// scheduled_for)`. All other pods receive `None` and must skip creating a
-/// workflow run. The `scheduled_for` value must come from an external
-/// schedule anchor (cron expression) or DB-authoritative interval anchor; a
-/// per-pod in-memory timestamp is not safe because different pods can compute
-/// different claim keys.
+/// Returns `Some` only for the first pod that claims `(community_id,
+/// workflow_id, scheduled_for)`. All other pods receive `None` and must skip
+/// creating a workflow run. The `scheduled_for` value must come from an
+/// external schedule anchor (cron expression) or DB-authoritative interval
+/// anchor; a per-pod in-memory timestamp is not safe because different pods
+/// can compute different claim keys.
+///
+/// `community_id` is server provenance — for the global scheduler scan it is
+/// the `workflow.community_id` returned by [`list_all_enabled_workflows`], not
+/// any client-supplied value. It is required because `workflows` is keyed
+/// `(community_id, id)`: duplicate workflow UUIDs across communities are
+/// allowed, so resolving the owning community from `id` alone is ambiguous and
+/// would fan a single claim across every community holding that UUID. Binding
+/// `(community_id, id)` confines the claim — and its `SELECT`/`INSERT` row — to
+/// exactly the intended tenant.
 pub async fn claim_scheduled_workflow_fire(
     pool: &PgPool,
+    community_id: CommunityId,
     workflow_id: Uuid,
     scheduled_for: DateTime<Utc>,
 ) -> Result<Option<ScheduledWorkflowFireClaim>> {
     let row = sqlx::query(
         r#"
         INSERT INTO scheduled_workflow_fires (community_id, workflow_id, scheduled_for)
-        SELECT w.community_id, w.id, $2
+        SELECT w.community_id, w.id, $3
         FROM workflows w
-        WHERE w.id = $1
+        WHERE w.community_id = $1 AND w.id = $2
         ON CONFLICT (community_id, workflow_id, scheduled_for) DO NOTHING
         RETURNING community_id, workflow_id, scheduled_for, claimed_at
         "#,
     )
+    .bind(community_id.as_uuid())
     .bind(workflow_id)
     .bind(scheduled_for)
     .fetch_optional(pool)
@@ -1541,27 +1552,39 @@ mod tests {
         assert_eq!(cloned.status, ApprovalStatus::Granted);
     }
 
-    // -- F1 / S1 attack surface for scheduled workflow claims ------------------
+    // -- Scheduled workflow claim confinement ---------------------------------
     //
-    // These tests pin the locked spec from Eva [13] / Mari [12]:
+    // RECONCILED spec (supersedes the earlier S1 lock; Eva/Max 2026-06-27).
+    //
+    // The earlier S1 lock asserted "`workflow_id` is globally unique, so the
+    // claim resolves community server-side from `workflow_id` alone and the
+    // caller never names it." The final schema does NOT have that property:
+    // `workflows` PK is `(community_id, id)` and `scheduled_workflow_fires` is
+    // keyed/FK'd by `(community_id, workflow_id, scheduled_for)`. Duplicate
+    // workflow UUIDs across communities are explicitly allowed (and pinned by
+    // the Issue-4 confinement tests below). So resolve-from-id-alone is both
+    // unimplementable and unsafe: `WHERE w.id = $1` matches every community
+    // holding that UUID and fans one claim across all of them.
+    //
+    // The invariant that survives is NOT "the claim never receives community";
+    // it is "the community used for the claim is server provenance, never
+    // client-controlled." For the global scheduler scan that provenance is the
+    // `workflow.community_id` returned by `list_all_enabled_workflows()`. The
+    // claim therefore takes `community_id` and binds
+    // `WHERE w.community_id = $1 AND w.id = $2`, confining the claim row to the
+    // intended tenant.
     //
     //   1. `workflows.community_id` is row-owned, NOT NULL, immutable.
-    //   2. Claim resolves `community_id` server-side via `workflow_id`.
-    //   3. Claim uniqueness is `(workflow_id, scheduled_for)` — `workflow_id`
-    //      is globally unique, so adding `community_id` to the key weakens it.
-    //   4. `latest_scheduled_workflow_fire` drops caller-supplied community.
+    //   2. The claim binds `(community_id, workflow_id)` of the workflow row.
+    //   3. Claim uniqueness is `(community_id, workflow_id, scheduled_for)`.
+    //   4. `latest_scheduled_workflow_fire` / `attach_scheduled_workflow_run`
+    //      are already community-scoped; `claim` now matches.
     //
-    // Until that lands, `claim_for_workflow_in_other_community_no_ops` is the
-    // S1 regression lock: today the schema permits a caller in community A to
-    // claim a workflow owned by community B and have `claimed.community_id`
-    // come back as A. That is a cross-tenant write surface (Theorem S1,
-    // `docs/multi-tenant-relay.md:248`: "the claimed community never appears
-    // in this function — only the resolved one").
-    //
-    // The other two tests are characterization guards: same-window race must
-    // yield exactly one claim winner, and the retention primitive's docstring
-    // caveat (pruning below the largest interval breaks `latest_*`) is
-    // load-bearing for the §5c deployment-config rule Sami flagged.
+    // `claim_confined_to_its_community` is the confinement lock: a dup workflow
+    // UUID in A and B must claim independently (claiming A/id leaves B/id
+    // claimable). The other two tests are characterization guards: same-window
+    // race must yield exactly one winner, and pruning below the largest
+    // interval breaks `latest_*` (the §5c retention rule Sami flagged).
 
     use crate::user::ensure_user;
 
@@ -1632,58 +1655,73 @@ mod tests {
         (workflow_id, community)
     }
 
-    /// F1 attack: a caller in community A must NOT be able to claim a fire
-    /// for a workflow owned by community B and have the claim resolve under
-    /// A's tenant. The resolved community on the returned claim row MUST
-    /// equal the workflow's actual tenant (B).
+    /// Confinement: a duplicate workflow UUID existing in both community A and
+    /// community B must claim independently. Claiming `(A, id, t)` must NOT
+    /// consume `(B, id, t)` — B's identical instant stays claimable, and the
+    /// A-claim's resolved community is A (server provenance), never B.
     ///
-    /// Post-fix (`1fa3d837f`) the claim signature no longer accepts a caller
-    /// tenant — the SQL resolves `community_id` from the `workflows` row via
-    /// `INSERT ... SELECT w.community_id, w.id, $2 FROM workflows w WHERE
-    /// w.id = $1`. This test still creates an "attacker_community" that the
-    /// caller is *not* permitted to name on the wire; the assertion is that
-    /// the resolved tenant equals the workflow owner's community, never the
-    /// attacker's. With the pre-fix signature this test was RED (the row's
-    /// `community_id` came back as the attacker's); under the locked spec it
-    /// must be GREEN.
+    /// This is the reconciliation of the old S1 lock with the real
+    /// `(community_id, id)` schema: because `id` is not globally unique, the
+    /// claim binds `WHERE w.community_id = $1 AND w.id = $2`. With the old
+    /// bare-`id` SQL (`WHERE w.id = $1`), a single `INSERT ... SELECT` matched
+    /// BOTH workflow rows and fanned the claim across A and B — this test goes
+    /// RED on that regression (B/id is no longer independently claimable).
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn claim_for_workflow_in_other_community_no_ops() {
+    async fn claim_confined_to_its_community() {
         let pool = setup_pool().await;
 
-        // The attacker community exists in the schema but the caller has no
-        // way to pass it to the claim API anymore — that *is* the S1 fix.
-        // Keeping the row in this test makes the no-influence invariant
-        // explicit: even with two real tenants in play, the resolved
-        // community is the workflow's owner.
-        let _attacker_community = make_community(&pool).await;
-        let owner_community = make_community(&pool).await;
-        let (workflow_id, expected_community) = make_workflow_in(&pool, owner_community).await;
+        let community_a = make_community(&pool).await;
+        let community_b = make_community(&pool).await;
+
+        // Same workflow UUID + same channel UUID in both communities — the PK
+        // is `(community_id, id)`, so the collision is structurally allowed.
+        let workflow_id = Uuid::new_v4();
+        let channel_id = Uuid::new_v4();
+        insert_workflow_with_ids(&pool, community_a, workflow_id, channel_id, "sched-a").await;
+        insert_workflow_with_ids(&pool, community_b, workflow_id, channel_id, "sched-b").await;
 
         let scheduled_for = Utc.with_ymd_and_hms(2026, 6, 27, 0, 0, 0).unwrap();
 
-        let claim = claim_scheduled_workflow_fire(&pool, workflow_id, scheduled_for)
+        // Claim A/id/t.
+        let claim_a = claim_scheduled_workflow_fire(&pool, community_a, workflow_id, scheduled_for)
             .await
-            .expect("claim should not error")
-            .expect("claim should succeed exactly once");
-
+            .expect("claim A should not error")
+            .expect("claim A should win");
         assert_eq!(
-            claim.community_id,
-            expected_community,
-            "claim must resolve community from workflow_id (server-side); \
-             resolved={resolved:?} expected={expected_community:?}",
-            resolved = claim.community_id,
+            claim_a.community_id, community_a,
+            "A-claim must resolve to community A (server provenance)"
         );
-        assert_eq!(claim.workflow_id, workflow_id);
-        assert_eq!(claim.scheduled_for, scheduled_for);
+        assert_eq!(claim_a.workflow_id, workflow_id);
+        assert_eq!(claim_a.scheduled_for, scheduled_for);
+
+        // B/id/t must still be claimable — A's claim did not touch B's row.
+        let claim_b = claim_scheduled_workflow_fire(&pool, community_b, workflow_id, scheduled_for)
+            .await
+            .expect("claim B should not error")
+            .expect("claim B must still win — A's claim must not have consumed B's instant");
+        assert_eq!(
+            claim_b.community_id, community_b,
+            "B-claim must resolve to community B"
+        );
+
+        // And a second A-claim for the same instant must now lose (dedup holds
+        // within the community).
+        let claim_a_again =
+            claim_scheduled_workflow_fire(&pool, community_a, workflow_id, scheduled_for)
+                .await
+                .expect("second A-claim should not error");
+        assert!(
+            claim_a_again.is_none(),
+            "the same (A, id, t) instant must not be claimable twice"
+        );
     }
 
-    /// Same `(workflow_id, scheduled_for)` claimed concurrently by N tasks
-    /// must yield exactly one `Some` winner. Post-fix the PK is
-    /// `(workflow_id, scheduled_for)` (`workflow_id` is globally unique,
-    /// `community_id` is a scoped/audit label only) — exactly the locked
-    /// spec. Characterization guard: protects the dedup boundary against
-    /// regressions in the claim SQL.
+    /// Same `(community_id, workflow_id, scheduled_for)` claimed concurrently by
+    /// N tasks must yield exactly one `Some` winner. Post-reconciliation the
+    /// claim key is `(community_id, workflow_id, scheduled_for)`; `community_id`
+    /// is server provenance, not a client-named label. Characterization guard:
+    /// protects the dedup boundary against regressions in the claim SQL.
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn concurrent_same_window_claims_exactly_one_wins() {
@@ -1698,7 +1736,7 @@ mod tests {
         for _ in 0..N {
             let pool = pool.clone();
             handles.push(tokio::spawn(async move {
-                claim_scheduled_workflow_fire(&pool, workflow_id, scheduled_for).await
+                claim_scheduled_workflow_fire(&pool, community, workflow_id, scheduled_for).await
             }));
         }
 
@@ -1738,7 +1776,7 @@ mod tests {
         let (workflow_id, _) = make_workflow_in(&pool, community).await;
         let scheduled_for = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
 
-        claim_scheduled_workflow_fire(&pool, workflow_id, scheduled_for)
+        claim_scheduled_workflow_fire(&pool, community, workflow_id, scheduled_for)
             .await
             .expect("claim ok")
             .expect("first claim wins");

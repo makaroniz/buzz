@@ -350,8 +350,13 @@ impl WorkflowEngine {
     /// Uses window-based matching for cron expressions to handle tick drift:
     /// `schedule.after(&(now - 60s)).next() <= now` instead of `includes(now)`.
     ///
-    /// Interval tracking is in-memory (`last_fired` DashMap). Lost on restart —
-    /// missed fires during downtime are not replayed.
+    /// Interval tracking is anchored on the durable scheduled-fire claim:
+    /// `last_fired` is an in-memory pre-filter, but the
+    /// `(community_id, workflow_id, scheduled_for)` claim row is the
+    /// at-most-once boundary across pods and restarts. On the first tick after
+    /// a restart the interval anchor is seeded from
+    /// `latest_scheduled_workflow_fire` so a process bounce cannot double-fire
+    /// within an interval.
     pub async fn run(self: &Arc<Self>) {
         tracing::info!("WorkflowEngine cron loop started (60s tick)");
 
@@ -399,30 +404,78 @@ impl WorkflowEngine {
                     continue;
                 };
 
-                let (should_fire, trigger_type) = match &def.trigger {
+                // Resolve the *deterministic* schedule instant this tick is
+                // firing for. `scheduled_for` is computed identically on every
+                // pod (cron's own scheduled time, or the interval bucket
+                // boundary) so all pods collide on a single durable claim —
+                // never `now`, which is per-pod and would let every pod fire.
+                let (scheduled_for, trigger_type) = match &def.trigger {
                     schema::TriggerDef::Schedule {
                         cron: Some(expr),
                         interval: None,
-                    } => {
-                        // Fix 7: delegate to pure helper for testability.
-                        (cron_should_fire(expr, now, 60, workflow.id), "cron")
-                    }
+                    } => match cron_fire_instant(expr, now, 60, workflow.id) {
+                        Some(instant) => (instant, "cron"),
+                        None => continue,
+                    },
                     schema::TriggerDef::Schedule {
                         cron: None,
                         interval: Some(dur),
                     } => {
-                        // Fix 7: delegate to pure helper for testability.
-                        let last = self.last_fired.get(&(community_id, workflow.id)).map(|t| *t);
-                        (
-                            interval_should_fire(dur, last, now, workflow.id),
-                            "interval",
-                        )
+                        // Cheap pre-filter: skip the claim attempt when the
+                        // in-memory clock says we're clearly mid-interval. The
+                        // durable claim below is the real at-most-once boundary;
+                        // this only avoids a DB write every tick. Seed the
+                        // anchor from the DB on the first tick after restart so
+                        // a process bounce can't double-fire within an interval.
+                        let last = match self.last_fired.get(&(community_id, workflow.id)) {
+                            Some(t) => Some(*t),
+                            None => self
+                                .db
+                                .latest_scheduled_workflow_fire(community_id, workflow.id)
+                                .await
+                                .unwrap_or(None),
+                        };
+                        if !interval_should_fire(dur, last, now, workflow.id) {
+                            continue;
+                        }
+                        match interval_fire_instant(dur, now, workflow.id) {
+                            Some(instant) => (instant, "interval"),
+                            None => continue,
+                        }
                     }
-                    _ => (false, ""), // Non-schedule triggers handled by on_event()
+                    _ => continue, // Non-schedule triggers handled by on_event()
                 };
 
-                if !should_fire {
-                    continue;
+                // Durable at-most-once claim — the cross-pod fire boundary.
+                // The loser receives `None` and skips BEFORE any run creation or
+                // side effect. `community_id` is the workflow row's own
+                // community (server provenance from the scan), never client
+                // input; the claim binds `(community_id, workflow_id,
+                // scheduled_for)` so a duplicate workflow UUID in another
+                // community claims independently.
+                match self
+                    .db
+                    .claim_scheduled_workflow_fire(community_id, workflow.id, scheduled_for)
+                    .await
+                {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        // Another pod (or an earlier tick this pod) already
+                        // claimed this instant. Still advance the in-memory
+                        // interval clock so we don't re-attempt the claim every
+                        // tick for the rest of the interval.
+                        if trigger_type == "interval" {
+                            self.last_fired.insert((community_id, workflow.id), now);
+                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            workflow_id = %workflow.id,
+                            "Cron tick: scheduled-fire claim failed: {e}"
+                        );
+                        continue;
+                    }
                 }
 
                 // Fix 5: handle serialization errors explicitly rather than silently
@@ -459,14 +512,34 @@ impl WorkflowEngine {
                             workflow_id = %workflow.id,
                             "Cron tick: failed to create workflow run: {e}"
                         );
+                        // The claim is held but the run failed to create. The
+                        // claim row intentionally stays (its `workflow_run_id`
+                        // NULL) so this instant is not re-fired: at-most-once is
+                        // preserved over exactly-once on transient run-insert
+                        // failures.
                         continue;
                     }
                 };
 
-                // Update last_fired AFTER successful DB insert so that a
-                // failed insert doesn't suppress the next tick for the full interval.
-                // Only needed for interval triggers — cron uses window-based matching
-                // which already prevents double-fire within the same minute.
+                // Link the won claim to its run for ops/audit forensics. The
+                // claim row already guarantees dedupe; this is best-effort.
+                if let Err(e) = self
+                    .db
+                    .attach_scheduled_workflow_run(community_id, workflow.id, scheduled_for, run_id)
+                    .await
+                {
+                    tracing::warn!(
+                        workflow_id = %workflow.id,
+                        run_id = %run_id,
+                        "Cron tick: failed to attach run to scheduled-fire claim: {e}"
+                    );
+                }
+
+                // Update last_fired AFTER a successful claim+insert so that a
+                // failure doesn't suppress the next tick for the full interval.
+                // Only needed for interval triggers — cron uses window-based
+                // matching which already prevents double-fire within the same
+                // minute, and the durable claim backstops both.
                 if trigger_type == "interval" {
                     self.last_fired.insert((community_id, workflow.id), now);
                 }
@@ -501,32 +574,70 @@ impl WorkflowEngine {
     }
 }
 
-/// Check whether a cron expression should fire within the `window_secs`-wide
-/// window ending at `now`.
+/// Find the cron schedule instant that fired within the `window_secs`-wide
+/// window ending at `now`, if any.
 ///
 /// Uses window-based matching: finds the next scheduled time after
-/// `(now - window_secs)` and checks whether it falls at or before `now`.
+/// `(now - window_secs)` and returns it when it falls at or before `now`.
 /// This tolerates tick drift gracefully — a 61s tick won't miss a
-/// minute-granularity cron expression.
+/// minute-granularity cron expression. The returned instant is the cron's own
+/// scheduled time (not `now`), so every pod evaluating the same expression in
+/// the same window computes the *same* value — making it a safe, deterministic
+/// claim anchor for cross-pod at-most-once firing.
 ///
-/// Returns `false` (and logs a warning) if the expression is invalid.
-fn cron_should_fire(expr: &str, now: DateTime<Utc>, window_secs: i64, workflow_id: Uuid) -> bool {
+/// Returns `None` (and logs a warning) if the expression is invalid or nothing
+/// is due in the window.
+fn cron_fire_instant(
+    expr: &str,
+    now: DateTime<Utc>,
+    window_secs: i64,
+    workflow_id: Uuid,
+) -> Option<DateTime<Utc>> {
     let normalized = schema::normalize_cron(expr);
     match normalized.parse::<cron::Schedule>() {
         Ok(sched) => {
             let window_start = now - chrono::Duration::seconds(window_secs);
-            sched
-                .after(&window_start)
-                .next()
-                .map(|t| t <= now)
-                .unwrap_or(false)
+            sched.after(&window_start).next().filter(|t| *t <= now)
         }
         Err(e) => {
             tracing::warn!(
                 workflow_id = %workflow_id,
                 "Cron tick: invalid cron expression '{expr}': {e}"
             );
-            false
+            None
+        }
+    }
+}
+
+/// Quantize `now` to the interval bucket boundary, yielding a deterministic
+/// claim anchor that every pod computes identically within the same bucket.
+///
+/// The boundary is `floor(now / interval) * interval` from the Unix epoch.
+/// Because the scheduler ticks every 60s and interval schedules are minutes or
+/// longer, bounded cross-pod clock skew keeps all pods inside the same bucket,
+/// so they collide on one `(community, workflow, scheduled_for)` claim — only
+/// one wins and creates the run. Returns `None` if the duration is unparseable
+/// or non-positive (the caller skips firing).
+fn interval_fire_instant(dur: &str, now: DateTime<Utc>, workflow_id: Uuid) -> Option<DateTime<Utc>> {
+    match executor::parse_duration_secs(dur) {
+        Ok(interval_secs) if interval_secs > 0 => {
+            let secs = interval_secs as i64;
+            let bucket = (now.timestamp().div_euclid(secs)) * secs;
+            DateTime::from_timestamp(bucket, 0)
+        }
+        Ok(_) => {
+            tracing::warn!(
+                workflow_id = %workflow_id,
+                "Cron tick: interval duration is zero — skipping"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                workflow_id = %workflow_id,
+                "Cron tick: invalid interval '{dur}': {e}"
+            );
+            None
         }
     }
 }
@@ -730,30 +841,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cron_should_fire_matches_within_window() {
+    fn cron_fire_instant_matches_within_window() {
         // "every minute" cron — should always fire within a 60s window.
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:30Z")
             .unwrap()
             .with_timezone(&Utc);
         let wf_id = Uuid::new_v4();
-        assert!(
-            cron_should_fire("* * * * *", now, 60, wf_id),
-            "every-minute cron should fire within 60s window"
+        // The matched instant is the minute boundary 12:00:00, NOT `now`.
+        assert_eq!(
+            cron_fire_instant("* * * * *", now, 60, wf_id),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            ),
+            "every-minute cron should return the minute boundary as the anchor"
         );
     }
 
     #[test]
-    fn cron_should_fire_returns_false_for_invalid_expr() {
+    fn cron_fire_instant_returns_none_for_invalid_expr() {
         let now = Utc::now();
         let wf_id = Uuid::new_v4();
         assert!(
-            !cron_should_fire("not-a-cron", now, 60, wf_id),
-            "invalid cron should return false"
+            cron_fire_instant("not-a-cron", now, 60, wf_id).is_none(),
+            "invalid cron should return None"
         );
     }
 
     #[test]
-    fn cron_should_fire_returns_false_outside_window() {
+    fn cron_fire_instant_returns_none_outside_window() {
         // Fixed time: 2026-06-15 14:30:00 UTC (a Sunday in June)
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T14:30:00Z")
             .unwrap()
@@ -761,41 +878,49 @@ mod tests {
         let wf_id = Uuid::new_v4();
         // "0 0 1 1 *" = midnight on Jan 1 only — June 15 is definitely outside.
         assert!(
-            !cron_should_fire("0 0 1 1 *", now, 60, wf_id),
+            cron_fire_instant("0 0 1 1 *", now, 60, wf_id).is_none(),
             "Jan-1-only cron should not fire on June 15"
         );
     }
 
     #[test]
-    fn cron_should_fire_at_exact_minute_boundary() {
+    fn cron_fire_instant_at_exact_minute_boundary() {
         // Fixed time: exactly 09:00:00 UTC. Cron "0 9 * * *" fires at 09:00.
         // Window [08:59:00, 09:00:00] should contain the fire time.
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T09:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
         let wf_id = Uuid::new_v4();
-        assert!(
-            cron_should_fire("0 9 * * *", now, 60, wf_id),
-            "cron should fire at exact minute boundary"
+        assert_eq!(
+            cron_fire_instant("0 9 * * *", now, 60, wf_id),
+            Some(now),
+            "cron should fire at exact minute boundary, anchored on 09:00:00"
         );
     }
 
     #[test]
-    fn cron_should_fire_within_drift_window() {
+    fn cron_fire_instant_within_drift_window_anchors_on_scheduled_time() {
         // Fixed time: 09:00:45 UTC (45s drift). Cron "0 9 * * *" fires at 09:00.
-        // Window [08:59:45, 09:00:45] should still contain 09:00:00.
+        // Window [08:59:45, 09:00:45] should still contain 09:00:00. Critically,
+        // the anchor is the *scheduled* 09:00:00 — not the drifted `now` — so a
+        // second pod ticking at 09:00:50 computes the identical claim key.
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T09:00:45Z")
             .unwrap()
             .with_timezone(&Utc);
         let wf_id = Uuid::new_v4();
-        assert!(
-            cron_should_fire("0 9 * * *", now, 60, wf_id),
-            "cron should fire even with 45s drift"
+        assert_eq!(
+            cron_fire_instant("0 9 * * *", now, 60, wf_id),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-06-15T09:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            ),
+            "cron anchor must be the scheduled instant, stable across pod tick drift"
         );
     }
 
     #[test]
-    fn cron_should_fire_returns_false_just_outside_window() {
+    fn cron_fire_instant_returns_none_just_outside_window() {
         // Fixed time: 09:01:01 UTC. Cron "0 9 * * *" fires at 09:00:00.
         // Window [09:00:01, 09:01:01] does NOT contain 09:00:00.
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T09:01:01Z")
@@ -803,9 +928,43 @@ mod tests {
             .with_timezone(&Utc);
         let wf_id = Uuid::new_v4();
         assert!(
-            !cron_should_fire("0 9 * * *", now, 60, wf_id),
+            cron_fire_instant("0 9 * * *", now, 60, wf_id).is_none(),
             "cron should not fire 61s after the scheduled time"
         );
+    }
+
+    #[test]
+    fn interval_fire_instant_quantizes_to_bucket_boundary() {
+        // Two pods ticking at different sub-interval offsets must compute the
+        // *same* bucket boundary so they collide on one claim. 1h interval,
+        // epoch-aligned: 12:34:56 and 12:59:01 both floor to 12:00:00.
+        let wf_id = Uuid::new_v4();
+        let a = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:34:56Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let b = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:59:01Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let bucket = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(interval_fire_instant("1h", a, wf_id), Some(bucket));
+        assert_eq!(interval_fire_instant("1h", b, wf_id), Some(bucket));
+        // Next hour is a distinct bucket.
+        let c = chrono::DateTime::parse_from_rfc3339("2026-06-15T13:00:10Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let next_bucket = chrono::DateTime::parse_from_rfc3339("2026-06-15T13:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(interval_fire_instant("1h", c, wf_id), Some(next_bucket));
+    }
+
+    #[test]
+    fn interval_fire_instant_returns_none_for_invalid_duration() {
+        let now = Utc::now();
+        let wf_id = Uuid::new_v4();
+        assert!(interval_fire_instant("not-a-duration", now, wf_id).is_none());
     }
 
     #[test]

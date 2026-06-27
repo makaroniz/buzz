@@ -1586,15 +1586,20 @@ impl Db {
 
     /// Claim a scheduled workflow fire for an authoritative schedule instant.
     ///
-    /// Returns `Some` only for the first pod to claim `(workflow_id,
-    /// scheduled_for)`; all other pods must skip creating a run. The claim SQL
-    /// resolves `community_id` from the workflow row; callers never supply it.
+    /// Returns `Some` only for the first pod to claim `(community_id,
+    /// workflow_id, scheduled_for)`; all other pods must skip creating a run.
+    /// `community_id` is server provenance (the workflow row's own community
+    /// from the scheduler scan), never client-supplied — `workflows` is keyed
+    /// `(community_id, id)`, so the claim must bind both to avoid fanning
+    /// across communities that share the workflow UUID.
     pub async fn claim_scheduled_workflow_fire(
         &self,
+        community_id: CommunityId,
         workflow_id: Uuid,
         scheduled_for: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<workflow::ScheduledWorkflowFireClaim>> {
-        workflow::claim_scheduled_workflow_fire(&self.pool, workflow_id, scheduled_for).await
+        workflow::claim_scheduled_workflow_fire(&self.pool, community_id, workflow_id, scheduled_for)
+            .await
     }
 
     /// Fetch the latest claimed schedule instant for interval trigger anchoring.
