@@ -44,9 +44,7 @@ impl Nip98ReplayGuard for RedisNip98ReplayGuard {
         // down to MAX_REPLAY_TTL_SECS (contract REQUIRES clamping) so a buggy
         // caller cannot send a Redis-incompatible `EX` arg or pin a slot for
         // implausibly long.
-        let ttl = ttl_secs
-            .max(DEFAULT_REPLAY_TTL_SECS)
-            .min(MAX_REPLAY_TTL_SECS);
+        let ttl = ttl_secs.clamp(DEFAULT_REPLAY_TTL_SECS, MAX_REPLAY_TTL_SECS);
 
         let mut conn = self.pool.get().await.map_err(|e| {
             // Structured field for ops; the user-facing AuthError stays a

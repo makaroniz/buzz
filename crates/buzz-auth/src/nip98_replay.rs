@@ -192,7 +192,11 @@ mod tests {
     #[test]
     fn default_ttl_meets_gate_floor() {
         // §5 gate: TTL ≥ 120s. Drift this constant down and the gate breaks.
-        assert!(DEFAULT_REPLAY_TTL_SECS >= 120);
+        // Const-drift tripwire: the assertion is intentionally over a constant.
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(DEFAULT_REPLAY_TTL_SECS >= 120);
+        }
     }
 
     #[test]
@@ -200,7 +204,11 @@ mod tests {
         // Sanity: any caller's clamped TTL must end up in [DEFAULT, MAX].
         // If these ever cross, the impl can't satisfy both bounds and the
         // contract is broken.
-        assert!(DEFAULT_REPLAY_TTL_SECS < MAX_REPLAY_TTL_SECS);
+        // Const-drift tripwire: the assertion is intentionally over a constant.
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(DEFAULT_REPLAY_TTL_SECS < MAX_REPLAY_TTL_SECS);
+        }
     }
 
     #[test]

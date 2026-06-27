@@ -83,6 +83,7 @@ pub struct MemberRecord {
 }
 
 /// Creates a new channel, bootstraps the creator as owner, and returns the record.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_channel(
     pool: &PgPool,
     community_id: CommunityId,
@@ -1388,6 +1389,7 @@ mod tests {
         id
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create_test_channel(
         pool: &PgPool,
         community_id: Uuid,

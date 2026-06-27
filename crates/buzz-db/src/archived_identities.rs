@@ -46,6 +46,7 @@ pub async fn is_archived(pool: &PgPool, community_id: CommunityId, pubkey: &str)
 /// Returns `true` if the row was inserted, `false` if the identity was already
 /// archived in that community. Re-archiving is idempotent and does not mutate
 /// the existing row.
+#[allow(clippy::too_many_arguments)]
 pub async fn archive(
     pool: &PgPool,
     community_id: CommunityId,

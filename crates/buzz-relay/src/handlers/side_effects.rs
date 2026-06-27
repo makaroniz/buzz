@@ -2718,6 +2718,7 @@ pub async fn publish_nipia_archived(
 }
 
 /// Publish a kind:8003 unarchived-identity delta event (NIP-IA).
+#[allow(clippy::too_many_arguments)]
 pub async fn publish_nipia_unarchived(
     tenant: &TenantContext,
     state: &Arc<AppState>,

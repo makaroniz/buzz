@@ -463,6 +463,7 @@ impl Db {
     }
 
     /// Creates a new channel, bootstraps the creator as owner, and returns the record.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &self,
         community_id: CommunityId,
@@ -1754,6 +1755,7 @@ impl Db {
     }
 
     /// Archives an identity in `community_id`. Returns `true` if inserted, `false` if already archived.
+    #[allow(clippy::too_many_arguments)]
     pub async fn archive(
         &self,
         community_id: CommunityId,
