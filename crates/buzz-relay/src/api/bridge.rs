@@ -144,6 +144,32 @@ fn nip98_expected_url(config_relay_url: &str, tenant: &TenantContext, path: &str
     format!("{scheme}://{}{path}", tenant.host())
 }
 
+/// Construct the NIP-42 expected `relay` URL for a connection bound to `tenant`.
+///
+/// NIP-42 (WebSocket AUTH) sibling of [`nip98_expected_url`]. Conformance row 44
+/// obligation extends to the WS auth side: the AUTH event's `relay` tag must
+/// match the per-tenant host the connection arrived on, not the deployment-wide
+/// `config.relay_url`. Same hole the NIP-98 fix closed for HTTP — `config.relay_url`
+/// is one static string per deployment, so verifying against it (a) admits an
+/// AUTH event signed against community A's host on a connection bound to
+/// community B (cross-host token reuse), and (b) rejects every legitimate AUTH
+/// whose tenant host isn't the single configured one.
+///
+/// Scheme is `ws`/`wss` (not `http`/`https`) because the value being matched is
+/// the client's connect URL embedded in the signed AUTH event; the helper
+/// preserves the deployment's TLS posture from `config_relay_url`'s prefix so
+/// `wss://` deployments stay `wss://` and `ws://` dev/test stays `ws://`.
+/// Path is empty — clients put the bare WS origin (`ws://host[:port]`) in the
+/// `relay` tag, matching how `EventBuilder::auth` accepts a [`nostr::RelayUrl`].
+pub(crate) fn nip42_expected_relay_url(config_relay_url: &str, tenant: &TenantContext) -> String {
+    let scheme = if config_relay_url.trim_start().starts_with("wss://") {
+        "wss"
+    } else {
+        "ws"
+    };
+    format!("{scheme}://{}", tenant.host())
+}
+
 /// Extract a channel UUID from a single filter's `#h` tag.
 fn extract_channel_from_filter(filter: &nostr::Filter) -> Option<uuid::Uuid> {
     let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
@@ -1402,6 +1428,124 @@ mod tests {
             nip98_expected_url("ws://config.example", &tenant, "/events"),
             "http://host-a.example/events",
             "ws:// dev config → http:// URL"
+        );
+    }
+
+    // ----- NIP-42 host-binding tests (sibling of NIP-98 row 44 obligation) -----
+
+    /// Sign a NIP-42 AUTH event with `relay` tag = `relay_url`, then verify
+    /// it against `expected_relay_url`. Returns the `verify_nip42_event` result.
+    fn verify_nip42_with_urls(
+        challenge: &str,
+        signed_relay_url: &str,
+        expected_relay_url: &str,
+    ) -> Result<(), buzz_auth::AuthError> {
+        let keys = Keys::generate();
+        let parsed = nostr::RelayUrl::parse(signed_relay_url).expect("valid relay url");
+        let event = EventBuilder::auth(challenge, parsed)
+            .sign_with_keys(&keys)
+            .expect("sign auth event");
+        buzz_auth::nip42::verify_nip42_event(&event, challenge, expected_relay_url)
+    }
+
+    /// Row 44 obligation (WS side): a NIP-42 AUTH event signed against
+    /// community A's host MUST be rejected on a connection whose tenant
+    /// resolved to community B's host. Before this gap closed, `handle_auth`
+    /// verified against `state.config.relay_url` (one static string per
+    /// deployment), so a token-of-A presented on B's connection would pass —
+    /// the cross-host hole `nip98_expected_url` already closed on the HTTP
+    /// side, mirrored here on the WS side.
+    ///
+    /// Scenario: a multi-tenant deployment whose `config.relay_url` is set to
+    /// community A's host (a realistic accident — config can only hold one
+    /// host). An attacker on a B-bound connection signs an AUTH event matching
+    /// that config URL (publicly knowable). Pre-fix: expected = config = A's
+    /// URL = the signed URL → ACCEPT (cross-host hole). Post-fix: expected
+    /// derives from `tenant.host() = B` ≠ signed (A) → REJECT.
+    ///
+    /// This test bites if `nip42_expected_relay_url` is reverted to return
+    /// `config.relay_url` verbatim — the exact regression the helper guards.
+    #[test]
+    fn verify_nip42_rejects_event_signed_for_wrong_communitys_host() {
+        let challenge = "fixed-challenge-for-test";
+        // Config URL is A's host (deployment-wide static), and the attacker
+        // signs an AUTH event with that same URL. Both are knowable to the
+        // attacker. Connection arrived at community B.
+        let config_relay_url = "ws://host-a.example:3100";
+        let signed_relay_url = "ws://host-a.example:3100";
+        let tenant_b = fresh_tenant("host-b.example:3100");
+        let expected = nip42_expected_relay_url(config_relay_url, &tenant_b);
+
+        let err = verify_nip42_with_urls(challenge, signed_relay_url, &expected).expect_err(
+            "cross-host NIP-42 AUTH event MUST be rejected — row 44 sibling: \
+             `relay` URL host must match the per-tenant host, NOT the \
+             deployment-wide config URL",
+        );
+        assert!(
+            matches!(err, buzz_auth::AuthError::RelayUrlMismatch),
+            "rejection must carry RelayUrlMismatch (not a generic failure) so \
+             callers can distinguish it from other auth failures; got {err:?}"
+        );
+    }
+
+    /// Positive control: a NIP-42 AUTH event signed for host A MUST be
+    /// accepted on a connection whose tenant resolved to host A. Without
+    /// this, the cross-host test could be passing vacuously (e.g. if
+    /// `nip42_expected_relay_url` always produced a URL no event could match).
+    #[test]
+    fn verify_nip42_accepts_event_signed_for_matching_host() {
+        let challenge = "fixed-challenge-for-test";
+        let signed_relay_url = "ws://host-a.example:3100";
+        // Configured relay URL deliberately differs in host from the tenant's
+        // host — proving the helper uses `tenant.host()`, not the config.
+        let config_relay_url = "ws://other-config-host.example";
+        let tenant_a = fresh_tenant("host-a.example:3100");
+        let expected = nip42_expected_relay_url(config_relay_url, &tenant_a);
+
+        verify_nip42_with_urls(challenge, signed_relay_url, &expected)
+            .expect("matching-host NIP-42 AUTH event must verify");
+    }
+
+    /// `nip42_expected_relay_url` derives host from `tenant`, not from
+    /// `config_relay_url`. Pin both directions: changing the tenant's host
+    /// changes the output; changing the config's host does NOT.
+    #[test]
+    fn nip42_expected_relay_url_uses_tenant_host_not_config_host() {
+        let tenant_a = fresh_tenant("host-a.example:3100");
+        let tenant_b = fresh_tenant("host-b.example:3100");
+
+        let url_a = nip42_expected_relay_url("ws://config-host.example", &tenant_a);
+        let url_b = nip42_expected_relay_url("ws://config-host.example", &tenant_b);
+        assert_eq!(url_a, "ws://host-a.example:3100");
+        assert_eq!(url_b, "ws://host-b.example:3100");
+
+        // Same tenant, two different config hosts → output is identical.
+        // (If config-host ever leaked into the URL, this assertion would bite —
+        // catches the exact "reverted to config host" regression.)
+        let url_a_alt_config = nip42_expected_relay_url("ws://different-config.example", &tenant_a);
+        assert_eq!(
+            url_a, url_a_alt_config,
+            "config-relay-url's host MUST NOT influence the NIP-42 expected URL — \
+             only its scheme contributes"
+        );
+    }
+
+    /// `nip42_expected_relay_url` derives scheme from `config_relay_url`'s
+    /// prefix: `wss://` → `wss`, everything else → `ws`. Deployments that run
+    /// `ws://` in dev/test must produce a `ws://` URL that matches what
+    /// tungstenite clients put in the AUTH event's `relay` tag.
+    #[test]
+    fn nip42_expected_relay_url_derives_scheme_from_config() {
+        let tenant = fresh_tenant("host-a.example:3100");
+        assert_eq!(
+            nip42_expected_relay_url("wss://config.example", &tenant),
+            "wss://host-a.example:3100",
+            "wss:// production config → wss:// URL"
+        );
+        assert_eq!(
+            nip42_expected_relay_url("ws://config.example", &tenant),
+            "ws://host-a.example:3100",
+            "ws:// dev config → ws:// URL"
         );
     }
 
