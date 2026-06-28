@@ -49,12 +49,15 @@ hosts = []
 if primary:
     hosts.append(primary)
 
-# Local desktop/dev tooling has historically used both localhost and 127.0.0.1.
-# Under row-zero host binding those are distinct hosts, so seed both loopback
-# spellings for local dev to avoid a fail-closed 404 when one side uses the
-# alternate authority. Non-loopback deployments seed only RELAY_URL's authority.
-if host in {"localhost", "127.0.0.1"} and port:
-    hosts.extend([f"localhost:{port}", f"127.0.0.1:{port}"])
+# Local desktop/dev tooling has historically used both localhost and 127.0.0.1,
+# and some HTTP clients can omit the default/non-default port in Host handling.
+# Under row-zero host binding these are distinct hosts, so seed loopback aliases
+# for local dev to avoid a fail-closed 404 when one side uses an alternate
+# authority. Non-loopback deployments seed only RELAY_URL's authority.
+if host in {"localhost", "127.0.0.1"}:
+    hosts.extend(["localhost", "127.0.0.1"])
+    if port:
+        hosts.extend([f"localhost:{port}", f"127.0.0.1:{port}"])
 
 seen = []
 for h in hosts:
