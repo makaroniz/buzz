@@ -26,7 +26,6 @@ type PersonaLlmProviderId = (typeof KNOWN_LLM_PROVIDER_IDS)[number];
 export type PersonaModelOption = {
   id: string;
   label: string;
-  providers?: readonly PersonaLlmProviderId[];
 };
 
 export type PersonaDropdownOption = {
@@ -112,9 +111,7 @@ export function getPersonaModelOptions(
 
   return options.filter(
     (option) =>
-      (option.id.length === 0 &&
-        !providerRequiresExplicitModel(trimmedProvider)) ||
-      option.providers?.includes(trimmedProvider),
+      option.id.length === 0 && !providerRequiresExplicitModel(trimmedProvider),
   );
 }
 

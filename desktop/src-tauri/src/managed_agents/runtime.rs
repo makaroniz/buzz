@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use base64::Engine as _;
 use tauri::AppHandle;
+
+use super::agent_env::build_buzz_agent_provider_defaults;
 
 use crate::{
     managed_agents::{
@@ -1949,58 +1950,6 @@ fn child_rust_log_filter() -> String {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing},buzz_acp=info"),
         _ => "buzz_acp=info".to_string(),
     }
-}
-
-/// Provider/model baked in at compile time for internal builds. Empty
-/// in OSS builds, where the `BUZZ_BUILD_BUZZ_AGENT_*` env is unset.
-///
-/// Also injects any arbitrary `KEY=VALUE` pairs baked via `BUZZ_BUILD_AGENT_ENV`
-/// (newline-delimited). This is how provider-specific vars like `DATABRICKS_HOST`
-/// reach the agent in internal builds without naming them in OSS code.
-/// User-supplied env vars (written after this call) always win.
-pub(crate) fn build_buzz_agent_provider_defaults(cmd: &mut std::process::Command) {
-    if let Some(provider) = option_env!("BUZZ_DESKTOP_BUILD_BUZZ_AGENT_PROVIDER") {
-        if !provider.is_empty() {
-            cmd.env("BUZZ_AGENT_PROVIDER", provider);
-        }
-    }
-    if let Some(model) = option_env!("BUZZ_DESKTOP_BUILD_BUZZ_AGENT_MODEL") {
-        if !model.is_empty() {
-            cmd.env("BUZZ_AGENT_MODEL", model);
-        }
-    }
-    if let Some(raw) = option_env!("BUZZ_DESKTOP_BUILD_AGENT_ENV") {
-        // The value was base64-encoded at build time so the single-line Cargo
-        // output carries all KEY=VALUE pairs without truncation.
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(raw.as_bytes()) {
-            if let Ok(text) = std::str::from_utf8(&decoded) {
-                for (key, value) in parse_agent_env_lines(text) {
-                    cmd.env(key, value);
-                }
-            }
-        }
-    }
-}
-
-/// Parse newline-delimited `KEY=VALUE` lines from a baked env blob.
-/// Blank lines are skipped. Each non-blank line must contain `=`; the key
-/// is everything before the first `=`, the value is everything after (values
-/// may themselves contain `=`). Lines with an empty key are skipped.
-pub(crate) fn parse_agent_env_lines(raw: &str) -> Vec<(&str, &str)> {
-    raw.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-            let eq = line.find('=')?;
-            let key = &line[..eq];
-            if key.is_empty() {
-                return None;
-            }
-            Some((key, &line[eq + 1..]))
-        })
-        .collect()
 }
 
 pub fn start_managed_agent_process(
