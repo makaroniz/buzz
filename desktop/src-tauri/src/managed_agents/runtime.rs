@@ -1675,28 +1675,6 @@ pub(crate) fn managed_agent_auth_tag_for_owner(
         .map_err(|error| format!("failed to compute NIP-OA auth tag: {error}"))
 }
 
-/// Resolve the effective system prompt, model, and provider from the *live*
-/// persona for **display and model-discovery only** — the ModelPicker shows the
-/// current persona model as selected. The spawn and deploy paths deliberately
-/// do NOT use this; they read the pinned record snapshot so a running agent
-/// stays on the config it was created with. The linked persona wins here; the
-/// record values are the fallback when no persona is linked or it was deleted.
-pub(crate) fn resolve_effective_prompt_model_provider(
-    persona_id: Option<&str>,
-    personas: &[crate::managed_agents::types::PersonaRecord],
-    record_prompt: Option<String>,
-    record_model: Option<String>,
-) -> (Option<String>, Option<String>, Option<String>) {
-    match persona_id.and_then(|pid| personas.iter().find(|p| p.id == pid)) {
-        Some(p) => (
-            Some(p.system_prompt.clone()),
-            p.model.clone(),
-            p.provider.clone(),
-        ),
-        None => (record_prompt, record_model, None),
-    }
-}
-
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.

@@ -382,7 +382,7 @@ pub fn create_time_agent_command_override(
         let picked = picked_command
             .map(str::trim)
             .filter(|value| !value.is_empty())?;
-        let inherited_command = effective_agent_command(persona_id, personas, None);
+        let inherited_command = effective_agent_command(persona_id, personas, None, None);
         return (picked != inherited_command).then(|| picked.to_string());
     }
 

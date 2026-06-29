@@ -11,9 +11,7 @@ import {
   MessageTimeline,
   type MessageTimelineHandle,
 } from "@/features/messages/ui/MessageTimeline";
-import {
-  getHiddenAgentConversationMessageIds,
-} from "@/features/agents/agentConversations";
+import { getHiddenAgentConversationMessageIds } from "@/features/agents/agentConversations";
 import { buildDirectMessageIntro } from "@/features/channels/lib/dmParticipantDisplay";
 import {
   getDmHuddleMemberPubkeys,
@@ -535,10 +533,14 @@ export const ChannelPane = React.memo(function ChannelPane({
     if (threadScrollTargetId) {
       hiddenIds.delete(threadScrollTargetId);
     }
+    if (channelFind.activeMatch?.messageId) {
+      hiddenIds.delete(channelFind.activeMatch.messageId);
+    }
     return hiddenIds;
   }, [
     agentConversationMarkers,
     baseVisibleMessages,
+    channelFind.activeMatch?.messageId,
     targetMessageId,
     threadScrollTargetId,
     threadSourceMessages,
