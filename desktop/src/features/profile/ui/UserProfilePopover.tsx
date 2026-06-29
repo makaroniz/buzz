@@ -204,14 +204,24 @@ export function UserProfilePopover({
     (a) => a.pubkey === pubkey,
   );
   const isBotProfile = role === "bot" || Boolean(relayAgent || managedAgent);
+  const normalizedProfilePubkey = normalizePubkey(pubkey);
+  const profileAgentSummary =
+    usersBatchQuery.data?.profiles[normalizedProfilePubkey];
+  const isProfileAgentLookupPending =
+    open &&
+    role !== "bot" &&
+    !isBotProfile &&
+    (usersBatchQuery.isPending ||
+      usersBatchQuery.isPlaceholderData ||
+      (usersBatchQuery.isFetching && profileAgentSummary === undefined));
   const isAgentClassificationPending =
     open &&
     role !== "bot" &&
-    (relayAgentsQuery.isPending || managedAgentsQuery.isPending);
+    (relayAgentsQuery.isPending ||
+      managedAgentsQuery.isPending ||
+      isProfileAgentLookupPending);
   const profile = profileQuery.data;
-  const isAgentByProfile = Boolean(
-    usersBatchQuery.data?.profiles[normalizePubkey(pubkey)]?.isAgent,
-  );
+  const isAgentByProfile = Boolean(profileAgentSummary?.isAgent);
   const isAgentTarget = isBotProfile || isAgentByProfile;
   const displayName = profile?.displayName ?? truncatePubkey(pubkey);
   // Owner signal mirrors UserProfilePanel: a declared NIP-OA owner whose agent
