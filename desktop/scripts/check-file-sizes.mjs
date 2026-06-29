@@ -62,7 +62,8 @@ const overrides = new Map([
   // branch cut; override bumped to cover the merged total. Queued to split.
   // continued-agent-conversations: refreshes the owner auth tag before
   // starting/restoring/deploying agents so staged identities keep working.
-  ["src-tauri/src/commands/agents.rs", 1437],
+  // latest-main rebase adds the config-bridge and task-review fixes together.
+  ["src-tauri/src/commands/agents.rs", 1467],
   // Residual repos_dir integration in ensure_nest_at: REPOS is provisioned
   // outside NEST_DIRS (it may be a symlink), so it needs its own create +
   // chmod-only-when-real-dir handling plus integration test coverage. The
@@ -77,6 +78,7 @@ const overrides = new Map([
   // PGID resolution helper + PID-recycling safety guard added for orphan sweep.
   // continued-agent-conversations: owner-scoped auth tag refresh is threaded
   // through the runtime env builder and covered by regression tests.
+  // latest-main rebase adds the config-bridge and task-review fixes together.
   ["src-tauri/src/managed_agents/runtime.rs", 2150],
   ["src-tauri/src/managed_agents/personas.rs", 1080],
   // Phase-2 inbound reconcile + review-fix cycle: reconcile_inbound_persona_event
@@ -101,7 +103,8 @@ const overrides = new Map([
   // agents keep an installed runtime alias when the primary command is absent.
   // Load-bearing, not generic debt.
   // config-bridge: schema-driven field extraction adds ~26 lines. Queued to split.
-  ["src-tauri/src/managed_agents/discovery.rs", 1111],
+  // latest-main rebase adds the config-bridge and task-review fixes together.
+  ["src-tauri/src/managed_agents/discovery.rs", 1131],
   // types.rs adds the persona/instance harness fields. Load-bearing, not
   // generic debt.
   ["src-tauri/src/managed_agents/types.rs", 1037],
