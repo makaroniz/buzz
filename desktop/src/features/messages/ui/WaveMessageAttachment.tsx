@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { channelsQueryKey } from "@/features/channels/hooks";
 import { useHuddle } from "@/features/huddle";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   Attachment,
   AttachmentAction,
@@ -17,6 +18,9 @@ import {
 type WaveMessageAttachmentProps = {
   channelId?: string | null;
   fallbackText: string;
+  targetPubkey?: string;
+  targetIsAgent?: boolean;
+  agentPubkeys?: ReadonlySet<string>;
   huddleMemberPubkeys?: readonly string[];
   huddleMemberPubkeysPending?: boolean;
 };
@@ -24,13 +28,41 @@ type WaveMessageAttachmentProps = {
 export function WaveMessageAttachment({
   channelId,
   fallbackText,
+  targetPubkey,
+  targetIsAgent = false,
+  agentPubkeys,
   huddleMemberPubkeys = [],
   huddleMemberPubkeysPending = false,
 }: WaveMessageAttachmentProps) {
   const queryClient = useQueryClient();
   const { isStarting, startHuddle } = useHuddle();
+  const normalizedTargetPubkey = targetPubkey
+    ? normalizePubkey(targetPubkey)
+    : null;
+  const targetAgentPubkey = React.useMemo(() => {
+    if (!targetPubkey || !normalizedTargetPubkey || !agentPubkeys) return null;
+    return agentPubkeys.has(normalizedTargetPubkey) ? targetPubkey : null;
+  }, [agentPubkeys, normalizedTargetPubkey, targetPubkey]);
+  const resolvedHuddleMemberPubkeys = React.useMemo(() => {
+    if (!targetAgentPubkey) return huddleMemberPubkeys;
+    const seen = new Set<string>();
+    return [...huddleMemberPubkeys, targetAgentPubkey].filter((pubkey) => {
+      const normalizedPubkey = normalizePubkey(pubkey);
+      if (seen.has(normalizedPubkey)) return false;
+      seen.add(normalizedPubkey);
+      return true;
+    });
+  }, [huddleMemberPubkeys, targetAgentPubkey]);
+  const targetAgentLookupPending =
+    targetIsAgent &&
+    normalizedTargetPubkey !== null &&
+    (huddleMemberPubkeysPending ||
+      (targetAgentPubkey === null &&
+        !resolvedHuddleMemberPubkeys.some(
+          (pubkey) => normalizePubkey(pubkey) === normalizedTargetPubkey,
+        )));
   const startHuddleDisabled =
-    !channelId || isStarting || huddleMemberPubkeysPending;
+    !channelId || isStarting || targetAgentLookupPending;
 
   const handleStartHuddle = React.useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -42,7 +74,7 @@ export function WaveMessageAttachment({
       }
 
       try {
-        await startHuddle(channelId, [...huddleMemberPubkeys]);
+        await startHuddle(channelId, [...resolvedHuddleMemberPubkeys]);
         await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
       } catch (error) {
         toast.error(
@@ -52,7 +84,7 @@ export function WaveMessageAttachment({
     },
     [
       channelId,
-      huddleMemberPubkeys,
+      resolvedHuddleMemberPubkeys,
       queryClient,
       startHuddle,
       startHuddleDisabled,

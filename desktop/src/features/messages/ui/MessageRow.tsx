@@ -383,10 +383,13 @@ export const MessageRow = React.memo(
             if (waveMessage) {
               return (
                 <WaveMessageAttachment
+                  agentPubkeys={agentPubkeys}
                   channelId={channelId}
                   fallbackText={waveMessage.fallbackText}
                   huddleMemberPubkeys={huddleMemberPubkeys}
                   huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+                  targetIsAgent={waveMessage.targetIsAgent}
+                  targetPubkey={waveMessage.targetPubkey}
                 />
               );
             }

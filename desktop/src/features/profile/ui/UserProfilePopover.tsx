@@ -10,7 +10,11 @@ import {
   useChannelsQuery,
   useOpenDmMutation,
 } from "@/features/channels/hooks";
-import { useProfileQuery, useUserProfileQuery } from "@/features/profile/hooks";
+import {
+  useProfileQuery,
+  useUserProfileQuery,
+  useUsersBatchQuery,
+} from "@/features/profile/hooks";
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import {
   useRelayAgentsQuery,
@@ -188,6 +192,9 @@ export function UserProfilePopover({
     enabled: open,
   });
   const userStatusQuery = useUserStatusQuery(open ? [pubkey] : []);
+  const usersBatchQuery = useUsersBatchQuery(open ? [pubkey] : [], {
+    enabled: open,
+  });
 
   const { onOpenAgentSession } = useAgentSession();
   const { openProfilePanel } = useProfilePanel();
@@ -202,6 +209,11 @@ export function UserProfilePopover({
     role !== "bot" &&
     (relayAgentsQuery.isPending || managedAgentsQuery.isPending);
   const profile = profileQuery.data;
+  const isAgentByProfile = Boolean(
+    usersBatchQuery.data?.profiles[normalizePubkey(pubkey)]?.isAgent,
+  );
+  const isAgentTarget =
+    isBotProfile || isAgentByProfile || isAgentClassificationPending;
   const displayName = profile?.displayName ?? truncatePubkey(pubkey);
   // Owner signal mirrors UserProfilePanel: a declared NIP-OA owner whose agent
   // runs elsewhere holds no local seckey, so key custody (`isOwner`) alone
@@ -374,7 +386,9 @@ export function UserProfilePopover({
         selfProfileQuery.data?.displayName?.trim() ||
         identity.displayName.trim() ||
         truncatePubkey(identity.pubkey);
-      const content = buildWaveMessageContent(senderName);
+      const content = buildWaveMessageContent(senderName, pubkey, {
+        targetIsAgent: isAgentTarget,
+      });
       const queryKey = channelMessagesKey(dm.id);
 
       await queryClient.cancelQueries({ queryKey });
@@ -439,6 +453,7 @@ export function UserProfilePopover({
     currentPubkey,
     goChannel,
     identityQuery.data,
+    isAgentTarget,
     openDmMutation,
     pendingAction,
     pubkey,

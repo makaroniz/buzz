@@ -364,14 +364,19 @@ export function ChannelScreen({
     }
     return pubkeys;
   }, [channelMembers, managedAgents, messageProfilesQuery.data, relayAgents]);
+  const agentLookupPending =
+    channelMembersQuery.isPending ||
+    channelMembersQuery.isFetching ||
+    managedAgentsQuery.isPending ||
+    managedAgentsQuery.isFetching ||
+    relayAgentsQuery.isPending ||
+    relayAgentsQuery.isFetching ||
+    (messageProfilePubkeys.length > 0 &&
+      (messageProfilesQuery.isPending ||
+        messageProfilesQuery.isFetching ||
+        messageProfilesQuery.isPlaceholderData));
   const agentPubkeysPending =
-    activeChannel?.channelType === "dm" &&
-    (channelMembersQuery.isPending ||
-      managedAgentsQuery.isPending ||
-      relayAgentsQuery.isPending ||
-      (messageProfilePubkeys.length > 0 &&
-        (messageProfilesQuery.isPending ||
-          messageProfilesQuery.isPlaceholderData)));
+    activeChannel?.channelType === "dm" && agentLookupPending;
   const {
     agentSessionCandidates,
     botTypingEntries,
