@@ -529,8 +529,20 @@ export const ChannelPane = React.memo(function ChannelPane({
     for (const id of threadHiddenIds) {
       hiddenIds.add(id);
     }
+    if (targetMessageId) {
+      hiddenIds.delete(targetMessageId);
+    }
+    if (threadScrollTargetId) {
+      hiddenIds.delete(threadScrollTargetId);
+    }
     return hiddenIds;
-  }, [agentConversationMarkers, baseVisibleMessages, threadSourceMessages]);
+  }, [
+    agentConversationMarkers,
+    baseVisibleMessages,
+    targetMessageId,
+    threadScrollTargetId,
+    threadSourceMessages,
+  ]);
   const visibleMessages = React.useMemo(() => {
     if (hiddenAgentConversationMessageIds.size === 0) {
       return baseVisibleMessages;
