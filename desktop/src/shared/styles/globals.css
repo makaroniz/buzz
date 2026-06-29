@@ -48,7 +48,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .buzz-wave-hover-trigger:hover .buzz-wave-hand {
-    animation: buzz-wave-hand 960ms ease-in-out both;
+    animation: buzz-wave-hand 1200ms ease-in-out both;
   }
 }
 
