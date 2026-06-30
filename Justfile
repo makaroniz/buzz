@@ -251,6 +251,12 @@ test-unit:
 test-integration:
     ./scripts/run-tests.sh integration
 
+# OTEL export E2E: boots relay + otel-collector, drives WS traffic, asserts
+# Prometheus scrape + OTLP traces/metrics + disabled-path control.
+# Requires Docker. See test/otel-e2e/README.md for details.
+otel-e2e *ARGS:
+    ./test/otel-e2e/run.sh {{ARGS}}
+
 # Mesh-compute e2e: the CI-safe layers (relay mesh signaling invariants + Playwright UI)
 mesh-e2e:
     cargo test -p buzz-relay mesh_signaling

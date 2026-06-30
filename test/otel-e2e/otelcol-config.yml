@@ -1,0 +1,38 @@
+# OTEL Collector config for the Buzz relay E2E harness.
+#
+# Receives OTLP gRPC on :4317 (same address staging wires to the DD Agent),
+# writes received spans/metrics as JSON to /tmp/otelcol-output so the test
+# script can grep them, and logs a debug summary to stdout.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+
+exporters:
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+  file:
+    path: /tmp/otelcol-output/telemetry.json
+    rotation:
+      max_megabytes: 10
+      max_days: 1
+    format: json
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 100
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, file]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, file]

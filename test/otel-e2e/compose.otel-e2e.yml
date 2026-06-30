@@ -1,0 +1,51 @@
+# Compose overlay — OTEL E2E harness.
+#
+# Adds an otel-collector to the existing dev stack (docker-compose.yml).  The
+# relay itself runs on the HOST (matching the existing host.docker.internal
+# Prometheus pattern), so only the collector and its shared output volume are
+# declared here.  This keeps the relay build/start cycle fast and avoids a
+# slow full-image rebuild for each test run.
+#
+# Usage (via `just otel-e2e` which calls run.sh, or manually):
+#
+#   docker compose -f docker-compose.yml -f test/otel-e2e/compose.otel-e2e.yml up -d
+#
+# Teardown:
+#
+#   docker compose -f docker-compose.yml -f test/otel-e2e/compose.otel-e2e.yml down -v
+#
+# The relay is pointed at the collector via:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+# (the collector's gRPC port is published to the host).
+name: buzz
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: buzz-otel-collector
+    command: ["--config=/etc/otelcol-config.yml"]
+    volumes:
+      - ./test/otel-e2e/otelcol-config.yml:/etc/otelcol-config.yml:ro
+      # Bind-mount to the host so assertions can read the file directly —
+      # the collector image is distroless (no shell/cat available via docker exec).
+      - /tmp/buzz-otel-e2e-output:/tmp/otelcol-output
+    ports:
+      # OTLP gRPC — relay (on host) dials this
+      - "4317:4317"
+    networks:
+      - buzz-net
+    healthcheck:
+      # Use the collector's own /metrics health endpoint (otelcol exposes it on :8888)
+      test: ["CMD", "/otelcol-contrib", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    labels:
+      com.buzz.service: "otel-collector"
+      com.buzz.env: "e2e"
+    restart: unless-stopped
