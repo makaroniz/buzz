@@ -131,6 +131,7 @@ pub const P_GATED_KINDS: &[u32] = &[
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_GIFT_WRAP,
     KIND_DM_VISIBILITY,
+    KIND_DREAM_DUE,
 ];
 
 /// NIP-AP: Agent Persona (parameterized replaceable, owner-authored).
