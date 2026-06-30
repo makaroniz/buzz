@@ -192,6 +192,43 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Construct a minimal `Config` for model-catalog discovery.
+    ///
+    /// Only the fields used by [`build_token_source`](crate::llm::build_token_source)
+    /// and the catalog HTTP helpers are meaningful; all others are set to
+    /// inert defaults. Never call `from_env` for discovery — it requires
+    /// `DATABRICKS_MODEL` and other fields that are irrelevant here.
+    pub fn for_discovery(provider: Provider, api_key: String, base_url: String) -> Self {
+        Self {
+            provider,
+            api_key,
+            base_url,
+            model: String::new(),
+            system_prompt: String::new(),
+            anthropic_api_version: "2023-06-01".into(),
+            openai_api: OpenAiApi::Chat,
+            max_rounds: 0,
+            max_output_tokens: 1,
+            llm_timeout: Duration::from_secs(30),
+            tool_timeout: Duration::from_secs(30),
+            mcp_init_timeout: Duration::from_secs(30),
+            mcp_max_restart_attempts: 0,
+            mcp_restart_base_ms: 0,
+            mcp_restart_max_ms: 0,
+            max_sessions: 1,
+            max_line_bytes: 4 * 1024 * 1024,
+            max_history_bytes: 16 * 1024 * 1024,
+            max_tool_result_text_bytes: 50 * 1024,
+            max_context_tokens: 200_001,
+            max_handoffs: 0,
+            max_parallel_tools: 1,
+            hook_timeout: Duration::from_secs(1),
+            stop_max_rejections: 0,
+            hook_servers: HookServers::None,
+            hints_enabled: false,
+        }
+    }
+
     fn validate(&self) -> Result<(), String> {
         const MIN_HISTORY_BYTES: usize = 4096;
         const MIN_LINE_BYTES: usize = 1024;

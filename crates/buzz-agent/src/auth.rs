@@ -44,6 +44,15 @@ const BROWSER_AUTH_TIMEOUT: Duration = Duration::from_secs(60);
 pub trait TokenSource: Send + Sync {
     async fn bearer(&self) -> Result<String, AgentError>;
 
+    /// Return a bearer token from cache or refresh, **never** opening a browser.
+    ///
+    /// The default delegates to [`bearer`](Self::bearer) — correct for token
+    /// sources (e.g. static API keys) that can never trigger a browser flow.
+    /// [`PkceOAuthTokenSource`] overrides this to stop before the browser step.
+    async fn bearer_no_browser(&self) -> Result<String, AgentError> {
+        self.bearer().await
+    }
+
     /// Force a fresh bearer after the server rejected the current one (401).
     ///
     /// `rejected` is the exact access token that just got the 401. Unlike
@@ -287,6 +296,10 @@ impl TokenSource for PkceOAuthTokenSource {
         Ok(bearer)
     }
 
+    async fn bearer_no_browser(&self) -> Result<String, AgentError> {
+        self.try_bearer_no_browser().await
+    }
+
     /// Force-refresh after a 401, never touching the browser flow.
     ///
     /// `rejected` is the access token the server just 401'd. Coalescing keys
@@ -341,6 +354,64 @@ impl TokenSource for PkceOAuthTokenSource {
             //    which would hang a headless harness.
             Err(e) => Err(AgentError::LlmAuth(format!("token refresh failed: {e}"))),
         }
+    }
+}
+
+impl PkceOAuthTokenSource {
+    /// Return a bearer token from cache or refresh, **never** opening a browser.
+    ///
+    /// Follows the same steps as [`bearer`](TokenSource::bearer) but stops at
+    /// step 4 — if no usable token is available after cache + refresh attempts,
+    /// returns `Err(LlmAuth(...))` instead of launching the browser PKCE flow.
+    /// Used by model-discovery paths that must not block on user interaction.
+    pub(crate) async fn try_bearer_no_browser(&self) -> Result<String, AgentError> {
+        let mut state = self.state.lock().await;
+
+        // 1. In-memory cache hit, still fresh.
+        if let Some(tok) = state.as_ref() {
+            if !is_expired(tok) {
+                return Ok(tok.access_token.clone());
+            }
+        }
+
+        // 2. Re-read disk — another process may have refreshed already.
+        if let Some(disk_tok) = read_cache(&self.cache_path) {
+            if !is_expired(&disk_tok) {
+                let bearer = disk_tok.access_token.clone();
+                *state = Some(disk_tok);
+                return Ok(bearer);
+            }
+        }
+
+        // 3. Try refresh if we have a refresh token.
+        let endpoints = self.endpoints().await?;
+        let refresh = state.as_ref().and_then(|t| t.refresh_token.clone());
+        if let Some(rt) = refresh {
+            match self.refresh(&endpoints, &rt).await {
+                Ok(fresh) => {
+                    let bearer = fresh.access_token.clone();
+                    self.save(&mut state, fresh)?;
+                    return Ok(bearer);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "oauth refresh failed during model discovery");
+                }
+            }
+
+            // 4. Re-read disk after refresh failure.
+            if let Some(disk_tok) = read_cache(&self.cache_path) {
+                if !is_expired(&disk_tok) {
+                    let bearer = disk_tok.access_token.clone();
+                    *state = Some(disk_tok);
+                    return Ok(bearer);
+                }
+            }
+        }
+
+        // No usable token — return error instead of opening a browser.
+        Err(AgentError::LlmAuth(
+            "no cached Databricks token; run `buzz-agent auth databricks` first".into(),
+        ))
     }
 }
 
