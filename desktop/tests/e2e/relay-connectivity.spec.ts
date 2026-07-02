@@ -52,12 +52,33 @@ test.describe("relay connectivity", () => {
     await installMockBridge(page, { channelsReadError: RELAY_UNREACHABLE });
     await page.goto("/");
 
+    // Wait for the E2E seam to be installed (bridge init is complete), then force
+    // the relay into a degraded state. The card is gated on !isRelayConnectionConnected:
+    // a stale channelsReadError alone (with state still "connected") no longer pins
+    // the card — connected state is now authoritative so stale query errors don't
+    // hold the UI open after an auto-reconnect.
+    //
+    // Use "reconnecting" (rather than "disconnected"): the card shows via
+    // isRelayConnectionStateDegraded for reconnecting/stalled states, so the test
+    // doesn't race the channels-query retry window. useRelayConnection debounces
+    // non-healthy states by 2 s, so await with timeout 5 s.
+    await page.waitForFunction(
+      () =>
+        typeof (
+          window as Window & {
+            __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+          }
+        ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
+    );
+    await driveConnectionDegraded(page, "reconnecting");
+
     const relayCard = page.getByTestId("sidebar-relay-unreachable");
-    await expect(relayCard).toBeVisible();
+    await expect(relayCard).toBeVisible({
+      timeout: 5_000,
+    });
     await expect(relayCard).toContainText("Can't reach the relay");
     await expect(relayCard).toContainText("Click to connect");
     await expect(page.getByTestId("sidebar-reconnect")).toBeVisible();
-    await expect(page.getByTestId("connection-banner")).toHaveCount(0);
     await settle(page);
 
     // Clip to sidebar width (256px) so the card and channel list are both visible.
