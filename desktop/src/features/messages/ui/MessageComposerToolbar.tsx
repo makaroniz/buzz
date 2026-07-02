@@ -1,12 +1,24 @@
 import * as React from "react";
 import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "motion/react";
-import { ALargeSmall, ArrowUp, AtSign, Paperclip, X } from "lucide-react";
+import {
+  ALargeSmall,
+  ArrowUp,
+  AtSign,
+  HatGlasses,
+  Paperclip,
+  X,
+} from "lucide-react";
 
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
-import { FormattingToolbar } from "./FormattingToolbar";
+import {
+  FormattingToolbar,
+  isSpoilerFormattingActive,
+  toggleSpoilerFormatting,
+} from "./FormattingToolbar";
 import { SelectionFormattingTray } from "./SelectionFormattingTray";
 
 /** Spring for enter/exit of button groups — all fire simultaneously. */
@@ -34,6 +46,10 @@ export const MessageComposerToolbar = React.memo(
     onOpenMentionPicker,
     onPaperclip,
     sendDisabled,
+    showEmojiPicker,
+    showFormatting,
+    showSpoiler,
+    spoilerActive,
   }: {
     composerDisabled: boolean;
     editor: Editor | null;
@@ -51,14 +67,51 @@ export const MessageComposerToolbar = React.memo(
     onOpenMentionPicker: () => void;
     onPaperclip: () => void;
     sendDisabled: boolean;
+    showEmojiPicker?: boolean;
+    showFormatting?: boolean;
+    showSpoiler?: boolean;
+    spoilerActive?: boolean;
   }) {
+    const shouldShowFormatting = showFormatting ?? true;
+    const shouldShowEmojiPicker = showEmojiPicker ?? true;
+    const shouldShowSpoiler = showSpoiler ?? true;
+    const [spoilerFormattingActive, setSpoilerFormattingActive] =
+      React.useState(() =>
+        editor ? isSpoilerFormattingActive(editor) : false,
+      );
+
+    React.useEffect(() => {
+      if (!editor) {
+        setSpoilerFormattingActive(false);
+        return;
+      }
+
+      const update = () => {
+        setSpoilerFormattingActive(isSpoilerFormattingActive(editor));
+      };
+      update();
+      editor.on("transaction", update);
+      return () => {
+        editor.off("transaction", update);
+      };
+    }, [editor]);
+
+    const isSpoilerActive = spoilerFormattingActive || Boolean(spoilerActive);
+
+    const handleSpoilerClick = React.useCallback(() => {
+      if (!editor) return;
+      toggleSpoilerFormatting(editor);
+    }, [editor]);
+
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-        <SelectionFormattingTray
-          disabled={formattingDisabled}
-          editor={editor}
-          onLinkButton={onLinkButton}
-        />
+        {shouldShowFormatting ? (
+          <SelectionFormattingTray
+            disabled={formattingDisabled}
+            editor={editor}
+            onLinkButton={onLinkButton}
+          />
+        ) : null}
         <div className="-ml-2 flex min-h-10 min-w-0 flex-1 items-center gap-1 py-1">
           {/*
            * AnimatePresence with mode="popLayout" — exiting elements
@@ -70,7 +123,7 @@ export const MessageComposerToolbar = React.memo(
            * no order hacks, no overflow clipping needed.
            */}
           <AnimatePresence mode="popLayout" initial={false}>
-            {isFormattingOpen ? (
+            {isFormattingOpen && shouldShowFormatting ? (
               /*
                * ── Expanded: [Aa] [✕] | [formatting buttons] ──
                */
@@ -192,38 +245,65 @@ export const MessageComposerToolbar = React.memo(
                   </TooltipTrigger>
                   <TooltipContent>Attach image</TooltipContent>
                 </Tooltip>
-                <ComposerEmojiPicker
-                  disabled={composerDisabled}
-                  onClose={() => editor?.commands.focus()}
-                  onEmojiSelect={onEmojiSelect}
-                  onOpenChange={onEmojiPickerOpenChange}
-                  onTriggerMouseDown={onCaptureSelection}
-                  open={isEmojiPickerOpen}
-                />
-                <motion.div
-                  initial={{ x: -8, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: -8, opacity: 0 }}
-                  transition={presenceSpring}
-                >
+                {shouldShowEmojiPicker ? (
+                  <ComposerEmojiPicker
+                    disabled={composerDisabled}
+                    onClose={() => editor?.commands.focus()}
+                    onEmojiSelect={onEmojiSelect}
+                    onOpenChange={onEmojiPickerOpenChange}
+                    onTriggerMouseDown={onCaptureSelection}
+                    open={isEmojiPickerOpen}
+                  />
+                ) : null}
+                {shouldShowSpoiler ? (
                   <Tooltip disableHoverableContent>
                     <TooltipTrigger asChild>
                       <Button
-                        aria-label="Toggle formatting"
-                        aria-pressed={isFormattingOpen}
-                        disabled={composerDisabled}
-                        onClick={() => onFormattingToggle(!isFormattingOpen)}
+                        aria-label="Spoiler"
+                        aria-pressed={isSpoilerActive}
+                        className={cn(
+                          isSpoilerActive &&
+                            "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
+                        )}
+                        disabled={composerDisabled || !editor || isUploading}
+                        onClick={handleSpoilerClick}
                         onMouseDown={onCaptureSelection}
                         size="icon"
                         type="button"
-                        variant={isFormattingOpen ? "default" : "ghost"}
+                        variant={isSpoilerActive ? "default" : "ghost"}
                       >
-                        <ALargeSmall />
+                        <HatGlasses />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>Formatting</TooltipContent>
+                    <TooltipContent>Spoiler</TooltipContent>
                   </Tooltip>
-                </motion.div>
+                ) : null}
+                {shouldShowFormatting ? (
+                  <motion.div
+                    initial={{ x: -8, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: -8, opacity: 0 }}
+                    transition={presenceSpring}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          aria-label="Toggle formatting"
+                          aria-pressed={isFormattingOpen}
+                          disabled={composerDisabled}
+                          onClick={() => onFormattingToggle(!isFormattingOpen)}
+                          onMouseDown={onCaptureSelection}
+                          size="icon"
+                          type="button"
+                          variant={isFormattingOpen ? "default" : "ghost"}
+                        >
+                          <ALargeSmall />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Formatting</TooltipContent>
+                    </Tooltip>
+                  </motion.div>
+                ) : null}
               </motion.div>
             )}
           </AnimatePresence>

@@ -75,6 +75,7 @@ import { useChannelAgentSessions } from "./useChannelAgentSessions";
 import { useChannelPanelHistoryState } from "./useChannelPanelHistoryState";
 import { useChannelProfilePanel } from "./useChannelProfilePanel";
 import { useChannelRouteTarget } from "./useChannelRouteTarget";
+import { useSideConversation } from "./useSideConversation";
 import { useChannelUnreadState } from "./useChannelUnreadState";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
 
@@ -452,6 +453,10 @@ export function ChannelScreen({
     members: channelMembers,
     personaLookup,
     respondToLookup,
+  });
+  const handleStartSideConversation = useSideConversation({
+    activeChannel,
+    timelineMessages,
   });
   const {
     firstUnreadMessageId,
@@ -919,6 +924,11 @@ export function ChannelScreen({
                   onOpenDm={handleOpenDm}
                   onOpenProfilePanel={handleOpenProfilePanel}
                   onResetThreadPanelWidth={handleThreadPanelWidthReset}
+                  onStartSideConversation={
+                    activeChannel?.archivedAt
+                      ? undefined
+                      : handleStartSideConversation
+                  }
                   onCloseProfilePanel={handleCloseProfilePanel}
                   onOpenThread={handleOpenThreadAndCloseAgentSession}
                   onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
