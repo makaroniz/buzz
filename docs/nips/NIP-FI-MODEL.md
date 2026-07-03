@@ -118,7 +118,7 @@ An implementation may impose a shorter maximum lease. A lease authorizes only po
 
 For a single HTTP request, the assertion, Nostr proof, and authorization decision apply only to that request.
 
-For a NIP-42 WebSocket connection, a relay may cache `L`, but it must not use the lease after `expires_at`. It must require a fresh assertion and proof, reject protected operations, or terminate the connection. A relay that learns that the binding or federated session was revoked must invalidate matching leases. Implementations must document their maximum revocation-detection latency; they cannot claim immediate revocation if they only poll.
+For a NIP-42 WebSocket connection, a relay may cache `L`, but it must not use the lease after `expires_at`. It must reject protected operations or terminate the connection; obtaining a fresh assertion and proof requires a new connection under this transport profile. A relay that learns that the binding or federated session was revoked must invalidate matching leases. Implementations must document their maximum revocation-detection latency; they cannot claim immediate revocation if they only poll.
 
 If multiple keys authenticate on one NIP-42 connection, authorization is tracked independently per key. A lease for one `(i, k)` must not authorize another authenticated key.
 
