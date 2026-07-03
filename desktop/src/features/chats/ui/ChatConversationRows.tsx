@@ -15,10 +15,7 @@ import {
   MessageContent,
   MessageHeader,
 } from "@/shared/ui/message";
-import {
-  useMessageScroller,
-  useMessageScrollerScrollable,
-} from "@/shared/ui/message-scroller";
+import { useMessageScroller } from "@/shared/ui/message-scroller";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 function profileName(
@@ -97,37 +94,28 @@ export function ChatMessageRow({
   );
 }
 
+// Following the stream is owned entirely by the MessageScroller's built-in
+// autoScroll (content mutation + resize observers). This anchor only handles
+// the one case autoScroll intentionally skips: jumping back to the bottom
+// when the user sends a message while scrolled up in history.
 export function ChatScrollAnchor({
   forceSignature,
-  signature,
 }: {
   forceSignature: string | null;
-  signature: string;
 }) {
   const { scrollToEnd } = useMessageScroller();
-  const scrollable = useMessageScrollerScrollable();
   const lastForcedSignatureRef = React.useRef<string | null>(null);
 
   React.useLayoutEffect(() => {
-    if (signature.length === 0) {
+    if (
+      forceSignature === null ||
+      forceSignature === lastForcedSignatureRef.current
+    ) {
       return;
     }
-
-    const shouldForce =
-      forceSignature !== null &&
-      forceSignature !== lastForcedSignatureRef.current;
     lastForcedSignatureRef.current = forceSignature;
-
-    if (!shouldForce && scrollable.end) {
-      return;
-    }
-
     scrollToEnd({ behavior: "auto" });
-    const frame = window.requestAnimationFrame(() => {
-      scrollToEnd({ behavior: "auto" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [forceSignature, scrollToEnd, scrollable.end, signature]);
+  }, [forceSignature, scrollToEnd]);
 
   return null;
 }

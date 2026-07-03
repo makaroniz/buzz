@@ -25,6 +25,8 @@ import type {
 import { getBuzzToolInfo } from "@/features/agents/ui/agentSessionToolCatalog";
 import { buildCompactToolSummary } from "@/features/agents/ui/agentSessionToolSummary";
 import { getToolDurationDisplay } from "@/features/agents/ui/agentSessionUtils";
+import { RawEventRail } from "@/features/agents/ui/RawEventRail";
+import { useObserverEvents } from "@/features/agents/ui/useObserverEvents";
 import { ToolDetailBlocks } from "@/features/agents/ui/AgentSessionToolItem/ToolDetailBlocks";
 import {
   resolveUserLabel,
@@ -50,6 +52,7 @@ import {
   toolCategoryIcon,
   toolIcon,
 } from "@/features/chats/ui/chatActivityIcons";
+import { isEntranceRecent } from "@/features/chats/ui/messageEntrance";
 import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -62,6 +65,10 @@ import {
   MessageHeader,
 } from "@/shared/ui/message";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+
+function hasRecentEntrance(timestamp?: string | null) {
+  return Boolean(timestamp) && isEntranceRecent(Date.parse(timestamp ?? ""));
+}
 
 export function ChatActivityTranscript({
   agent,
@@ -150,8 +157,10 @@ function ChatActivityBlockView({
       ))}
       {!hasLiveActivityItem(block) ? (
         <LiveTurnMarker
+          agentPubkey={agent?.pubkey}
           icon={liveTurnMarkerIcon(block)}
           startedAt={getTurnStartedAt(block)}
+          turnId={block.turnId}
         />
       ) : null}
     </div>
@@ -307,6 +316,7 @@ function ChatActivityItemView({
     return (
       <ActivityMarkerRow
         details={<Markdown compact content={item.text.trim() || " "} />}
+        entrance={hasRecentEntrance(item.timestamp)}
         icon={<Brain className="h-3.5 w-3.5" />}
         label={item.title || "Thinking"}
         timestamp={item.timestamp}
@@ -331,6 +341,7 @@ function ChatActivityItemView({
             />
           )
         }
+        entrance={hasRecentEntrance(item.timestamp)}
         icon={<ClipboardList className="h-3.5 w-3.5" />}
         label={label}
         timestamp={item.timestamp}
@@ -343,6 +354,7 @@ function ChatActivityItemView({
     return (
       <ActivityMarkerRow
         details={<PromptSections sections={item.sections} />}
+        entrance={hasRecentEntrance(item.timestamp)}
         icon={<FileText className="h-3.5 w-3.5" />}
         label={`Captured ${item.title.toLowerCase()}`}
         timestamp={item.timestamp}
@@ -354,6 +366,7 @@ function ChatActivityItemView({
   return (
     <ActivityMarkerRow
       details={item.text ? <Markdown compact content={item.text} /> : null}
+      entrance={hasRecentEntrance(item.timestamp)}
       icon={lifecycleIcon(item)}
       label={item.title}
       timestamp={item.timestamp}
@@ -394,9 +407,13 @@ function ChatTranscriptMessageRow({
     : (profile?.avatarUrl ?? agent?.avatarUrl ?? null);
   const text = item.text.trim();
   const displayText = cleanChatMessageText(item);
+  const entrance = hasRecentEntrance(item.timestamp);
 
   return (
-    <Message side={isUser ? "right" : "left"}>
+    <Message
+      className={cn(entrance && "buzz-message-entrance")}
+      side={isUser ? "right" : "left"}
+    >
       {!isUser ? (
         <MessageAvatar>
           <UserAvatar avatarUrl={avatarUrl} displayName={label} size="sm" />
@@ -438,6 +455,7 @@ function PromptSetupMarker({
       {context ? (
         <ActivityMarkerRow
           details={<PromptSections sections={context.sections} />}
+          entrance={hasRecentEntrance(context.timestamp)}
           icon={<FileText className="h-3.5 w-3.5" />}
           label="Captured prompt context"
           timestamp={context.timestamp}
@@ -480,6 +498,7 @@ function LifecycleMarker({
           <span>No additional details.</span>
         )
       }
+      entrance={hasRecentEntrance(item.timestamp)}
       icon={lifecycleIcon(item)}
       label={item.title}
       timestamp={item.timestamp}
@@ -498,6 +517,7 @@ function SummaryMarker({ summary }: { summary: TranscriptSameKindSummary }) {
           ))}
         </div>
       }
+      entrance={hasRecentEntrance(summary.timestamp)}
       icon={summaryIcon(summary)}
       label={summary.label}
       timestamp={summary.timestamp}
@@ -509,9 +529,13 @@ function SummaryMarker({ summary }: { summary: TranscriptSameKindSummary }) {
 function CompletedWorkMarker({ items }: { items: TranscriptItem[] }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const label = completedWorkLabel(items);
+  const entrance = hasRecentEntrance(items[items.length - 1]?.timestamp);
 
   return (
-    <Message className="px-0 py-1" side="left">
+    <Message
+      className={cn("px-0 py-1", entrance && "buzz-message-entrance")}
+      side="left"
+    >
       <MessageContent className="w-full max-w-full">
         <button
           aria-expanded={isOpen}
@@ -544,17 +568,44 @@ function CompletedWorkMarker({ items }: { items: TranscriptItem[] }) {
   );
 }
 
+// How many of the turn's most recent raw observer events the "Working"
+// dropdown shows. Enough to read the current backend activity without
+// rendering the whole turn's wire history.
+const LIVE_TURN_RAW_EVENT_LIMIT = 12;
+
 function LiveTurnMarker({
+  agentPubkey,
   icon,
   startedAt,
+  turnId,
 }: {
+  agentPubkey?: string | null;
   icon: React.ReactNode;
   startedAt: string | null;
+  turnId: string;
 }) {
   const elapsedSeconds = useElapsedSeconds(startedAt);
+  const { events } = useObserverEvents(Boolean(agentPubkey), agentPubkey);
+  const turnEvents = React.useMemo(
+    () =>
+      events
+        .filter((event) => event.turnId === turnId)
+        .slice(-LIVE_TURN_RAW_EVENT_LIMIT),
+    [events, turnId],
+  );
 
   return (
     <ActivityMarkerRow
+      details={
+        turnEvents.length > 0 ? (
+          <div className="max-h-80 overflow-y-auto pr-1">
+            <RawEventRail events={turnEvents} />
+          </div>
+        ) : (
+          <span>Waiting for the first backend event…</span>
+        )
+      }
+      entrance={hasRecentEntrance(startedAt)}
       icon={icon}
       label="Working"
       loading
@@ -621,6 +672,7 @@ function ToolMarker({
           />
         ) : null
       }
+      entrance={hasRecentEntrance(item.timestamp)}
       icon={toolIcon(item, compactSummary)}
       label={toolLabel(item)}
       loading={isToolRunning(item)}

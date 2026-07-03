@@ -9,6 +9,7 @@ import { Message, MessageContent } from "@/shared/ui/message";
 
 export function ActivityMarkerRow({
   details,
+  entrance = false,
   icon,
   label,
   loading = false,
@@ -17,6 +18,7 @@ export function ActivityMarkerRow({
   tone = "default",
 }: {
   details?: React.ReactNode;
+  entrance?: boolean;
   icon?: React.ReactNode;
   label: React.ReactNode;
   loading?: boolean;
@@ -30,7 +32,10 @@ export function ActivityMarkerRow({
   const statusProps = loading ? statusMarkerProps : {};
 
   return (
-    <Message className="py-1.5" side="left">
+    <Message
+      className={cn("py-1.5", entrance && "buzz-message-entrance")}
+      side="left"
+    >
       <MessageContent className="max-w-[min(42rem,78%)]">
         {details ? (
           <details className="group/activity-marker" title={title}>
@@ -42,12 +47,7 @@ export function ActivityMarkerRow({
                 <MarkerIcon>
                   {icon ?? <Circle className="size-3.5" />}
                 </MarkerIcon>
-                <MarkerContent
-                  className={cn(loading && "shimmer")}
-                  data-shimmer-text={
-                    loading ? markerText(label, meta) : undefined
-                  }
-                >
+                <MarkerContent>
                   <MarkerRowContent
                     label={label}
                     loading={loading}
@@ -68,10 +68,7 @@ export function ActivityMarkerRow({
             {...statusProps}
           >
             <MarkerIcon>{icon ?? <Circle className="size-3.5" />}</MarkerIcon>
-            <MarkerContent
-              className={cn(loading && "shimmer")}
-              data-shimmer-text={loading ? markerText(label, meta) : undefined}
-            >
+            <MarkerContent>
               <MarkerRowContent label={label} loading={loading} meta={meta} />
             </MarkerContent>
           </Marker>
@@ -109,10 +106,7 @@ export function InlineActivityMarkerRow({
           {...statusProps}
         >
           <MarkerIcon>{icon ?? <Circle className="size-3.5" />}</MarkerIcon>
-          <MarkerContent
-            className={cn(loading && "shimmer")}
-            data-shimmer-text={loading ? markerText(label) : undefined}
-          >
+          <MarkerContent>
             <MarkerRowContent label={label} loading={loading} showChevron />
           </MarkerContent>
         </Marker>
@@ -160,8 +154,16 @@ function MarkerLabel({
   label: React.ReactNode;
   loading: boolean;
 }) {
+  // The shimmer ::before overlay repeats the text via data-shimmer-text, so
+  // it can only be applied where the label is a plain string that exactly
+  // matches the rendered text.
+  const shimmer = loading && typeof label === "string";
   return (
-    <span className="min-w-0 truncate" data-loading={loading || undefined}>
+    <span
+      className={cn("min-w-0 truncate", shimmer && "shimmer")}
+      data-loading={loading || undefined}
+      data-shimmer-text={shimmer ? label : undefined}
+    >
       {label}
     </span>
   );
@@ -170,18 +172,16 @@ function MarkerLabel({
 function MarkerMeta({ loading, meta }: { loading: boolean; meta: string }) {
   return (
     <span
-      className="shrink-0 text-2xs text-muted-foreground/70"
+      className={cn(
+        "shrink-0 text-2xs text-muted-foreground/70",
+        loading && "shimmer",
+      )}
       data-loading={loading || undefined}
+      data-shimmer-text={loading ? meta : undefined}
     >
       {meta}
     </span>
   );
-}
-
-function markerText(label: React.ReactNode, meta?: string | null) {
-  return [typeof label === "string" ? label : null, meta]
-    .filter(Boolean)
-    .join(" ");
 }
 
 function markerToneClass(tone: ActivityMarkerTone) {

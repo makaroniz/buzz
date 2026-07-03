@@ -32,6 +32,70 @@ export function deriveChatTitle(content: string) {
   return `${normalized.slice(0, MAX_QUICK_START_TITLE_CHARS - 3)}...`;
 }
 
+const MAX_CONVERSATION_TITLE_CHARS = 48;
+const MIN_CONVERSATION_TITLE_CHARS = 4;
+
+// Conversational lead-ins that carry no subject: greetings, vocatives, and
+// politeness framing. Stripped repeatedly until the sentence core remains.
+const TITLE_LEAD_IN_PATTERNS: RegExp[] = [
+  /^(?:hey|hi|hello|hiya|howdy|yo|ok(?:ay)?|so|um+|uh+|please)[\s,!.:-]+/i,
+  /^(?:fizz|there|everyone|team)[\s,!.:-]+/i,
+  /^(?:can|could|would|will) (?:you|we) (?:please )?/i,
+  /^(?:i(?:'d| would) like (?:you |us )?to|i (?:want|need) (?:you |us )?to|i(?:'m| am) (?:trying|looking) to)\s+/i,
+  /^(?:help me (?:to |with )?|let'?s |quick question[:,]?\s*|question[:,]\s*)/i,
+  /^(?:i was wondering (?:if (?:you|we) (?:can|could) )?)/i,
+];
+
+/**
+ * Derive a succinct conversation title from a chat's opening message: strip
+ * markdown/mention noise and conversational lead-ins ("hey can you help
+ * me…"), keep the first sentence, and cap on a word boundary. Falls back to
+ * [`deriveChatTitle`] when nothing meaningful survives.
+ */
+export function deriveConversationTitle(content: string) {
+  let text = content
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/nostr:\S+/g, " ")
+    .replace(/[*_~#>]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Only the opening sentence names the goal; drop follow-on sentences.
+  const sentenceEnd = text.search(/[.?!](?:\s|$)/);
+  if (sentenceEnd >= MIN_CONVERSATION_TITLE_CHARS) {
+    text = text.slice(0, sentenceEnd);
+  }
+
+  for (let pass = 0; pass < 6; pass++) {
+    const before = text;
+    for (const pattern of TITLE_LEAD_IN_PATTERNS) {
+      text = text.replace(pattern, "");
+    }
+    if (text === before) {
+      break;
+    }
+  }
+
+  text = text.trim().replace(/[\s,;:.!?-]+$/, "");
+  if (text.length < MIN_CONVERSATION_TITLE_CHARS) {
+    return deriveChatTitle(content);
+  }
+
+  if (text.length > MAX_CONVERSATION_TITLE_CHARS) {
+    const cut = text.lastIndexOf(" ", MAX_CONVERSATION_TITLE_CHARS);
+    text = text.slice(
+      0,
+      cut > MIN_CONVERSATION_TITLE_CHARS ? cut : MAX_CONVERSATION_TITLE_CHARS,
+    );
+    text = text.replace(/[\s,;:.!?-]+$/, "");
+  }
+
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function uniqueMentionPubkeys(
   identityPubkey: string | undefined,
   mentionPubkeys: string[],

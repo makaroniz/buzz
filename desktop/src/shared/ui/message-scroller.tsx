@@ -18,6 +18,7 @@ function MessageScrollerProvider(
 
 function MessageScroller({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof MessageScrollerPrimitive.Root>) {
   return (
@@ -28,7 +29,16 @@ function MessageScroller({
       )}
       data-slot="message-scroller"
       {...props}
-    />
+    >
+      {children}
+      {/* Bottom fade as an overlay instead of a mask-image on the scrolling
+          viewport — masks on scroll containers force per-frame repaints in
+          WKWebView and make scrolling visibly choppy. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-background"
+      />
+    </MessageScrollerPrimitive.Root>
   );
 }
 
@@ -39,7 +49,7 @@ function MessageScrollerViewport({
   return (
     <MessageScrollerPrimitive.Viewport
       className={cn(
-        "buzz-sidebar-scrollbar size-full min-h-0 min-w-0 overflow-y-auto overscroll-contain scroll-fade-b",
+        "buzz-sidebar-scrollbar size-full min-h-0 min-w-0 overflow-y-auto overscroll-contain",
         className,
       )}
       data-slot="message-scroller-viewport"
@@ -66,12 +76,12 @@ function MessageScrollerItem({
   scrollAnchor = false,
   ...props
 }: React.ComponentProps<typeof MessageScrollerPrimitive.Item>) {
+  // No content-visibility:auto here: skipped items report estimated sizes,
+  // which makes scrollHeight jump during streaming and breaks the
+  // scroller's at-bottom detection (stick-to-bottom randomly disengages).
   return (
     <MessageScrollerPrimitive.Item
-      className={cn(
-        "min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]",
-        className,
-      )}
+      className={cn("min-w-0 shrink-0", className)}
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
       {...props}

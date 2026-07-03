@@ -18,6 +18,7 @@ export function ChatListHeader() {
 
 export function ChatListItem({
   chat,
+  displayName,
   getChannelReadAt,
   isAgentRunning = false,
   isArchiving = false,
@@ -28,6 +29,8 @@ export function ChatListItem({
   unreadChannelIds,
 }: {
   chat: Channel;
+  /** Preferred label (chat metadata title); falls back to the channel name. */
+  displayName?: string | null;
   getChannelReadAt: (channelId: string) => number | null;
   isAgentRunning?: boolean;
   isArchiving?: boolean;
@@ -37,6 +40,7 @@ export function ChatListItem({
   unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
 }) {
+  const name = displayName?.trim() || chat.name;
   const isUnread = unreadChannelIds.has(chat.id);
   const unreadCount = unreadChannelCounts.get(chat.id) ?? 0;
   const readAt = getChannelReadAt(chat.id);
@@ -63,7 +67,7 @@ export function ChatListItem({
         onClick={() => onSelectChat(chat.id)}
         type="button"
       >
-        <span className="min-w-0 flex-1 truncate font-medium">{chat.name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
         {hasUnread ? (
           <span className="shrink-0 rounded-full bg-primary/15 px-1.5 text-2xs font-semibold text-primary">
             {unreadCount > 0 ? Math.min(unreadCount, 99) : ""}
@@ -74,7 +78,7 @@ export function ChatListItem({
         <div className="relative flex h-6 w-6 shrink-0 items-center justify-center">
           {isAgentRunning ? (
             <Spinner
-              aria-label={`Agent is running in ${chat.name}`}
+              aria-label={`Agent is running in ${name}`}
               className={cn(
                 "h-3.5 w-3.5 border-2 transition-opacity",
                 isSelected
@@ -87,7 +91,7 @@ export function ChatListItem({
           ) : null}
           {onArchiveChat ? (
             <Button
-              aria-label={`Archive ${chat.name}`}
+              aria-label={`Archive ${name}`}
               className={cn(
                 "absolute inset-0 h-6 w-6 bg-transparent text-muted-foreground opacity-0 shadow-none transition-[background-color,color,opacity] hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:opacity-100 group-focus-within/chat-row:opacity-100 group-hover/chat-row:opacity-100",
                 isSelected

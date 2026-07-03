@@ -692,6 +692,7 @@ function ChatList({
                       projectChats.map((chat) => (
                         <ChatListItem
                           chat={chat}
+                          displayName={metadataByChatId.get(chat.id)?.title}
                           getChannelReadAt={getChannelReadAt}
                           isAgentRunning={activeChatIds.has(chat.id)}
                           isArchiving={archivingChatId === chat.id}
@@ -724,6 +725,7 @@ function ChatList({
             chatsByProject.unprojected.map((chat) => (
               <ChatListItem
                 chat={chat}
+                displayName={metadataByChatId.get(chat.id)?.title}
                 getChannelReadAt={getChannelReadAt}
                 isAgentRunning={activeChatIds.has(chat.id)}
                 isArchiving={archivingChatId === chat.id}
@@ -747,6 +749,7 @@ function ChatList({
             {chatsByProject.shared.map((chat) => (
               <ChatListItem
                 chat={chat}
+                displayName={metadataByChatId.get(chat.id)?.title}
                 getChannelReadAt={getChannelReadAt}
                 isAgentRunning={activeChatIds.has(chat.id)}
                 isArchiving={archivingChatId === chat.id}

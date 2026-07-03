@@ -2,6 +2,7 @@ import * as React from "react";
 
 import {
   ensureRelayObserverSubscription,
+  getAgentChatTitle,
   getAgentObserverSnapshot,
   getAgentTranscript,
   ingestArchivedObserverEvents,
@@ -155,4 +156,20 @@ export function useLoadArchivedObserverEvents(enabled: boolean) {
   }, [enabled, identityPubkey, hasSubscription, hasOlderArchived]);
 
   return { fetchOlderArchived, hasOlderArchived };
+}
+
+/**
+ * Latest agent-generated conversation title (`chat_title` observer frame)
+ * for a channel. Requires an active observer subscription — pair with
+ * `useAgentTranscript`/`useObserverEvents`, which establish it.
+ */
+export function useAgentChatTitle(
+  channelId: string | null | undefined,
+): string | null {
+  const getSnapshot = React.useCallback(
+    () => getAgentChatTitle(channelId),
+    [channelId],
+  );
+
+  return React.useSyncExternalStore(subscribeToStore, getSnapshot);
 }

@@ -18,10 +18,17 @@ import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
 import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import { cn } from "@/shared/lib/cn";
 import { channelChrome } from "@/shared/layout/chromeLayout";
+import { AnimatedTitleText } from "@/shared/ui/animated-title-text";
 import { Button } from "@/shared/ui/button";
 
 type ChatHeaderProps = {
   actions?: React.ReactNode;
+  /**
+   * Animate title changes with the search-placeholder character swap. Only
+   * enable where a title renames in place (e.g. chat auto-titling) — key the
+   * header by entity id so switching entities doesn't animate.
+   */
+  animatedTitle?: boolean;
   belowSystemChrome?: boolean;
   /** Ref to the outer chrome wrapper when `belowSystemChrome` is true. */
   chromeWrapperRef?: React.Ref<HTMLDivElement>;
@@ -104,6 +111,7 @@ function ChannelIcon({
 
 export function ChatHeader({
   actions,
+  animatedTitle = false,
   belowSystemChrome = false,
   chromeWrapperRef,
   title,
@@ -162,7 +170,7 @@ export function ChatHeader({
               data-testid="chat-title"
               title={trimmedDescription || undefined}
             >
-              {title}
+              {animatedTitle ? <AnimatedTitleText text={title} /> : title}
             </h1>
             <Button
               aria-label={`Copy channel name: ${title}`}

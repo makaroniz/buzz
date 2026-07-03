@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildProjectSetupContext,
   deriveChatTitle,
+  deriveConversationTitle,
   uniqueMentionPubkeys,
 } from "./chatSetup.ts";
 
@@ -13,6 +14,57 @@ test("deriveChatTitle trims and shortens long first prompts", () => {
     "build me a dashboard",
   );
   assert.equal(deriveChatTitle("x".repeat(90)).length, 72);
+});
+
+test("deriveConversationTitle strips conversational lead-ins", () => {
+  assert.equal(
+    deriveConversationTitle(
+      "Hey Fizz, can you help me figure out why my Playwright tests are flaky?",
+    ),
+    "Figure out why my Playwright tests are flaky",
+  );
+  assert.equal(
+    deriveConversationTitle(
+      "please add dark mode support to the settings page",
+    ),
+    "Add dark mode support to the settings page",
+  );
+  assert.equal(
+    deriveConversationTitle("I want to rename the deploy workflow"),
+    "Rename the deploy workflow",
+  );
+});
+
+test("deriveConversationTitle keeps only the opening sentence", () => {
+  assert.equal(
+    deriveConversationTitle(
+      "Why is the relay slow today? Also can you check the logs and maybe restart it.",
+    ),
+    "Why is the relay slow today",
+  );
+});
+
+test("deriveConversationTitle caps on a word boundary", () => {
+  const title = deriveConversationTitle(
+    "investigate the intermittent websocket disconnects happening on the staging relay every afternoon",
+  );
+  assert.ok(title.length <= 48, `too long: ${title}`);
+  assert.ok(!title.endsWith(" "), "trailing space");
+  assert.equal(title, "Investigate the intermittent websocket");
+});
+
+test("deriveConversationTitle strips markdown and URLs", () => {
+  assert.equal(
+    deriveConversationTitle(
+      "look at **this** `render bug` https://example.com/issue/42",
+    ),
+    "Look at this render bug",
+  );
+});
+
+test("deriveConversationTitle falls back when nothing survives", () => {
+  assert.equal(deriveConversationTitle("hey!"), "hey!");
+  assert.equal(deriveConversationTitle("  "), "New chat");
 });
 
 test("uniqueMentionPubkeys adds default agent and removes sender", () => {
