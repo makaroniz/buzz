@@ -513,42 +513,64 @@ impl AgentPool {
     /// and this call, or the channel was never in flight). This is
     /// semantically a soft no-op — the caller should release any withheld
     /// event and let normal dispatch handle delivery.
+    ///
+    /// On success returns the `tokio::task::Id` of the turn the steer was
+    /// sent to. The caller must thread this id through the ack watcher so
+    /// that ack-driven bookkeeping (`record_steered_event`) binds to this
+    /// exact turn — a late ack matched by channel alone could attach to a
+    /// *successor* turn on the same channel.
     pub fn send_steer(
         &mut self,
         channel_id: Uuid,
         request: SteerRequest,
-    ) -> Result<(), SteerError> {
-        let meta = self
+    ) -> Result<tokio::task::Id, SteerError> {
+        let (task_id, meta) = self
             .task_map
-            .values_mut()
-            .find(|m| m.channel_id == Some(channel_id))
+            .iter_mut()
+            .find(|(_, m)| m.channel_id == Some(channel_id))
             .ok_or(SteerError::PromptCompleted)?;
         let tx = meta
             .steer_tx
             .as_ref()
             .ok_or_else(|| SteerError::Transport("steer_tx not installed".into()))?;
         tx.try_send(request)
-            .map_err(|e| SteerError::Transport(e.to_string()))
+            .map_err(|e| SteerError::Transport(e.to_string()))?;
+        Ok(*task_id)
     }
 
-    /// Record an event id as steered into the in-flight turn for
-    /// `channel_id`, so its 👀 is cleared when that turn ends (the event
-    /// never enters a `FlushBatch`, so `run_prompt_task`'s `ReactionGuard`
-    /// cannot own it). Returns `false` if no task is in flight for the
-    /// channel — the turn already ended and the caller must clean up the
-    /// reaction immediately instead.
-    pub fn record_steered_event(&mut self, channel_id: Uuid, event_id: &str) -> bool {
-        match self
-            .task_map
-            .values_mut()
-            .find(|m| m.channel_id == Some(channel_id))
-        {
+    /// Record an event id as steered into the turn identified by `task_id`,
+    /// so its 👀 is cleared when that turn ends (the event never enters a
+    /// `FlushBatch`, so `run_prompt_task`'s `ReactionGuard` cannot own it).
+    ///
+    /// Matches on the exact task id — never on channel — so a delayed
+    /// `SteerAck::Success` for a turn that already ended cannot attach its
+    /// event to a successor turn on the same channel (which would keep the
+    /// 👀 alive until the *wrong* turn stopped). Returns `false` if that
+    /// task is no longer in flight — the turn ended and the caller must
+    /// clean up the reaction immediately instead.
+    pub fn record_steered_event(&mut self, task_id: tokio::task::Id, event_id: &str) -> bool {
+        match self.task_map.get_mut(&task_id) {
             Some(meta) => {
                 meta.steered_event_ids.push(event_id.to_string());
                 true
             }
             None => false,
         }
+    }
+
+    /// Take every steered event id from every in-flight `TaskMeta`.
+    ///
+    /// Shutdown-only: the graceful-shutdown drain consumes `PromptResult`s
+    /// directly (never through `handle_prompt_result`) and aborts whatever
+    /// outlives the grace period, so `TaskMeta`s are dropped with the pool
+    /// without their steered-👀 cleanup ever firing. Callers drain here and
+    /// remove the reactions before the process exits — every in-flight turn
+    /// is, by definition, stopping.
+    pub fn drain_all_steered_event_ids(&mut self) -> Vec<String> {
+        self.task_map
+            .values_mut()
+            .flat_map(|m| std::mem::take(&mut m.steered_event_ids))
+            .collect()
     }
 
     pub fn result_tx(&self) -> mpsc::UnboundedSender<PromptResult> {
@@ -3686,23 +3708,20 @@ mod tests {
         // Reaching here without a panic is the test.
     }
 
-    // ── record_steered_event ──────────────────────────────────────────────
+    // ── record_steered_event / drain_all_steered_event_ids ───────────────
     //
     // Pins the stale-👀 fix: events delivered via SteerAck::Success never
     // enter a FlushBatch, so their 👀 must be attached to the in-flight
-    // turn's TaskMeta (cleared on turn end) — or, if no turn is in flight,
-    // the caller must clean up immediately (record returns false).
+    // turn's TaskMeta (cleared on turn end) — matched by exact task id, so
+    // a delayed ack can never bind to a successor turn on the same channel.
+    // If the turn is gone, record returns false and the caller must clean
+    // up immediately.
 
-    /// Recording against an in-flight channel stores the id in that turn's
-    /// TaskMeta; ids accumulate across multiple steers into the same turn.
-    #[tokio::test]
-    async fn test_record_steered_event_attaches_to_in_flight_turn() {
-        let mut pool = AgentPool::from_slots(vec![]);
-        let channel_id = Uuid::new_v4();
-
+    fn insert_meta(pool: &mut AgentPool, channel_id: Uuid) -> tokio::task::Id {
         let abort_handle = pool.join_set.spawn(async {});
+        let task_id = abort_handle.id();
         pool.task_map_mut().insert(
-            abort_handle.id(),
+            task_id,
             TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
@@ -3712,44 +3731,86 @@ mod tests {
                 steered_event_ids: Vec::new(),
             },
         );
+        task_id
+    }
 
-        assert!(pool.record_steered_event(channel_id, "aaa"));
-        assert!(pool.record_steered_event(channel_id, "bbb"));
+    /// Recording against an in-flight task stores the id in that turn's
+    /// TaskMeta; ids accumulate across multiple steers into the same turn.
+    #[tokio::test]
+    async fn test_record_steered_event_attaches_to_in_flight_turn() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let channel_id = Uuid::new_v4();
+        let task_id = insert_meta(&mut pool, channel_id);
+
+        assert!(pool.record_steered_event(task_id, "aaa"));
+        assert!(pool.record_steered_event(task_id, "bbb"));
 
         let ids: Vec<String> = pool
             .task_map()
-            .values()
-            .find(|m| m.channel_id == Some(channel_id))
+            .get(&task_id)
             .expect("task meta must exist")
             .steered_event_ids
             .clone();
         assert_eq!(ids, vec!["aaa".to_string(), "bbb".to_string()]);
     }
 
-    /// Recording against a channel with no in-flight turn returns false so
-    /// the caller cleans up the 👀 immediately.
+    /// Recording against a task that is no longer in flight returns false
+    /// so the caller cleans up the 👀 immediately.
     #[tokio::test]
     async fn test_record_steered_event_returns_false_when_no_turn_in_flight() {
         let mut pool = AgentPool::from_slots(vec![]);
-        let in_flight = Uuid::new_v4();
-        let other = Uuid::new_v4();
+        let channel_id = Uuid::new_v4();
+        let task_id = insert_meta(&mut pool, channel_id);
+        pool.task_map_mut().remove(&task_id);
 
-        let abort_handle = pool.join_set.spawn(async {});
-        pool.task_map_mut().insert(
-            abort_handle.id(),
-            TaskMeta {
-                agent_index: 0,
-                channel_id: Some(in_flight),
-                recoverable_batch: None,
-                control_tx: None,
-                steer_tx: None,
-                steered_event_ids: Vec::new(),
-            },
+        assert!(!pool.record_steered_event(task_id, "ccc"));
+    }
+
+    /// Generation-reuse race: turn A ends, turn B starts on the SAME
+    /// channel, then A's delayed SteerAck::Success arrives. The stale
+    /// task id must NOT attach to B — record returns false (caller
+    /// removes the 👀 immediately) and B's meta stays untouched.
+    #[tokio::test]
+    async fn test_late_ack_for_ended_turn_does_not_bind_to_successor_turn() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let channel_id = Uuid::new_v4();
+
+        // Turn A: steer accepted, then the turn completes (meta removed).
+        let task_a = insert_meta(&mut pool, channel_id);
+        pool.task_map_mut().remove(&task_a);
+
+        // Turn B: a fresh event starts a new turn on the same channel.
+        let task_b = insert_meta(&mut pool, channel_id);
+
+        // A's delayed ack arrives carrying A's task id.
+        assert!(
+            !pool.record_steered_event(task_a, "stale"),
+            "a late ack for an ended turn must demand immediate cleanup"
         );
+        assert!(
+            pool.task_map()
+                .get(&task_b)
+                .expect("turn B in flight")
+                .steered_event_ids
+                .is_empty(),
+            "turn B must not inherit turn A's steered event"
+        );
+    }
 
-        assert!(!pool.record_steered_event(other, "ccc"));
-        // Empty pool: no task meta at all.
-        let mut empty = AgentPool::from_slots(vec![]);
-        assert!(!empty.record_steered_event(in_flight, "ddd"));
+    /// Shutdown drain: every steered id is taken from every in-flight
+    /// TaskMeta exactly once, leaving the metas empty.
+    #[tokio::test]
+    async fn test_drain_all_steered_event_ids_takes_everything_once() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let t1 = insert_meta(&mut pool, Uuid::new_v4());
+        let t2 = insert_meta(&mut pool, Uuid::new_v4());
+        assert!(pool.record_steered_event(t1, "e1"));
+        assert!(pool.record_steered_event(t2, "e2"));
+        assert!(pool.record_steered_event(t2, "e3"));
+
+        let mut drained = pool.drain_all_steered_event_ids();
+        drained.sort();
+        assert_eq!(drained, vec!["e1", "e2", "e3"]);
+        assert!(pool.drain_all_steered_event_ids().is_empty());
     }
 }
