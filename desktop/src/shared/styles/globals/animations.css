@@ -263,6 +263,31 @@
   }
 }
 
+/* Work-panel content arriving (the agent posted a PR): a gentle pop —
+   slight scale + fade, matching the message entrance feel. */
+@keyframes buzz-work-card-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.buzz-work-card-in {
+  animation: buzz-work-card-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .buzz-work-card-in {
+    animation: none;
+  }
+}
+
 .buzz-poof-layer {
   inset: 0;
   overflow: hidden;

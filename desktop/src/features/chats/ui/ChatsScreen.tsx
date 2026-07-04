@@ -310,17 +310,26 @@ export function ChatsScreen({
   );
   const archiveChatMutation = useArchiveChatMutation();
 
-  // Latest PR link the chat's agent posted — drives the header toggle and
-  // the top-right work module in the conversation.
+  // Latest PR link ANY agent in the chat posted — drives the header toggle
+  // and the top-right work module. Matching only the default agent missed
+  // PRs from additional agents added to the chat.
   const agentPullRequestHref = React.useMemo(() => {
-    const agentPubkey = metadata?.defaultAgentPubkey ?? defaultAgent?.pubkey;
-    if (!agentPubkey) {
+    const agentKeys = new Set(
+      (managedAgentsQuery.data ?? []).map((agent) =>
+        normalizePubkey(agent.pubkey),
+      ),
+    );
+    const configuredAgent =
+      metadata?.defaultAgentPubkey ?? defaultAgent?.pubkey;
+    if (configuredAgent) {
+      agentKeys.add(normalizePubkey(configuredAgent));
+    }
+    if (agentKeys.size === 0) {
       return null;
     }
-    const agentKey = normalizePubkey(agentPubkey);
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index];
-      if (normalizePubkey(message.pubkey) !== agentKey) {
+      if (!agentKeys.has(normalizePubkey(message.pubkey))) {
         continue;
       }
       const preview = extractSupportedLinkPreviews(message.content).find(
@@ -331,7 +340,12 @@ export function ChatsScreen({
       }
     }
     return null;
-  }, [defaultAgent?.pubkey, messages, metadata?.defaultAgentPubkey]);
+  }, [
+    defaultAgent?.pubkey,
+    managedAgentsQuery.data,
+    messages,
+    metadata?.defaultAgentPubkey,
+  ]);
   // null = auto: open once the agent has produced a PR, closed otherwise.
   // A click stores an explicit preference for the current chat.
   const [workPanelPreference, setWorkPanelPreference] = React.useState<

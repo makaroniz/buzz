@@ -119,79 +119,84 @@ export function ChatWorkPanel({
             />
           </div>
           {preview ? (
-            <GithubPullRequestCard className="w-full" preview={preview} />
-          ) : null}
-          {preview ? (
-            <details
-              className={cn(CHIP_CLASS, "group/ci block p-0")}
-              data-testid="chat-ci-monitor"
+            // Keyed by href so a NEW pull request re-runs the pop-in, not
+            // just the first one.
+            <div
+              className="buzz-work-card-in flex flex-col gap-2"
+              key={preview.href}
             >
-              <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
-                <CiStatus checks={checks} />
-                <span
-                  aria-hidden="true"
-                  className="mx-0.5 text-muted-foreground/50"
-                >
-                  ·
-                </span>
-                <MessageSquareText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 truncate text-muted-foreground">
-                  {openThreads} open comment{openThreads === 1 ? "" : "s"}
-                </span>
-                <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open/ci:rotate-180" />
-              </summary>
-              <div className="flex flex-col gap-2.5 border-t border-border/40 px-3 py-2.5">
-                {checks && checks.runs.length > 0 ? (
-                  <ul className="flex flex-col gap-1.5">
-                    {dedupeRunKeys(checks.runs).map(({ key, run }) => (
-                      <li className="flex items-center gap-1.5" key={key}>
-                        <CheckRunIcon state={run.state} />
-                        <span className="min-w-0 truncate text-muted-foreground">
-                          {run.name}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <span className="text-muted-foreground">
-                    No checks reported yet.
+              <GithubPullRequestCard className="w-full" preview={preview} />
+              <details
+                className={cn(CHIP_CLASS, "group/ci block p-0")}
+                data-testid="chat-ci-monitor"
+              >
+                <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+                  <CiStatus checks={checks} />
+                  <span
+                    aria-hidden="true"
+                    className="mx-0.5 text-muted-foreground/50"
+                  >
+                    ·
                   </span>
-                )}
-                <div aria-hidden="true" className="h-px bg-border/40" />
-                <label
-                  className="flex cursor-pointer items-center gap-2"
-                  htmlFor="automation-auto-fix-ci"
-                >
-                  <Checkbox
-                    checked={automation.autoFixCi}
-                    data-testid="automation-auto-fix-ci"
-                    id="automation-auto-fix-ci"
-                    onCheckedChange={(checked) =>
-                      updateChatWorkAutomation(chatId, {
-                        autoFixCi: checked === true,
-                      })
-                    }
-                  />
-                  <span>Auto-fix CI failures</span>
-                </label>
-                <label
-                  className="flex cursor-pointer items-center gap-2"
-                  htmlFor="automation-address-comments"
-                >
-                  <Checkbox
-                    checked={automation.addressComments}
-                    data-testid="automation-address-comments"
-                    id="automation-address-comments"
-                    onCheckedChange={(checked) =>
-                      updateChatWorkAutomation(chatId, {
-                        addressComments: checked === true,
-                      })
-                    }
-                  />
-                  <span>Address comments & resolve</span>
-                </label>
-              </div>
-            </details>
+                  <MessageSquareText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    {openThreads} open comment{openThreads === 1 ? "" : "s"}
+                  </span>
+                  <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open/ci:rotate-180" />
+                </summary>
+                <div className="flex flex-col gap-2.5 border-t border-border/40 px-3 py-2.5">
+                  {checks && checks.runs.length > 0 ? (
+                    <ul className="flex flex-col gap-1.5">
+                      {dedupeRunKeys(checks.runs).map(({ key, run }) => (
+                        <li className="flex items-center gap-1.5" key={key}>
+                          <CheckRunIcon state={run.state} />
+                          <span className="min-w-0 truncate text-muted-foreground">
+                            {run.name}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      No checks reported yet.
+                    </span>
+                  )}
+                  <div aria-hidden="true" className="h-px bg-border/40" />
+                  <label
+                    className="flex cursor-pointer items-center gap-2"
+                    htmlFor="automation-auto-fix-ci"
+                  >
+                    <Checkbox
+                      checked={automation.autoFixCi}
+                      data-testid="automation-auto-fix-ci"
+                      id="automation-auto-fix-ci"
+                      onCheckedChange={(checked) =>
+                        updateChatWorkAutomation(chatId, {
+                          autoFixCi: checked === true,
+                        })
+                      }
+                    />
+                    <span>Auto-fix CI failures</span>
+                  </label>
+                  <label
+                    className="flex cursor-pointer items-center gap-2"
+                    htmlFor="automation-address-comments"
+                  >
+                    <Checkbox
+                      checked={automation.addressComments}
+                      data-testid="automation-address-comments"
+                      id="automation-address-comments"
+                      onCheckedChange={(checked) =>
+                        updateChatWorkAutomation(chatId, {
+                          addressComments: checked === true,
+                        })
+                      }
+                    />
+                    <span>Address comments & resolve</span>
+                  </label>
+                </div>
+              </details>
+            </div>
           ) : null}
         </div>
       </div>
