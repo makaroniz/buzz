@@ -624,9 +624,7 @@ export function ChatDetail({
             />
           </div>
         </div>
-        {workPanelHref ? (
-          <ChatWorkPanel open={showWorkPanel} prHref={workPanelHref} />
-        ) : null}
+        <ChatWorkPanel open={showWorkPanel} prHref={workPanelHref} />
       </div>
     </>
   );

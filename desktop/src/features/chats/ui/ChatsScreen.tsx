@@ -332,13 +332,17 @@ export function ChatsScreen({
     }
     return null;
   }, [defaultAgent?.pubkey, messages, metadata?.defaultAgentPubkey]);
-  const [isWorkPanelOpen, setIsWorkPanelOpen] = React.useState(true);
+  // null = auto: open once the agent has produced a PR, closed otherwise.
+  // A click stores an explicit preference for the current chat.
+  const [workPanelPreference, setWorkPanelPreference] = React.useState<
+    boolean | null
+  >(null);
   const workPanelChatRef = React.useRef(selectedChatId);
   if (workPanelChatRef.current !== selectedChatId) {
-    // Each chat starts with its work module visible.
     workPanelChatRef.current = selectedChatId;
-    setIsWorkPanelOpen(true);
+    setWorkPanelPreference(null);
   }
+  const isWorkPanelOpen = workPanelPreference ?? agentPullRequestHref !== null;
   const startManagedAgentMutation = useStartManagedAgentMutation();
   const [isEnsuringDefaultAgent, setIsEnsuringDefaultAgent] =
     React.useState(false);
@@ -625,26 +629,24 @@ export function ChatsScreen({
                 messages={messages}
                 metadata={metadata}
                 workPanelToggle={
-                  agentPullRequestHref ? (
-                    <Button
-                      aria-label={
-                        isWorkPanelOpen ? "Hide work panel" : "Show work panel"
-                      }
-                      aria-pressed={isWorkPanelOpen}
-                      data-testid="toggle-work-panel"
-                      onClick={() => setIsWorkPanelOpen((open) => !open)}
-                      size="icon"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <GitPullRequest
-                        className={cn(
-                          "h-4 w-4",
-                          isWorkPanelOpen && "text-primary",
-                        )}
-                      />
-                    </Button>
-                  ) : null
+                  <Button
+                    aria-label={
+                      isWorkPanelOpen ? "Hide work panel" : "Show work panel"
+                    }
+                    aria-pressed={isWorkPanelOpen}
+                    data-testid="toggle-work-panel"
+                    onClick={() => setWorkPanelPreference(!isWorkPanelOpen)}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <GitPullRequest
+                      className={cn(
+                        "h-4 w-4",
+                        isWorkPanelOpen && "text-primary",
+                      )}
+                    />
+                  </Button>
                 }
               />
             }

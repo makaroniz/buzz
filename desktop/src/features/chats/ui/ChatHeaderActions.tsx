@@ -344,10 +344,10 @@ function ChatShareMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          className="shadow-none"
+          className="border border-border/60 bg-transparent shadow-none hover:bg-muted"
           size="sm"
           type="button"
-          variant="secondary"
+          variant="ghost"
         >
           <Share2 className="h-4 w-4" />
           Share

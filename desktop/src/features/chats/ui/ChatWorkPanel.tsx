@@ -9,26 +9,22 @@ import { cn } from "@/shared/lib/cn";
 import { GithubPullRequestCard } from "@/shared/ui/link-preview-attachment";
 
 /**
- * Right-hand work module for a chat whose agent produced a pull request:
- * the PR's source branch and the live PR card (status, diff stats, link),
- * grouped in a secondary-surface container. The drawer eases open/closed on
- * its width so the conversation column and composer slide to make room.
+ * Right-hand work drawer for a chat: the PR's source branch and the live PR
+ * card once the agent has produced a pull request, or an empty state until
+ * then. The drawer eases open/closed on its width so the conversation column
+ * and composer slide to make room.
  */
 export function ChatWorkPanel({
   open = true,
   prHref,
 }: {
   open?: boolean;
-  prHref: string;
+  prHref?: string | null;
 }) {
-  const preview = parseSupportedLinkPreview(prHref);
-  const ref = parseGithubPullRequestRef(prHref);
+  const preview = prHref ? parseSupportedLinkPreview(prHref) : null;
+  const ref = prHref ? parseGithubPullRequestRef(prHref) : null;
   const query = useGithubPullRequestQuery(ref);
   const branch = query.data?.headRef?.trim();
-
-  if (!preview) {
-    return null;
-  }
 
   return (
     <aside
@@ -42,14 +38,18 @@ export function ChatWorkPanel({
       {/* Fixed-width inner wrapper so content never reflows mid-slide. */}
       <div className="w-96 overflow-y-auto py-4 pl-1 pr-4">
         <div className="flex flex-col gap-2">
-          {branch ? (
-            // Same attachment styling as the generic link chips.
-            <div className="flex items-center gap-1.5 rounded-2xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs">
-              <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          {/* Same attachment styling as the generic link chips. */}
+          <div className="flex items-center gap-1.5 rounded-2xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            {branch ? (
               <span className="min-w-0 truncate font-mono">{branch}</span>
-            </div>
+            ) : (
+              <span className="text-muted-foreground">No current branch</span>
+            )}
+          </div>
+          {preview ? (
+            <GithubPullRequestCard className="w-full" preview={preview} />
           ) : null}
-          <GithubPullRequestCard className="w-full" preview={preview} />
         </div>
       </div>
     </aside>
