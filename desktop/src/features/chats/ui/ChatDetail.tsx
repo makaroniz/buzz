@@ -624,7 +624,12 @@ export function ChatDetail({
             />
           </div>
         </div>
-        <ChatWorkPanel open={showWorkPanel} prHref={workPanelHref} />
+        <ChatWorkPanel
+          chatId={chat.id}
+          onAutomationPrompt={(content) => void onSend(content, [])}
+          open={showWorkPanel}
+          prHref={workPanelHref}
+        />
       </div>
     </>
   );

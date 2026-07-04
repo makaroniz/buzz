@@ -155,6 +155,12 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
     workPanel.locator("[data-link-preview='github-pull-request']"),
   ).toBeVisible();
 
+  // CI monitor and automation toggles render alongside the card.
+  await expect(page.getByTestId("chat-ci-monitor")).toContainText("CI passing");
+  await expect(page.getByTestId("chat-ci-monitor")).toContainText("3 comments");
+  await expect(page.getByTestId("automation-auto-fix-ci")).toBeVisible();
+  await expect(page.getByTestId("automation-address-comments")).toBeVisible();
+
   // The header's PR button toggles the panel.
   await page.getByTestId("toggle-work-panel").click();
   await expect(workPanel).not.toBeVisible();

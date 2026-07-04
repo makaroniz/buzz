@@ -13,6 +13,19 @@ export type GithubPullRequestInfo = {
   changedFiles: number;
   /** Source branch of the PR (`head.ref`). */
   headRef: string;
+  /** Head commit sha — used to query check runs. */
+  headSha: string;
+  /** Issue-level comment count. */
+  comments: number;
+  /** Review (inline) comment count. */
+  reviewComments: number;
+};
+
+export type GithubCheckSummary = {
+  total: number;
+  pending: number;
+  failed: number;
+  succeeded: number;
 };
 
 export type GithubPullRequestRef = {
@@ -69,6 +82,37 @@ export function useGithubPullRequestQuery(ref: GithubPullRequestRef | null) {
         },
       )) ?? null,
     staleTime: 60_000,
+    // The work panel doubles as a PR monitor — keep state and comment
+    // counts fresh while mounted.
+    refetchInterval: 60_000,
+    retry: 1,
+  });
+}
+
+export function useGithubCheckSummaryQuery(
+  ref: GithubPullRequestRef | null,
+  sha: string | null | undefined,
+) {
+  return useQuery({
+    enabled: ref !== null && Boolean(sha),
+    queryKey: [
+      "github-check-summary",
+      ref?.owner ?? "",
+      ref?.repo ?? "",
+      sha ?? "",
+    ],
+    queryFn: async () =>
+      (await invokeTauri<GithubCheckSummary | null>(
+        "fetch_github_check_summary",
+        {
+          owner: ref?.owner ?? "",
+          repo: ref?.repo ?? "",
+          sha: sha ?? "",
+        },
+      )) ?? null,
+    staleTime: 30_000,
+    // CI flips fast while runs execute; poll while the panel is mounted.
+    refetchInterval: 45_000,
     retry: 1,
   });
 }

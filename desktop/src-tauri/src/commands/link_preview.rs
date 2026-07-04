@@ -25,6 +25,23 @@ pub struct GithubPullRequestInfo {
     pub changed_files: i64,
     /// Source branch of the PR (`head.ref`).
     pub head_ref: String,
+    /// Head commit sha — used to query check runs.
+    pub head_sha: String,
+    /// Issue-level comment count.
+    pub comments: i64,
+    /// Review (inline) comment count.
+    pub review_comments: i64,
+}
+
+/// Aggregate check-run state for a commit, for the chat work panel's CI
+/// monitor.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCheckSummary {
+    pub total: i64,
+    pub pending: i64,
+    pub failed: i64,
+    pub succeeded: i64,
 }
 
 /// Fetch live PR details from the GitHub REST API.
@@ -83,6 +100,80 @@ pub async fn fetch_github_pull_request(
         deletions: body["deletions"].as_i64().unwrap_or(0),
         changed_files: body["changed_files"].as_i64().unwrap_or(0),
         head_ref: body["head"]["ref"].as_str().unwrap_or_default().to_string(),
+        head_sha: body["head"]["sha"].as_str().unwrap_or_default().to_string(),
+        comments: body["comments"].as_i64().unwrap_or(0),
+        review_comments: body["review_comments"].as_i64().unwrap_or(0),
+    }))
+}
+
+/// Fetch the check-run summary for a commit. Same auth/fallback behavior as
+/// [`fetch_github_pull_request`]: `Ok(None)` on any non-success response.
+#[tauri::command]
+pub async fn fetch_github_check_summary(
+    owner: String,
+    repo: String,
+    sha: String,
+) -> Result<Option<GithubCheckSummary>, String> {
+    if !is_valid_github_name(&owner)
+        || !is_valid_github_name(&repo)
+        || !sha.chars().all(|c| c.is_ascii_hexdigit())
+        || sha.is_empty()
+        || sha.len() > 64
+    {
+        return Err("invalid GitHub check reference".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .pool_idle_timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(1)
+        .build()
+        .map_err(|error| format!("github client failed: {error}"))?;
+
+    let url = format!(
+        "https://api.github.com/repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100"
+    );
+    let mut request = client
+        .get(&url)
+        .timeout(GITHUB_API_TIMEOUT)
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(USER_AGENT, "Buzz Desktop link preview")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(token) = ambient_github_token() {
+        request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("github request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("github response parse failed: {error}"))?;
+
+    let runs = body["check_runs"].as_array().cloned().unwrap_or_default();
+    let mut pending = 0;
+    let mut failed = 0;
+    let mut succeeded = 0;
+    for run in &runs {
+        match run["status"].as_str().unwrap_or_default() {
+            "completed" => match run["conclusion"].as_str().unwrap_or_default() {
+                "success" | "neutral" | "skipped" => succeeded += 1,
+                _ => failed += 1,
+            },
+            _ => pending += 1,
+        }
+    }
+
+    Ok(Some(GithubCheckSummary {
+        total: runs.len() as i64,
+        pending,
+        failed,
+        succeeded,
     }))
 }
 

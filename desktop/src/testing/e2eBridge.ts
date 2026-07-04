@@ -8888,6 +8888,8 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "get_media_proxy_port":
         return MOCK_MEDIA_PROXY_PORT;
+      case "fetch_github_check_summary":
+        return { total: 4, pending: 0, failed: 0, succeeded: 4 };
       case "fetch_github_pull_request": {
         // Deterministic PR details so the rich GitHub card renders in mocks.
         const prPayload = payload as { number?: number };
@@ -8900,6 +8902,9 @@ export function maybeInstallE2eTauriMocks() {
           deletions: 96,
           changedFiles: 24,
           headRef: "kennylopez-chatmode",
+          headSha: "deadbeefcafe0000000000000000000000000000",
+          comments: 2,
+          reviewComments: 1,
           number: prPayload.number ?? 0,
         };
       }
