@@ -8,7 +8,6 @@ import {
   Hash,
   House,
   Lock,
-  MessageCircle,
   Zap,
 } from "lucide-react";
 import type * as React from "react";
@@ -76,10 +75,6 @@ function ChannelIcon({
 
   if (mode === "agents") {
     return <Bot className={HEADER_ICON_CLASS} />;
-  }
-
-  if (mode === "chats") {
-    return <MessageCircle className={HEADER_ICON_CLASS} />;
   }
 
   if (mode === "workflows") {
@@ -153,15 +148,18 @@ export function ChatHeader({
       <div className="flex h-9 min-w-0 items-center gap-2.5">
         <div className="min-w-0 flex-1">
           <div className="group/title flex min-w-0 items-center gap-[4px] overflow-hidden">
-            <div className="flex shrink-0 items-center">
-              {leadingContent ?? (
-                <ChannelIcon
-                  channelType={channelType}
-                  mode={mode}
-                  visibility={visibility}
-                />
-              )}
-            </div>
+            {/* Chats render no leading icon — the title stands alone. */}
+            {leadingContent || mode !== "chats" ? (
+              <div className="flex shrink-0 items-center">
+                {leadingContent ?? (
+                  <ChannelIcon
+                    channelType={channelType}
+                    mode={mode}
+                    visibility={visibility}
+                  />
+                )}
+              </div>
+            ) : null}
             <h1
               className={cn(
                 "min-w-0 truncate text-base font-semibold leading-6 tracking-tight",
