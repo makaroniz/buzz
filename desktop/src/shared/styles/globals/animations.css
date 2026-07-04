@@ -165,10 +165,6 @@
 .buzz-shimmer::before,
 .shimmer::before {
   animation: buzz-shimmer var(--buzz-shimmer-duration) linear infinite;
-  /* Start mid-sweep so freshly mounted rows (the Working marker re-mounts
-     between tool executions) show the band immediately instead of waiting
-     out the transparent lead-in. */
-  animation-delay: calc(var(--buzz-shimmer-duration) / -2);
   background-clip: text;
   background-image: linear-gradient(
     90deg,
@@ -189,13 +185,27 @@
   -webkit-text-fill-color: transparent;
 }
 
+/* One right-to-left sweep per cycle, phase-shifted to start mid-sweep so a
+   freshly mounted row (the Working marker re-mounts between tool executions)
+   shows the band immediately instead of waiting out the transparent lead-in.
+   The 50%→50.01% jump lands while the band is outside the text, so it is
+   invisible. Keyframes instead of a negative animation-delay — WKWebView
+   handles calc() delays on pseudo-elements unreliably. */
 @keyframes buzz-shimmer {
   0% {
+    background-position: 50% 0;
+  }
+
+  50% {
+    background-position: 0% 0;
+  }
+
+  50.01% {
     background-position: 100% 0;
   }
 
   100% {
-    background-position: 0% 0;
+    background-position: 50% 0;
   }
 }
 
