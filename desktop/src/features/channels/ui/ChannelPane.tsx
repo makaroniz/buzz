@@ -775,6 +775,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               onExpandReplies={onExpandThreadReplies}
               onSelectReplyTarget={onSelectThreadReplyTarget}
               onSend={onSendThreadReply}
+              onStartSideConversation={onStartSideConversation}
               onScrollTargetResolved={onThreadScrollTargetResolved}
               onToggleReaction={onToggleReaction}
               onUnfollowThread={onUnfollowThread}
