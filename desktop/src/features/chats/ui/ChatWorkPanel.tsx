@@ -1,4 +1,5 @@
 import * as React from "react";
+import { toast } from "sonner";
 import {
   ChevronDown,
   CircleCheck,
@@ -51,6 +52,7 @@ const RENUDGE_COOLDOWN_MS = 15 * 60_000;
  * chat's agent automatically (deduped per head sha / open-thread watermark).
  */
 export function ChatWorkPanel({
+  agentName = "Fizz",
   branch = null,
   chatId,
   isTurnActive = false,
@@ -59,6 +61,8 @@ export function ChatWorkPanel({
   prHref,
   projectPath = null,
 }: {
+  /** Default agent's display name — named in the automation feedback. */
+  agentName?: string;
   /** Live branch from the agent's worktree/checkout activity, if any. */
   branch?: string | null;
   chatId: string;
@@ -143,7 +147,9 @@ export function ChatWorkPanel({
     onAutomationPrompt(
       `CI is failing on ${effectiveHref} (${checks.failed} of ${checks.total} checks). Investigate the failures and push fixes until the checks pass.`,
     );
-  }, [chatId, checks, effectiveHref, onAutomationPrompt, pr]);
+    // The prompt itself is invisible in the timeline — acknowledge it.
+    toast.success(`Asked ${agentName} to fix the CI failures`);
+  }, [agentName, chatId, checks, effectiveHref, onAutomationPrompt, pr]);
   const sendCommentNudge = React.useCallback(() => {
     if (!onAutomationPrompt || !effectiveHref) {
       return;
@@ -155,7 +161,8 @@ export function ChatWorkPanel({
     onAutomationPrompt(
       `There are unanswered review comments on ${effectiveHref}. Address each comment and its replies, push any needed changes, reply to the threads, and resolve every conversation that has been addressed.`,
     );
-  }, [chatId, effectiveHref, onAutomationPrompt, openThreads]);
+    toast.success(`Asked ${agentName} to address the review comments`);
+  }, [agentName, chatId, effectiveHref, onAutomationPrompt, openThreads]);
 
   // Automation: prompt the agent on CI failure / newly-open review threads.
   // Watermarks keep this to one nudge per failing sha and per rise in open

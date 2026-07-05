@@ -539,8 +539,14 @@ export function ChatDetail({
     hasObserver,
     latestOwnMessageNeedsAgent,
   ]);
+  // A stopped default agent always shows the card — "is it running, is it
+  // silent?" must never be ambiguous. The delayed path still covers a
+  // running-but-unresponsive agent.
+  const defaultAgentInactive =
+    defaultAgent != null && !isManagedAgentActive(defaultAgent);
   const shouldShowAgentActivationCard =
-    latestOwnMessageNeedsAgent && (!hasObserver || showDelayedActivationCard);
+    (defaultAgentInactive && latestVisibleMessage != null) ||
+    (latestOwnMessageNeedsAgent && (!hasObserver || showDelayedActivationCard));
   const forceScrollSignature = latestVisibleMessageIsOwn
     ? latestVisibleMessage.id
     : null;
@@ -728,6 +734,7 @@ export function ChatDetail({
           </div>
         </div>
         <ChatWorkPanel
+          agentName={defaultAgent?.name ?? "Fizz"}
           branch={workBranch}
           chatId={chat.id}
           isTurnActive={isChatTurnActive}
