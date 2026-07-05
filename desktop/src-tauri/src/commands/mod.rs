@@ -22,6 +22,7 @@ mod media_download;
 mod media_transcode;
 #[cfg(feature = "mesh-llm")]
 mod mesh_llm;
+mod message_converters;
 mod messages;
 mod notifications;
 mod observer_archive;

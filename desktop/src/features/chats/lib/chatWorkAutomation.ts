@@ -13,10 +13,9 @@ const STORAGE_EVENT = "buzz:chat-work-automation-changed";
  * the chat timeline renders only its activity — not the message bubble — so
  * armed automation feels ambient instead of ventriloquized.
  */
-export const CHAT_AUTOMATION_TAG: [string, string] = [
-  "automation",
-  "work-panel",
-];
+// Rides the whitelisted ["client", ...] marker-tag channel: the imeta-only
+// media path rejects any other prefix and fails the whole send.
+export const CHAT_AUTOMATION_TAG: [string, string] = ["client", "automation"];
 
 /** Tag for one automation prompt, carrying its kind for the marker row. */
 export function chatAutomationTag(kind: "ci" | "comments"): string[] {

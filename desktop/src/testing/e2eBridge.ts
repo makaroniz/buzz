@@ -7172,6 +7172,7 @@ async function handleSendChannelMessage(
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
+    clientTags?: string[][] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -7187,12 +7188,25 @@ async function handleSendChannelMessage(
   // event; mirror that here so attachment renderers (FileCard, images, video)
   // have the imeta tags they key on. `null`/empty → no extra tags.
   const mediaTags = args.mediaTags ?? [];
+  // Mirror the Rust builder's imeta-only gate: a non-imeta tag on the media
+  // channel fails the real send, and the mock accepting it is exactly how a
+  // broken-live tag route stayed green in e2e.
+  for (const tag of mediaTags) {
+    if (tag[0] !== "imeta") {
+      throw new Error(`media tags must use 'imeta' prefix (got ${tag[0]})`);
+    }
+  }
   // NIP-30 custom-emoji tags ride their own validated arg server-side; the
   // relay echoes them back on the stored event too, so mirror that here so the
   // emoji renderer keeps resolving `:shortcode:` after the round-trip.
   const emojiTags = args.emojiTags ?? [];
-  // Both kinds end up on the stored event's tag set, just like the real relay.
-  const extraTags = [...mediaTags, ...emojiTags];
+  // Whitelisted ["client", ...] marker tags (automation prompts) — echoed
+  // back on the stored event like the real builder.
+  const clientTags = (args.clientTags ?? []).filter(
+    (tag) => tag[0] === "client",
+  );
+  // All kinds end up on the stored event's tag set, just like the real relay.
+  const extraTags = [...mediaTags, ...emojiTags, ...clientTags];
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);

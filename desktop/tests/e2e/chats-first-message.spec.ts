@@ -214,7 +214,7 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
             window as Window & {
               __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
                 command: string;
-                payload?: { content?: string; mediaTags?: string[][] };
+                payload?: { content?: string; clientTags?: string[][] };
               }>;
             }
           ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []
@@ -222,8 +222,8 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
           (entry) =>
             entry.command === "send_channel_message" &&
             entry.payload?.content?.includes("unanswered review comments") &&
-            entry.payload?.mediaTags?.some(
-              (tag) => tag[0] === "automation" && tag[1] === "work-panel",
+            entry.payload?.clientTags?.some(
+              (tag) => tag[0] === "client" && tag[1] === "automation",
             ),
         ),
       ),

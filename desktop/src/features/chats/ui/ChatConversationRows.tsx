@@ -182,7 +182,9 @@ export function ChatAutomationRow({
   agentName: string;
   event: RelayEvent;
 }) {
-  const tag = event.tags.find((candidate) => candidate[0] === "automation");
+  const tag = event.tags.find(
+    (candidate) => candidate[0] === "client" && candidate[1] === "automation",
+  );
   return (
     <Message side="center">
       <MessageContent className="w-full max-w-full">
