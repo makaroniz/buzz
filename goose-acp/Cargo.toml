@@ -1,0 +1,37 @@
+# goose-acp — a slim goose agent served over ACP on stdio, for bundling
+# alongside the Buzz distribution.
+#
+# This crate is deliberately EXCLUDED from the Buzz workspace (see the root
+# Cargo.toml `exclude` list): it has its own Cargo.lock so goose's ~700-crate
+# dependency graph never touches the workspace lockfile, and so rmcp can be
+# pinned independently (goose requires rmcp 1.7.x; 1.8 breaks its build —
+# if you regenerate the lockfile, run `cargo update rmcp --precise 1.7.0`).
+#
+# Build:  cargo build --release --manifest-path goose-acp/Cargo.toml
+# Result: a ~32 MB `goose-acp` binary (macOS arm64) that buzz-acp spawns via
+#         BUZZ_ACP_AGENT_COMMAND. Feature-slimmed: no code-mode/V8, no
+#         local-inference/llama.cpp, no keyring/AWS/telemetry — agent loop,
+#         providers, sessions, and MCP extensions intact.
+#
+# The pinned rev is goose main HEAD as of 2026-07-05. When goose lands the
+# analyze/tiktoken feature gates (micn/slim-features), bump the rev and add
+# nothing — the binary drops to ~14 MB automatically via default-features=false.
+
+[package]
+name = "goose-acp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+goose = { git = "https://github.com/aaif-goose/goose", rev = "c26dbb26b", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"
+
+# Size-optimized: measured 32 MB vs 41 MB with the stock release profile.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

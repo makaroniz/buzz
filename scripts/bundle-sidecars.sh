@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SIDECARS=(buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz)
+# goose-acp lives outside the workspace (own lockfile — see goose-acp/Cargo.toml)
+# so it builds into its own target dir and is staged separately below.
+GOOSE_ACP_DIR="goose-acp"
 HOST=$(rustc -vV | sed -n 's|host: ||p')
 TARGET=${1:-$HOST}
 BINARIES_DIR="desktop/src-tauri/binaries"
@@ -37,4 +40,21 @@ mkdir -p "$BINARIES_DIR"
 for bin in "${SIDECARS[@]}"; do
     cp "$SRC_DIR/${bin}${EXE}" "$BINARIES_DIR/${bin}-${TARGET}${EXE}"
 done
+
+# Bundled slim goose ACP agent (optional today: staged only when built, so
+# local flows that skip it keep working; CI builds it explicitly).
+if [[ -n "${1:-}" ]]; then
+    GOOSE_ACP_SRC="$GOOSE_ACP_DIR/target/${TARGET}/release/goose-acp${EXE}"
+else
+    GOOSE_ACP_SRC="$GOOSE_ACP_DIR/target/release/goose-acp${EXE}"
+fi
+if [[ -f "$GOOSE_ACP_SRC" ]]; then
+    cp "$GOOSE_ACP_SRC" "$BINARIES_DIR/goose-acp-${TARGET}${EXE}"
+    # cp onto an existing stub (touched by _ensure-sidecar-stubs) keeps the
+    # stub's non-executable mode — restore it explicitly.
+    chmod +x "$BINARIES_DIR/goose-acp-${TARGET}${EXE}"
+    echo "Bundled goose-acp"
+else
+    echo "Note: goose-acp not built ($GOOSE_ACP_SRC missing); skipping." >&2
+fi
 echo "Sidecars bundled for $TARGET"

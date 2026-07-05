@@ -90,7 +90,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
     KnownAcpRuntime {
         id: "goose",
         label: "Goose",
-        commands: &["goose"],
+        commands: &["goose", "goose-acp"], // goose-acp = bundled slim sidecar; installed goose wins
         aliases: &[],
         avatar_url: GOOSE_AVATAR_URL,
         mcp_command: None,
