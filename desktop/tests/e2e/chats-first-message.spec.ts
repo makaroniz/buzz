@@ -118,6 +118,15 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
         createdAt: base + 2,
         pubkey: pubkey ?? undefined,
       });
+      // A narration-styled FINAL reply must still render: persisted
+      // messages are never filtered by the transcript's narration
+      // heuristics (this exact phrasing used to be silently dropped).
+      win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "Hello Fizz, first message",
+        content: "Done! I've sent the summary with details to the channel.",
+        createdAt: base + 3,
+        pubkey: pubkey ?? undefined,
+      });
       // A human message with a mention tag: @bob must render as a chip
       // (alice's pubkey is a mock profile fixture; bob's resolves via the
       // message's p tag).
@@ -134,6 +143,12 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
     },
     { pubkey: fizzPubkey },
   );
+
+  await expect(
+    page
+      .getByLabel("Chat messages")
+      .getByText("Done! I've sent the summary with details to the channel."),
+  ).toBeVisible({ timeout: 10_000 });
 
   // Mentions in chat messages render as chips, same as channels.
   await expect(

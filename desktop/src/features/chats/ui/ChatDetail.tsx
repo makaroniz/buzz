@@ -302,22 +302,22 @@ export function ChatDetail({
         ) {
           return false;
         }
-        const isAgent =
-          defaultAgent?.pubkey != null &&
-          normalizePubkey(message.pubkey) ===
-            normalizePubkey(defaultAgent.pubkey);
+        // NOTE: no narration heuristics here. A persisted agent message was
+        // deliberately SENT to the channel — filtering it through the
+        // transcript's internal-narration patterns dropped real replies
+        // ("Done! I've sent the summary…"), leaving turns that visibly
+        // worked but never answered. Narration shaping belongs to the
+        // activity transcript; persisted rows only dedup against it.
         return (
           (eventHasTag(message, "chat_context", "source") ||
-            (isAgent
-              ? isHumanFacingAssistantText(message.content)
-              : message.content.trim().length > 0)) &&
+            message.content.trim().length > 0) &&
           !shouldHidePersistedAgentMessage({
             event: message,
             hiddenAgentMessageIds: chatActivity.hiddenAgentMessageIds,
           })
         );
       }),
-    [chatActivity.hiddenAgentMessageIds, defaultAgent?.pubkey, messages],
+    [chatActivity.hiddenAgentMessageIds, messages],
   );
   const hasTranscriptActivity = chatActivity.totalBlockCount > 0;
 

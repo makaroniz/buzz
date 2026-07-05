@@ -159,14 +159,17 @@ function addIntermediateAgentTurnMessageIds({
       return;
     }
 
-    const keepMessage =
-      [...agentRun]
-        .reverse()
-        .find((message) => isHumanFacingAssistantText(message.content)) ??
-      agentRun[agentRun.length - 1];
-
+    // Hide only interim narration: substantive messages (PR announcements,
+    // answers) all stay, and the run's FINAL message always stays even when
+    // narration-styled — a real reply must never lose to a phrasing
+    // heuristic, which is exactly how turns ended up visibly working but
+    // never answering.
+    const lastId = agentRun[agentRun.length - 1].id;
     for (const message of agentRun) {
-      if (message.id !== keepMessage.id) {
+      if (
+        message.id !== lastId &&
+        !isHumanFacingAssistantText(message.content)
+      ) {
         hiddenIds.add(message.id);
       }
     }
