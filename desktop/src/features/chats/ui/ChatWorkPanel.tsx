@@ -37,6 +37,12 @@ const CHIP_CLASS =
 const lastShownBranchByChat = new Map<string, string>();
 const lastShownPrByChat = new Map<string, string>();
 
+// A consumed watermark must not strand a persisting condition: if CI is
+// still red (or comments still open) and NO turn is running, armed
+// automation re-nudges after this cooldown — the earlier nudge may have
+// landed while the agent was stopped or the message failed to take.
+const RENUDGE_COOLDOWN_MS = 15 * 60_000;
+
 /**
  * Right-hand work drawer for a chat: branch, live PR card, and a CI monitor
  * once the agent has produced a pull request; an empty state before that.
@@ -47,6 +53,7 @@ const lastShownPrByChat = new Map<string, string>();
 export function ChatWorkPanel({
   branch = null,
   chatId,
+  isTurnActive = false,
   onAutomationPrompt,
   open = true,
   prHref,
@@ -55,6 +62,8 @@ export function ChatWorkPanel({
   /** Live branch from the agent's worktree/checkout activity, if any. */
   branch?: string | null;
   chatId: string;
+  /** Whether an agent turn is currently running in this chat. */
+  isTurnActive?: boolean;
   onAutomationPrompt?: (content: string) => void;
   open?: boolean;
   prHref?: string | null;
@@ -120,43 +129,75 @@ export function ChatWorkPanel({
     }
   }, [chatId, preview?.href]);
 
+  const ciConditionActive = Boolean(
+    checks && checks.failed > 0 && checks.pending === 0,
+  );
+  const sendCiNudge = React.useCallback(() => {
+    if (!onAutomationPrompt || !effectiveHref || !pr || !checks) {
+      return;
+    }
+    updateChatWorkAutomation(chatId, {
+      lastCiNudgeSha: pr.headSha,
+      lastCiNudgeAt: Date.now(),
+    });
+    onAutomationPrompt(
+      `CI is failing on ${effectiveHref} (${checks.failed} of ${checks.total} checks). Investigate the failures and push fixes until the checks pass.`,
+    );
+  }, [chatId, checks, effectiveHref, onAutomationPrompt, pr]);
+  const sendCommentNudge = React.useCallback(() => {
+    if (!onAutomationPrompt || !effectiveHref) {
+      return;
+    }
+    updateChatWorkAutomation(chatId, {
+      lastCommentNudgeCount: Math.max(openThreads, 1),
+      lastCommentNudgeAt: Date.now(),
+    });
+    onAutomationPrompt(
+      `There are unanswered review comments on ${effectiveHref}. Address each comment and its replies, push any needed changes, reply to the threads, and resolve every conversation that has been addressed.`,
+    );
+  }, [chatId, effectiveHref, onAutomationPrompt, openThreads]);
+
   // Automation: prompt the agent on CI failure / newly-open review threads.
-  // Watermarks in storage keep this to one nudge per failing sha and per
-  // rise in open threads; the thread watermark re-arms once everything has
-  // been replied to (count back at zero).
+  // Watermarks keep this to one nudge per failing sha and per rise in open
+  // threads (the thread watermark re-arms at zero); the cooldown path above
+  // covers conditions that persist with no agent working.
   React.useEffect(() => {
     if (!onAutomationPrompt || !effectiveHref || !pr) {
       return;
     }
-    if (
-      automation.autoFixCi &&
-      checks &&
-      checks.failed > 0 &&
-      checks.pending === 0 &&
-      automation.lastCiNudgeSha !== pr.headSha
-    ) {
-      updateChatWorkAutomation(chatId, { lastCiNudgeSha: pr.headSha });
-      onAutomationPrompt(
-        `CI is failing on ${effectiveHref} (${checks.failed} of ${checks.total} checks). Investigate the failures and push fixes until the checks pass.`,
-      );
+    if (automation.autoFixCi && ciConditionActive && checks) {
+      const isNewFailure = automation.lastCiNudgeSha !== pr.headSha;
+      const cooledDown =
+        !isTurnActive &&
+        Date.now() - (automation.lastCiNudgeAt ?? 0) > RENUDGE_COOLDOWN_MS;
+      if (isNewFailure || cooledDown) {
+        sendCiNudge();
+      }
     }
     const threadWatermark = automation.lastCommentNudgeCount ?? 0;
     if (openThreads === 0 && threadWatermark !== 0) {
       updateChatWorkAutomation(chatId, { lastCommentNudgeCount: 0 });
-    } else if (automation.addressComments && openThreads > threadWatermark) {
-      updateChatWorkAutomation(chatId, { lastCommentNudgeCount: openThreads });
-      onAutomationPrompt(
-        `There are unanswered review comments on ${effectiveHref}. Address each comment and its replies, push any needed changes, reply to the threads, and resolve every conversation that has been addressed.`,
-      );
+    } else if (automation.addressComments && openThreads > 0) {
+      const isNewComment = openThreads > threadWatermark;
+      const cooledDown =
+        !isTurnActive &&
+        Date.now() - (automation.lastCommentNudgeAt ?? 0) > RENUDGE_COOLDOWN_MS;
+      if (isNewComment || cooledDown) {
+        sendCommentNudge();
+      }
     }
   }, [
     automation,
     chatId,
     checks,
+    ciConditionActive,
     effectiveHref,
+    isTurnActive,
     onAutomationPrompt,
     openThreads,
     pr,
+    sendCiNudge,
+    sendCommentNudge,
   ]);
 
   return (
@@ -234,38 +275,62 @@ export function ChatWorkPanel({
                     </span>
                   )}
                   <div aria-hidden="true" className="h-px bg-border/40" />
-                  <label
-                    className="flex cursor-pointer items-center gap-2"
-                    htmlFor="automation-auto-fix-ci"
-                  >
-                    <Checkbox
-                      checked={automation.autoFixCi}
-                      data-testid="automation-auto-fix-ci"
-                      id="automation-auto-fix-ci"
-                      onCheckedChange={(checked) =>
-                        updateChatWorkAutomation(chatId, {
-                          autoFixCi: checked === true,
-                        })
-                      }
-                    />
-                    <span>Auto-fix CI failures</span>
-                  </label>
-                  <label
-                    className="flex cursor-pointer items-center gap-2"
-                    htmlFor="automation-address-comments"
-                  >
-                    <Checkbox
-                      checked={automation.addressComments}
-                      data-testid="automation-address-comments"
-                      id="automation-address-comments"
-                      onCheckedChange={(checked) =>
-                        updateChatWorkAutomation(chatId, {
-                          addressComments: checked === true,
-                        })
-                      }
-                    />
-                    <span>Address comments & resolve</span>
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
+                      htmlFor="automation-auto-fix-ci"
+                    >
+                      <Checkbox
+                        checked={automation.autoFixCi}
+                        data-testid="automation-auto-fix-ci"
+                        id="automation-auto-fix-ci"
+                        onCheckedChange={(checked) =>
+                          updateChatWorkAutomation(chatId, {
+                            autoFixCi: checked === true,
+                          })
+                        }
+                      />
+                      <span>Auto-fix CI failures</span>
+                    </label>
+                    {ciConditionActive && !isTurnActive ? (
+                      <button
+                        className="shrink-0 font-medium text-primary hover:underline"
+                        data-testid="automation-run-ci-now"
+                        onClick={sendCiNudge}
+                        type="button"
+                      >
+                        Run now
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
+                      htmlFor="automation-address-comments"
+                    >
+                      <Checkbox
+                        checked={automation.addressComments}
+                        data-testid="automation-address-comments"
+                        id="automation-address-comments"
+                        onCheckedChange={(checked) =>
+                          updateChatWorkAutomation(chatId, {
+                            addressComments: checked === true,
+                          })
+                        }
+                      />
+                      <span>Address comments & resolve</span>
+                    </label>
+                    {openThreads > 0 && !isTurnActive ? (
+                      <button
+                        className="shrink-0 font-medium text-primary hover:underline"
+                        data-testid="automation-run-comments-now"
+                        onClick={sendCommentNudge}
+                        type="button"
+                      >
+                        Run now
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </details>
             </div>

@@ -25,6 +25,10 @@ export type ChatWorkAutomation = {
   lastCiNudgeSha: string | null;
   /** Comment total at the last address-comments nudge. */
   lastCommentNudgeCount: number | null;
+  /** Epoch ms of the last CI nudge — drives the persistent-failure re-nudge. */
+  lastCiNudgeAt: number | null;
+  /** Epoch ms of the last comment nudge. */
+  lastCommentNudgeAt: number | null;
 };
 
 const DEFAULTS: ChatWorkAutomation = {
@@ -32,6 +36,8 @@ const DEFAULTS: ChatWorkAutomation = {
   addressComments: false,
   lastCiNudgeSha: null,
   lastCommentNudgeCount: null,
+  lastCiNudgeAt: null,
+  lastCommentNudgeAt: null,
 };
 
 function storageKey(chatId: string) {
@@ -58,6 +64,12 @@ export function readChatWorkAutomation(chatId: string): ChatWorkAutomation {
       lastCommentNudgeCount:
         typeof parsed.lastCommentNudgeCount === "number"
           ? parsed.lastCommentNudgeCount
+          : null,
+      lastCiNudgeAt:
+        typeof parsed.lastCiNudgeAt === "number" ? parsed.lastCiNudgeAt : null,
+      lastCommentNudgeAt:
+        typeof parsed.lastCommentNudgeAt === "number"
+          ? parsed.lastCommentNudgeAt
           : null,
     };
   } catch {

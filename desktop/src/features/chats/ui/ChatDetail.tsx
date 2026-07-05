@@ -723,6 +723,7 @@ export function ChatDetail({
         <ChatWorkPanel
           branch={workBranch}
           chatId={chat.id}
+          isTurnActive={isChatTurnActive}
           onAutomationPrompt={(content) =>
             void onSend(content, [], [CHAT_AUTOMATION_TAG])
           }

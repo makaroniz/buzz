@@ -218,6 +218,10 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
     page.getByLabel("Chat messages").getByText("unanswered review comments"),
   ).toHaveCount(0);
 
+  // Manual overrides: open comments expose "Run now"; green CI does not.
+  await expect(page.getByTestId("automation-run-comments-now")).toBeVisible();
+  await expect(page.getByTestId("automation-run-ci-now")).toHaveCount(0);
+
   // The header's PR button toggles the panel.
   await page.getByTestId("toggle-work-panel").click();
   await expect(workPanel).not.toBeVisible();
