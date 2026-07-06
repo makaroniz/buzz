@@ -615,6 +615,7 @@ pub fn run() {
             relay_reconnect_hook,
             relay_reconnect_hook_configured,
             observer_archive_default_enabled,
+            agent_metric_archive_default_enabled,
             archive::archive_events,
             archive::create_save_subscription,
             archive::list_save_subscriptions,

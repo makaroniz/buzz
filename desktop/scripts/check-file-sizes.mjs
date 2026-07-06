@@ -69,7 +69,11 @@ const overrides = new Map([
   // E2E test-depth hardening added the owner_p content round-trip assert and
   // two empty-table drop asserts (~24 lines). Queued to split the test module
   // into archive/mod_tests.rs in a follow-up.
-  ["src-tauri/src/archive/mod.rs", 1465],
+  // agent-metric-archive PR added 4 new unit tests (owner_p+44200 routing,
+  // decrypt-success plaintext storage, decrypt-fail-closed, 24200 still
+  // ephemeral) + run_batch_sync_with_keys helper (~175 lines). Same test-growth
+  // category as above. Still queued to split.
+  ["src-tauri/src/archive/mod.rs", 1670],
   ["src-tauri/src/commands/agents.rs", 1437],
   // #1418 read-path fix: get_thread_replies' blocker fix (shared TIMELINE_KINDS
   // const + build_thread_replies_filter helper, mirroring the channel sibling so

@@ -99,6 +99,18 @@ export async function observerArchiveDefaultEnabled(): Promise<boolean> {
 }
 
 /**
+ * Returns `true` when the build has agent-turn-metric archive default-on.
+ *
+ * Internal builds set `BUZZ_BUILD_AGENT_METRIC_ARCHIVE_DEFAULT` at build time;
+ * OSS builds never set it, so this returns `false`.  The frontend calls this
+ * once at startup to decide whether to auto-seed an `owner_p` [44200]
+ * subscription.
+ */
+export async function agentMetricArchiveDefaultEnabled(): Promise<boolean> {
+  return invokeTauri<boolean>("agent_metric_archive_default_enabled");
+}
+
+/**
  * Create a save subscription.
  * Runs an access probe on the backend (channel membership, event readability).
  * `kinds` is sent as a plain number array — Tauri serializes it correctly.
