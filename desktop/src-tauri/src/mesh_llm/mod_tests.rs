@@ -41,6 +41,7 @@ fn agent_preset_runs_on_buzz_agent_not_goose() {
     // buzz-agent, which reads those vars.
     let preset = super::agent_preset(super::MeshAgentPresetRequest {
         model_id: "Qwen3-8B-Q4_K_M".to_string(),
+        runtime_id: None,
     })
     .expect("preset for a valid model id");
 
@@ -63,4 +64,43 @@ fn agent_preset_runs_on_buzz_agent_not_goose() {
             .map(String::as_str),
         Some("Qwen3-8B-Q4_K_M")
     );
+}
+
+#[test]
+fn agent_preset_goose_runtime_gets_goose_env_dialect() {
+    // Opting into the goose runtime must emit goose's env dialect
+    // (GOOSE_PROVIDER + OPENAI_HOST without /v1 — goose appends its own
+    // base path), no sidecar MCP (goose has builtin developer tools), and
+    // the goose command from the catalog (matches user-installed goose or
+    // the bundled goose-acp sidecar via discovery).
+    let preset = super::agent_preset(super::MeshAgentPresetRequest {
+        model_id: "Qwen3-8B-Q4_K_M".to_string(),
+        runtime_id: Some("goose".to_string()),
+    })
+    .expect("preset for a valid model id");
+
+    assert_eq!(preset.agent_command, "goose");
+    assert_eq!(preset.mcp_command, "");
+    assert_eq!(
+        preset.env_vars.get("GOOSE_PROVIDER").map(String::as_str),
+        Some("openai")
+    );
+    assert_eq!(
+        preset.env_vars.get("GOOSE_MODEL").map(String::as_str),
+        Some("Qwen3-8B-Q4_K_M")
+    );
+    let host = preset.env_vars.get("OPENAI_HOST").expect("OPENAI_HOST set");
+    assert!(
+        !host.ends_with("/v1"),
+        "goose appends its own base path; host must not end in /v1: {host}"
+    );
+    assert!(preset.env_vars.contains_key("OPENAI_API_KEY"));
+
+    // Unknown runtime ids fall back to the buzz-agent dialect.
+    let fallback = super::agent_preset(super::MeshAgentPresetRequest {
+        model_id: "Qwen3-8B-Q4_K_M".to_string(),
+        runtime_id: Some("something-else".to_string()),
+    })
+    .expect("preset for a valid model id");
+    assert_eq!(fallback.agent_command, "buzz-agent");
 }

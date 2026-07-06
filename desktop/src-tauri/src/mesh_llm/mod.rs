@@ -203,7 +203,7 @@ pub struct DesktopMeshRuntime {
     model_name: Option<String>,
 }
 
-fn initialize_mesh_native_runtime() -> anyhow::Result<()> {
+async fn initialize_mesh_native_runtime() -> anyhow::Result<()> {
     let cache = mesh_llm_sdk::native_runtime::native_runtime_cache(None)?;
     let installed = cache.installed()?;
     let current = mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION;
@@ -215,17 +215,20 @@ fn initialize_mesh_native_runtime() -> anyhow::Result<()> {
             "mesh native runtime for MeshLLM {current} is not installed; run `just mesh=1 staging` or `just mesh-e2e-hardware` to prepare it"
         );
     }
-    mesh_llm_host_runtime::initialize_host_runtime().map_err(|error| {
-        anyhow::anyhow!(
-            "mesh native runtime failed to load; run `just mesh=1 staging` or `just mesh-e2e-hardware` to repair it: {error}"
-        )
-    })
+    // initialize_host_runtime became async upstream (mesh-llm #900s series).
+    mesh_llm_host_runtime::initialize_host_runtime()
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "mesh native runtime failed to load; run `just mesh=1 staging` or `just mesh-e2e-hardware` to repair it: {error}"
+            )
+        })
 }
 
 impl DesktopMeshRuntime {
     pub async fn start(request: StartMeshNodeRequest) -> anyhow::Result<Self> {
         validate_no_leak_request(&request)?;
-        initialize_mesh_native_runtime()?;
+        initialize_mesh_native_runtime().await?;
         let model_id = request
             .model_id
             .clone()

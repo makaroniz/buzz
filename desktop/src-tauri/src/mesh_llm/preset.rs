@@ -13,6 +13,12 @@ use super::{
 #[serde(rename_all = "camelCase")]
 pub struct MeshAgentPresetRequest {
     pub model_id: String,
+    /// Runtime the agent should run on. `None` (or unknown ids) preserves the
+    /// historical behavior: buzz-agent. `Some("goose")` emits goose-flavored
+    /// env (`GOOSE_PROVIDER=openai` + `OPENAI_HOST`) so goose — including the
+    /// bundled `goose-acp` sidecar — can use the mesh for inference too.
+    #[serde(default)]
+    pub runtime_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,8 +39,44 @@ pub fn agent_preset(request: MeshAgentPresetRequest) -> Result<MeshAgentPreset, 
     if model.is_empty() {
         return Err("modelId is required".to_string());
     }
-    // Run on buzz-agent, not the global default (goose). Source command +
-    // MCP from the catalog so this can't drift from the provider definition.
+    let base_url = relay_mesh_api_base_url()?;
+
+    // Goose reads a different env dialect than buzz-agent: provider selection
+    // via GOOSE_PROVIDER, endpoint via OPENAI_HOST (it appends /v1/... itself).
+    if matches!(request.runtime_id.as_deref(), Some("goose")) {
+        let goose = crate::managed_agents::known_acp_runtime_exact("goose");
+        let agent_command = goose
+            .and_then(|p| p.commands.first().copied())
+            .unwrap_or("goose")
+            .to_string();
+        let host = base_url
+            .strip_suffix("/v1")
+            .unwrap_or(base_url.as_str())
+            .to_string();
+        return Ok(MeshAgentPreset {
+            provider_id: "relay-mesh".to_string(),
+            label: "Relay mesh".to_string(),
+            acp_command: crate::managed_agents::DEFAULT_ACP_COMMAND.to_string(),
+            agent_command,
+            agent_args: Vec::new(),
+            // Goose ships its own developer tools; no sidecar MCP needed.
+            mcp_command: String::new(),
+            model: model.to_string(),
+            env_vars: BTreeMap::from([
+                ("GOOSE_PROVIDER".to_string(), "openai".to_string()),
+                ("GOOSE_MODEL".to_string(), model.to_string()),
+                ("OPENAI_HOST".to_string(), host),
+                (
+                    "OPENAI_API_KEY".to_string(),
+                    RELAY_MESH_API_KEY_PLACEHOLDER.to_string(),
+                ),
+            ]),
+        });
+    }
+
+    // Default: buzz-agent (the historical behavior; also the fallback for
+    // unknown runtime ids). Source command + MCP from the catalog so this
+    // can't drift from the provider definition.
     let buzz_agent = crate::managed_agents::known_acp_runtime_exact(MESH_AGENT_PROVIDER_ID);
     let agent_command = buzz_agent
         .and_then(|p| p.commands.first().copied())

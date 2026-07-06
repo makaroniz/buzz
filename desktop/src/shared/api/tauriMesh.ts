@@ -143,8 +143,9 @@ export async function meshInstalledModels(): Promise<MeshModelOption[]> {
 
 export async function meshAgentPreset(
   modelId: string,
+  runtimeId?: string,
 ): Promise<MeshAgentPreset> {
   return await invokeTauri<MeshAgentPreset>("mesh_agent_preset", {
-    request: { modelId },
+    request: { modelId, runtimeId: runtimeId ?? null },
   });
 }
