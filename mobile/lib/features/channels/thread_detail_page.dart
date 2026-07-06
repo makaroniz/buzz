@@ -8,8 +8,8 @@ import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
-import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
+import 'thread_replies_provider.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';
 import 'date_formatters.dart';
@@ -47,13 +47,19 @@ class ThreadDetailPage extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Re-derive replies from live message state so new replies appear.
-    final messagesState = ref.watch(channelMessagesProvider(channelId));
-    final liveMessages = messagesState.whenData((events) {
+    final repliesState = ref.watch(
+      threadRepliesProvider(
+        ThreadRepliesArgs(channelId: channelId, rootId: threadHead.id),
+      ),
+    );
+    final replyMessages = repliesState.whenData((events) {
       return formatTimeline(events, currentPubkey: currentPubkey);
     });
 
-    final allMsgs = liveMessages.value ?? allMessages;
+    final fetchedReplies = replyMessages.value;
+    final allMsgs = fetchedReplies == null
+        ? allMessages
+        : [threadHead, ...fetchedReplies];
 
     // Index all messages by parentId so we can find direct children of any
     // message and compute thread summaries for nested threads.
@@ -116,6 +122,9 @@ class ThreadDetailPage extends HookConsumerWidget {
         children: [
           Expanded(
             child: ListView.builder(
+              // Reversed so the list opens pinned to the newest reply,
+              // matching the channel message list.
+              reverse: true,
               padding: EdgeInsets.only(
                 left: Grid.gutter,
                 right: Grid.gutter,
@@ -124,7 +133,7 @@ class ThreadDetailPage extends HookConsumerWidget {
               ),
               itemCount: replies.length + 1, // +1 for thread head
               itemBuilder: (context, index) {
-                if (index == 0) {
+                if (index == replies.length) {
                   // Thread head.
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -163,8 +172,10 @@ class ThreadDetailPage extends HookConsumerWidget {
                   );
                 }
 
-                final reply = replies[index - 1];
-                final prevReply = index > 1 ? replies[index - 2] : null;
+                // Reversed list: index 0 = newest reply.
+                final chronIdx = replies.length - 1 - index;
+                final reply = replies[chronIdx];
+                final prevReply = chronIdx > 0 ? replies[chronIdx - 1] : null;
                 final showAuthor =
                     prevReply == null ||
                     prevReply.pubkey.toLowerCase() !=

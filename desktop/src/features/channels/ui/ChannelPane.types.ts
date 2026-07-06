@@ -3,6 +3,7 @@ import type { BotActivityAgent } from "@/features/channels/ui/BotActivityBar";
 import type { ChannelAgentSessionAgent } from "@/features/channels/ui/useChannelAgentSessions";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import type { ChannelWindowThreadSummary } from "@/features/messages/lib/channelWindowStore";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -37,11 +38,18 @@ export type ChannelPaneProps = {
   isSending: boolean;
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
+  threadSummaries?: ReadonlyMap<string, ChannelWindowThreadSummary>;
   firstUnreadMessageId?: string | null;
   unreadCount?: number;
   canResetThreadPanelWidth: boolean;
   onCancelEdit?: () => void;
   onCancelThreadReply: () => void;
+  /**
+   * Fired by the header back arrow when Activity has a captured pane to
+   * return to. Absent (arrow hidden) for composer/no-pane opens and
+   * direct/restored Activity URLs — the close affordance is the fallback.
+   */
+  onBackFromAgentSession?: () => void;
   onCloseAgentSession: () => void;
   onCloseChannelManagement?: () => void;
   onChannelManagementDeleted?: () => void;
@@ -56,7 +64,7 @@ export type ChannelPaneProps = {
   onMarkRead?: (message: TimelineMessage) => void;
   onExpandThreadReplies: (message: TimelineMessage) => void;
   onJoinChannel?: () => Promise<void>;
-  onOpenAgentSession: (pubkey: string) => void;
+  onOpenAgentSession: (pubkey: string, channelId?: string | null) => void;
   onOpenDm?: (pubkeys: string[]) => Promise<void> | void;
   onOpenMembers?: () => void;
   onOpenProfilePanel: (pubkey: string) => void;
@@ -100,6 +108,7 @@ export type ChannelPaneProps = {
   profiles?: UserProfileLookup;
   openThreadHeadId: string | null;
   shouldShowThreadSkeleton: boolean;
+  openAgentSessionChannelId: string | null;
   openAgentSessionPubkey: string | null;
   onProfilePanelViewChange: (
     view: ProfilePanelView,

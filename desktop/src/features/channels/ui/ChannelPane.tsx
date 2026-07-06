@@ -78,11 +78,13 @@ export const ChannelPane = React.memo(function ChannelPane({
   isSending,
   isTimelineLoading,
   messages,
+  threadSummaries,
   firstUnreadMessageId = null,
   unreadCount = 0,
   canResetThreadPanelWidth,
   onCancelEdit,
   onCancelThreadReply,
+  onBackFromAgentSession,
   onCloseAgentSession,
   onCloseChannelManagement,
   onChannelManagementDeleted,
@@ -118,6 +120,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   profiles,
   openThreadHeadId,
   shouldShowThreadSkeleton,
+  openAgentSessionChannelId,
   openAgentSessionPubkey,
   onProfilePanelViewChange,
   onProfilePanelTabChange,
@@ -444,8 +447,14 @@ export const ChannelPane = React.memo(function ChannelPane({
     return messages.filter((message) => !isWelcomeSetupSystemMessage(message));
   }, [activeChannel, messages]);
   const mainTimelineEntries = React.useMemo(
-    () => buildMainTimelineEntries(visibleMessages),
-    [visibleMessages],
+    () =>
+      buildMainTimelineEntries(
+        visibleMessages,
+        new Set(),
+        threadSummaries,
+        profiles,
+      ),
+    [profiles, threadSummaries, visibleMessages],
   );
   useRenderScopedReactionHydration({
     activeChannel,
@@ -824,13 +833,18 @@ export const ChannelPane = React.memo(function ChannelPane({
               agent={selectedAgent}
               canInterruptTurn={selectedAgent.canInterruptTurn}
               channel={
-                agentSessionSelection.isAgentInActivityList({
-                  activityAgents,
-                  selectedAgent,
-                })
-                  ? activeChannel
-                  : null
+                openAgentSessionChannelId
+                  ? activeChannel?.id === openAgentSessionChannelId
+                    ? activeChannel
+                    : null
+                  : agentSessionSelection.isAgentInActivityList({
+                        activityAgents,
+                        selectedAgent,
+                      })
+                    ? activeChannel
+                    : null
               }
+              channelId={openAgentSessionChannelId}
               isWorking={botTypingEntries.some(
                 (entry) =>
                   entry.pubkey.toLowerCase() ===
@@ -842,7 +856,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               layout={useSplitAuxiliaryPane ? "split" : "standalone"}
               transparentChrome={useSplitAuxiliaryPane}
               profiles={profiles}
-              onBackToProfile={() => onOpenProfilePanel(selectedAgent.pubkey)}
+              onBack={onBackFromAgentSession}
               onClose={onCloseAgentSession}
               widthPx={threadPanelWidthPx}
             />
