@@ -59,6 +59,7 @@ type RawProfile = {
   about: string | null;
   nip05_handle: string | null;
   owner_pubkey: string | null;
+  has_profile_event?: boolean;
 };
 
 type RawUserProfileSummary = Omit<RawProfile, "pubkey" | "about"> & {
@@ -427,6 +428,7 @@ function fromRawProfile(profile: RawProfile): Profile {
     about: profile.about,
     nip05Handle: profile.nip05_handle,
     ownerPubkey: profile.owner_pubkey,
+    hasProfileEvent: profile.has_profile_event ?? false,
   };
 }
 
@@ -1255,6 +1257,32 @@ export async function putAgentSessionConfig(
   return invokeTauri<void>("put_agent_session_config", { pubkey, payload });
 }
 
+/** File-layer config for a runtime (e.g. `~/.config/goose/config.yaml`). */
+export type RuntimeFileConfigSubset = {
+  /** Provider set in the harness config file. */
+  provider: string | null;
+  /** Model set in the harness config file. */
+  model: string | null;
+  /** Credential env key names whose values are present in the file config. */
+  satisfiedEnvKeys: string[];
+};
+
+/**
+ * Get the file-layer config for a runtime so dialogs can show
+ * "Set in goose config" instead of surfacing a false required-field marker.
+ * Returns `null` when the runtime has no config file or it cannot be parsed.
+ */
+export async function getRuntimeFileConfig(
+  runtimeId: string,
+): Promise<RuntimeFileConfigSubset | null> {
+  return invokeTauri<RuntimeFileConfigSubset | null>(
+    "get_runtime_file_config",
+    {
+      runtimeId,
+    },
+  );
+}
+
 type RawUpdateManagedAgentResponse = {
   agent: RawManagedAgent;
   profile_sync_error: string | null;
@@ -1337,3 +1365,10 @@ export async function validateReposDir(dir: string): Promise<void> {
 
 export const setPreventSleepActive = (active: boolean) =>
   invokeTauri("set_prevent_sleep_active", { active });
+
+/** Returns true on macOS, Windows, and Linux AppImage installs.
+ *  Returns false on Linux non-AppImage packages (e.g. .deb) where
+ *  Tauri's updater cannot swap the binary. */
+export function isAutoUpdateSupported(): Promise<boolean> {
+  return invokeTauri<boolean>("is_auto_update_supported");
+}

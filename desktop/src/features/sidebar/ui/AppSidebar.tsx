@@ -15,7 +15,12 @@ import {
 } from "@/features/sidebar/lib/useChannelSections";
 import { useActiveWorkingChannelsById } from "@/features/sidebar/lib/useActiveWorkingChannelsById";
 import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
-import { sortDmChannelsByLabel } from "@/features/sidebar/lib/dmSidebarSort";
+import { sortDmChannelsForSidebar } from "@/features/sidebar/lib/dmSidebarSort";
+import {
+  sectionSortGroupKey,
+  sortChannelsForSidebar,
+} from "@/features/sidebar/lib/channelSortPreference";
+import { useChannelSortPreference } from "@/features/sidebar/lib/useChannelSortPreference";
 import { useSidebarScrollLock } from "@/features/sidebar/lib/useSidebarScrollLock";
 import { useUnreadOverflow } from "@/features/sidebar/lib/useUnreadOverflow";
 import {
@@ -23,6 +28,7 @@ import {
   DeleteSectionAlertDialog,
   RenameSectionDialog,
   useLeaveChannelDialog,
+  type SectionDialogValue,
 } from "@/features/sidebar/ui/ChannelSectionDialogs";
 import { AppSidebarPinnedHeader } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
 import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
@@ -31,6 +37,7 @@ import {
   ChannelGroupSection,
   CustomChannelSection,
 } from "@/features/sidebar/ui/CustomChannelSection";
+import { ChannelSortDropdown } from "@/features/sidebar/ui/ChannelSortDropdown";
 import { CreateChannelDialog } from "@/features/sidebar/ui/CreateChannelDialog";
 import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
 import { SidebarProfileCard } from "@/features/sidebar/ui/SidebarProfileCard";
@@ -348,6 +355,17 @@ export function AppSidebar({
     unassignChannel,
   } = useChannelSections(currentPubkey, activeWorkspace?.relayUrl);
 
+  const sectionIds = React.useMemo(
+    () => channelSections.map((s) => s.id),
+    [channelSections],
+  );
+
+  const { sortModeFor, setSortModeFor } = useChannelSortPreference(
+    currentPubkey,
+    activeWorkspace?.relayUrl,
+    sectionIds,
+  );
+
   const [createSectionState, setCreateSectionState] = React.useState<{
     open: boolean;
     pendingChannelId: string | null;
@@ -358,11 +376,6 @@ export function AppSidebar({
     React.useState<ChannelSection | null>(null);
   const { requestLeaveChannel, dialog: leaveChannelDialog } =
     useLeaveChannelDialog();
-
-  const sectionIds = React.useMemo(
-    () => channelSections.map((s) => s.id),
-    [channelSections],
-  );
 
   const streamChannels = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "stream"),
@@ -386,15 +399,33 @@ export function AppSidebar({
         unassigned.push(channel);
       }
     }
-    return { bySection, unassigned };
-  }, [streamChannels, channelSections, channelAssignments, starredChannelIds]);
+    // Apply each grouping's own sort preference; section membership itself
+    // is untouched.
+    for (const sectionId of Object.keys(bySection)) {
+      bySection[sectionId] = sortChannelsForSidebar(
+        bySection[sectionId],
+        sortModeFor(sectionSortGroupKey(sectionId)),
+      );
+    }
+    return {
+      bySection,
+      unassigned: sortChannelsForSidebar(unassigned, sortModeFor("channels")),
+    };
+  }, [
+    streamChannels,
+    channelSections,
+    channelAssignments,
+    starredChannelIds,
+    sortModeFor,
+  ]);
 
   const starredChannels = React.useMemo(() => {
     if (!starredChannelIds || starredChannelIds.size === 0) return [];
-    return streamChannels.filter((channel) =>
-      starredChannelIds.has(channel.id),
+    return sortChannelsForSidebar(
+      streamChannels.filter((channel) => starredChannelIds.has(channel.id)),
+      sortModeFor("starred"),
     );
-  }, [streamChannels, starredChannelIds]);
+  }, [streamChannels, starredChannelIds, sortModeFor]);
 
   const handleCreateSectionForChannel = React.useCallback(
     (channelId: string) => {
@@ -404,8 +435,8 @@ export function AppSidebar({
   );
 
   const handleCreateSectionConfirm = React.useCallback(
-    (name: string) => {
-      const section = createSection(name);
+    (value: SectionDialogValue) => {
+      const section = createSection(value.name, value.icon);
       if (!section) {
         return;
       }
@@ -418,8 +449,12 @@ export function AppSidebar({
   );
 
   const forumChannels = React.useMemo(
-    () => channels.filter((channel) => channel.channelType === "forum"),
-    [channels],
+    () =>
+      sortChannelsForSidebar(
+        channels.filter((channel) => channel.channelType === "forum"),
+        sortModeFor("forums"),
+      ),
+    [channels, sortModeFor],
   );
   const directMessages = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "dm"),
@@ -441,8 +476,13 @@ export function AppSidebar({
       profileDisplayName: profile?.displayName,
     });
   const sortedDirectMessages = React.useMemo(
-    () => sortDmChannelsByLabel(directMessages, dmChannelLabels),
-    [directMessages, dmChannelLabels],
+    () =>
+      sortDmChannelsForSidebar(
+        directMessages,
+        dmChannelLabels,
+        sortModeFor("dms"),
+      ),
+    [directMessages, dmChannelLabels, sortModeFor],
   );
   const sidebarLoadingShape = useSidebarLoadingShape({
     activeWorkspaceId: activeWorkspace?.id,
@@ -560,6 +600,16 @@ export function AppSidebar({
                     isActiveChannel={selectedView === "channel"}
                     activeWorkingByChannelId={activeWorkingByChannelId}
                     items={starredChannels}
+                    leadingHeaderAction={
+                      <ChannelSortDropdown
+                        groupLabel="starred channels"
+                        onSortModeChange={(mode) =>
+                          setSortModeFor("starred", mode)
+                        }
+                        sortMode={sortModeFor("starred")}
+                        testId="channel-sort-trigger-starred"
+                      />
+                    }
                     listTestId="starred-list"
                     onMarkAllRead={() => {
                       for (const channel of starredChannels) {
@@ -611,6 +661,22 @@ export function AppSidebar({
                       assignments={channelAssignments}
                       isFirst={idx === 0}
                       isLast={idx === channelSections.length - 1}
+                      leadingHeaderAction={
+                        <ChannelSortDropdown
+                          groupLabel={section.name}
+                          onSortModeChange={(mode) =>
+                            setSortModeFor(
+                              sectionSortGroupKey(section.id),
+                              mode,
+                            )
+                          }
+                          sortMode={sortModeFor(
+                            sectionSortGroupKey(section.id),
+                          )}
+                          testId={`channel-sort-trigger-section-${section.id}`}
+                          visibilityClassName=""
+                        />
+                      }
                       onToggleCollapsed={() =>
                         toggleCollapsedSection(section.id)
                       }
@@ -649,6 +715,16 @@ export function AppSidebar({
                     isActiveChannel={selectedView === "channel"}
                     activeWorkingByChannelId={activeWorkingByChannelId}
                     items={sectionBuckets.unassigned}
+                    leadingHeaderAction={
+                      <ChannelSortDropdown
+                        groupLabel="channels"
+                        onSortModeChange={(mode) =>
+                          setSortModeFor("channels", mode)
+                        }
+                        sortMode={sortModeFor("channels")}
+                        testId="channel-sort-trigger-channels"
+                      />
+                    }
                     listTestId="stream-list"
                     onBrowseClick={onBrowseChannels}
                     onCreateClick={() => openCreateDialog("stream")}
@@ -683,6 +759,16 @@ export function AppSidebar({
                     isActiveChannel={selectedView === "channel"}
                     activeWorkingByChannelId={activeWorkingByChannelId}
                     items={forumChannels}
+                    leadingHeaderAction={
+                      <ChannelSortDropdown
+                        groupLabel="forums"
+                        onSortModeChange={(mode) =>
+                          setSortModeFor("forums", mode)
+                        }
+                        sortMode={sortModeFor("forums")}
+                        testId="channel-sort-trigger-forums"
+                      />
+                    }
                     listTestId="forum-list"
                     onCreateClick={() => openCreateDialog("forum")}
                     onMarkAllRead={onMarkAllChannelsRead}
@@ -702,6 +788,12 @@ export function AppSidebar({
                 <SidebarSection
                   action={
                     <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                      <ChannelSortDropdown
+                        groupLabel="direct messages"
+                        onSortModeChange={(mode) => setSortModeFor("dms", mode)}
+                        sortMode={sortModeFor("dms")}
+                        testId="channel-sort-trigger-dms"
+                      />
                       <button
                         aria-expanded={isNewDmOpen}
                         aria-label="Compose new message"
@@ -854,9 +946,10 @@ export function AppSidebar({
           if (!open) setRenameSectionTarget(null);
         }}
         sectionName={renameSectionTarget?.name ?? ""}
-        onConfirm={(newName) => {
+        sectionIcon={renameSectionTarget?.icon}
+        onConfirm={(value) => {
           if (renameSectionTarget) {
-            renameSection(renameSectionTarget.id, newName);
+            renameSection(renameSectionTarget.id, value.name, value.icon);
           }
           setRenameSectionTarget(null);
         }}

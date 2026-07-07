@@ -19,6 +19,8 @@ import {
   Trash2,
 } from "lucide-react";
 
+import type * as React from "react";
+
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import {
   ContextMenu,
@@ -53,6 +55,7 @@ import type { ChannelSection } from "@/features/sidebar/lib/useChannelSections";
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { HashSearch } from "@/shared/ui/icons";
+import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 
 const SECTION_LABEL_BUTTON_CLASS =
   "group/section-label flex w-fit max-w-[calc(100%-3rem)] cursor-pointer appearance-none items-center gap-1 text-left transition-colors hover:text-sidebar-foreground focus-visible:text-sidebar-foreground";
@@ -89,6 +92,8 @@ function MoveToSectionSubmenu({
           >
             {currentSectionId === section.id ? (
               <Check className="h-4 w-4" />
+            ) : section.icon ? (
+              <StatusEmoji className="h-4 w-4" value={section.icon} />
             ) : (
               <span className="h-4 w-4" />
             )}
@@ -251,6 +256,7 @@ function SectionHeaderActions({
   browseAriaLabel,
   createAriaLabel,
   hasUnread,
+  leadingAction,
   onBrowseClick,
   onCreateClick,
   onMarkAllRead,
@@ -258,12 +264,14 @@ function SectionHeaderActions({
   browseAriaLabel?: string;
   createAriaLabel: string;
   hasUnread?: boolean;
+  leadingAction?: React.ReactNode;
   onBrowseClick?: () => void;
   onCreateClick?: () => void;
   onMarkAllRead?: () => void;
 }) {
   return (
     <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+      {leadingAction}
       {hasUnread && onMarkAllRead ? (
         <button
           aria-label="Mark all as read"
@@ -319,6 +327,7 @@ export function ChannelGroupSection({
   isActiveChannel,
   activeWorkingByChannelId,
   items,
+  leadingHeaderAction,
   listTestId,
   onBrowseClick,
   onCreateClick,
@@ -352,6 +361,7 @@ export function ChannelGroupSection({
   isActiveChannel: boolean;
   activeWorkingByChannelId?: ReadonlyMap<string, ActiveChannelTurnSummary>;
   items: Channel[];
+  leadingHeaderAction?: React.ReactNode;
   listTestId: string;
   onBrowseClick?: () => void;
   onCreateClick?: () => void;
@@ -387,7 +397,11 @@ export function ChannelGroupSection({
     items.length > 0 ? (
       <SidebarMenu data-testid={listTestId}>
         {items.map((channel) => (
-          <ContextMenu key={channel.id}>
+          // modal={false}: menu items (e.g. Leave channel) open a modal
+          // AlertDialog. A modal ContextMenu would leave `pointer-events: none`
+          // stuck on <body> when it closes as the dialog mounts, freezing the
+          // whole app. Non-modal avoids installing that body guard entirely.
+          <ContextMenu key={channel.id} modal={false}>
             <ContextMenuTrigger asChild>
               <SidebarMenuItem className="content-visibility-auto-row">
                 {draggable ? (
@@ -472,6 +486,7 @@ export function ChannelGroupSection({
           browseAriaLabel={browseAriaLabel}
           createAriaLabel={createAriaLabel}
           hasUnread={hasUnread}
+          leadingAction={leadingHeaderAction}
           onBrowseClick={onBrowseClick}
           onCreateClick={onCreateClick}
           onMarkAllRead={onMarkAllRead}
@@ -504,6 +519,7 @@ export function CustomChannelSection({
   assignments,
   isFirst,
   isLast,
+  leadingHeaderAction,
   onToggleCollapsed,
   onSelectChannel,
   onMarkChannelRead,
@@ -537,6 +553,7 @@ export function CustomChannelSection({
   assignments: Record<string, string>;
   isFirst: boolean;
   isLast: boolean;
+  leadingHeaderAction?: React.ReactNode;
   onToggleCollapsed: () => void;
   onSelectChannel: (channelId: string) => void;
   onMarkChannelRead: (
@@ -572,7 +589,10 @@ export function CustomChannelSection({
               isDragging && "opacity-30",
             )}
           >
-            <ContextMenu>
+            {/* modal={false}: Rename/Delete section open a modal dialog;
+                a modal ContextMenu would leave `pointer-events: none` stuck on
+                <body> after it closes, freezing the app. */}
+            <ContextMenu modal={false}>
               <ContextMenuTrigger asChild>
                 <div className="relative" {...dragHandleProps}>
                   <SidebarGroupLabel asChild>
@@ -590,7 +610,24 @@ export function CustomChannelSection({
                         )}
                         aria-hidden="true"
                       />
-                      <span>{section.name}</span>
+                      {section.icon ? (
+                        <span
+                          aria-hidden="true"
+                          className="flex h-4 w-4 shrink-0 items-center justify-center"
+                          data-testid={`section-icon-${section.id}`}
+                        >
+                          <StatusEmoji
+                            className="h-4 w-4"
+                            value={section.icon}
+                          />
+                        </span>
+                      ) : null}
+                      <span
+                        className="truncate"
+                        data-testid={`section-title-${section.id}`}
+                      >
+                        {section.name}
+                      </span>
                       <ChevronDown
                         aria-hidden="true"
                         className={cn(
@@ -606,6 +643,7 @@ export function CustomChannelSection({
                       SECTION_ACTION_VISIBILITY_CLASS,
                     )}
                   >
+                    {leadingHeaderAction}
                     {hasUnread ? (
                       <button
                         aria-label="Mark all as read"
@@ -673,7 +711,10 @@ export function CustomChannelSection({
                 {channels.length > 0 ? (
                   <SidebarMenu>
                     {channels.map((channel) => (
-                      <ContextMenu key={channel.id}>
+                      // modal={false}: see note on the other channel ContextMenu
+                      // above — avoids the pointer-events lockup when Leave
+                      // channel's AlertDialog opens.
+                      <ContextMenu key={channel.id} modal={false}>
                         <ContextMenuTrigger asChild>
                           <SidebarMenuItem>
                             <DraggableChannelRow channelId={channel.id}>

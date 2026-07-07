@@ -8,6 +8,10 @@ mod observer;
 mod pool;
 mod queue;
 mod relay;
+mod setup_mode;
+mod usage;
+
+pub use usage::TurnUsage;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1091,6 +1095,19 @@ async fn tokio_main() -> Result<()> {
         .init();
 
     let mut config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
+
+    // ── Setup-mode early branch ───────────────────────────────────────────────
+    //
+    // When the desktop determines an agent is not ready (missing credentials,
+    // model, or provider), it spawns buzz-acp with BUZZ_ACP_SETUP_PAYLOAD set.
+    // We enter the minimal setup-listener path and never start the agent pool.
+    if let Some(payload) = setup_mode::SetupPayload::from_env()
+        .map_err(|e| anyhow::anyhow!("setup payload error: {e}"))?
+    {
+        tracing::info!("buzz-acp: setup payload present, entering setup-listener mode");
+        return setup_mode::run_setup_listener(config, payload).await;
+    }
+
     tracing::info!("buzz-acp starting: {}", config.summary());
 
     let observer = config
@@ -1402,6 +1419,7 @@ async fn tokio_main() -> Result<()> {
             .as_deref()
             .and_then(|hex| nostr::PublicKey::from_hex(hex).ok()),
         memory_enabled: config.memory_enabled,
+        harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
     });
 
     if !config.memory_enabled {
