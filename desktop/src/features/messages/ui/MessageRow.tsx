@@ -198,11 +198,7 @@ export const MessageRow = React.memo(
     );
     const bodyOffsetClass = emojiOnly ? "mt-1" : "-mt-0.5";
 
-    const { channels } = useChannelNavigation();
-    const channelNames = React.useMemo(
-      () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
-      [channels],
-    );
+    const { nonDmChannelNames: channelNames } = useChannelNavigation();
 
     const indentRem = getThreadReplyIndentRem(message.depth);
     const descendantGuideOffsetRem = connectDescendants
