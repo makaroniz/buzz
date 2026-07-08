@@ -178,13 +178,17 @@
  *
  * The gradient is applied to every `bg-sidebar` canvas surface INSIDE the app
  * shell (`.group\/sidebar-wrapper` — the top chrome bar, the sidebar column,
- * and the inset margin behind the white content card). Scoping to the shell
- * wrapper keeps the branding on the app chrome and off unrelated `bg-sidebar`
- * consumers rendered in portals outside the shell (e.g. the persona catalog
- * dialog). `background-attachment: fixed` anchors the gradient to the viewport
- * so these separate surfaces read as one continuous gradient rather than each
- * restarting the ramp. `background-color` is cleared so the grey
- * `--sidebar-background` never shows through.
+ * and the inset margin behind the white content card), PLUS the portaled
+ * mobile sidebar (the `SheetContent` rendered by the offcanvas branch on
+ * narrow viewports, marked `[data-sidebar="sidebar"][data-mobile="true"]`).
+ * The mobile sheet lives in a `SheetPortal` outside the shell wrapper, so it
+ * needs its own precise selector rather than re-broadening to every portal.
+ * Scoping this way keeps the branding on the app chrome and off unrelated
+ * `bg-sidebar` consumers rendered in portals outside the shell (e.g. the
+ * persona catalog dialog). `background-attachment: fixed` anchors the gradient
+ * to the viewport so these separate surfaces read as one continuous gradient
+ * rather than each restarting the ramp. `background-color` is cleared so the
+ * grey `--sidebar-background` never shows through.
  *
  * Small transient `bg-sidebar` chips inside the shell that are NOT canvas
  * surfaces (the drag-overlay pills) opt out via `[data-buzz-flat]` — a
@@ -212,7 +216,9 @@
 
 :root[data-buzz-sidebar]
   .group\/sidebar-wrapper
-  .bg-sidebar:not([data-buzz-flat]) {
+  .bg-sidebar:not([data-buzz-flat]),
+:root[data-buzz-sidebar]
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
   background-color: transparent;
   background-image: linear-gradient(
     to bottom,
