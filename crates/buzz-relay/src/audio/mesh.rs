@@ -241,8 +241,8 @@ impl MeshAudioRouter {
 /// feeds this task, which wraps each frame as a [`MeshDatagram`] and sends it to
 /// the pod that hosts that participant. Drops on a disconnected/oversize peer —
 /// realtime audio never blocks fan-out on one slow remote link.
-pub fn spawn_remote_peer_sink<T: RelayPeerTransport>(
-    transport: Arc<T>,
+pub fn spawn_remote_peer_sink(
+    transport: Arc<dyn RelayPeerTransport>,
     to: RuntimeId,
     fenced: FencedHeader,
     mut frames: mpsc::Receiver<Bytes>,
