@@ -25,7 +25,7 @@ use super::{api_error, internal_error, not_found};
 ///
 /// Returns the authenticated public key and an event ID for replay detection.
 /// For X-Pubkey dev mode, the event ID is a zero hash (no replay concern).
-fn verify_bridge_auth(
+pub(crate) fn verify_bridge_auth(
     headers: &HeaderMap,
     method: &str,
     url: &str,
@@ -76,7 +76,7 @@ fn verify_bridge_auth(
 /// `AppState`, not process-local memory. Any Redis/guard error fails closed:
 /// without the shared `SET NX EX` proof, a stateless worker cannot admit the
 /// NIP-98 request safely.
-async fn check_nip98_replay(
+pub(crate) async fn check_nip98_replay(
     state: &AppState,
     tenant: &TenantContext,
     event_id_bytes: [u8; 32],
@@ -135,7 +135,11 @@ async fn check_nip98_replay_with_guard(
 /// pass and the relay would proceed against the wrong tenant's auth context),
 /// and (b) reject every legitimate request whose community host isn't the
 /// single configured one. Substituting `tenant.host()` closes both directions.
-fn nip98_expected_url(config_relay_url: &str, tenant: &TenantContext, path: &str) -> String {
+pub(crate) fn nip98_expected_url(
+    config_relay_url: &str,
+    tenant: &TenantContext,
+    path: &str,
+) -> String {
     let scheme = if config_relay_url.trim_start().starts_with("wss://") {
         "https"
     } else {
@@ -560,6 +564,10 @@ pub async fn submit_event(
     check_nip98_replay(&state, &tenant, event_id_bytes).await?;
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
+    let event: nostr::Event = serde_json::from_slice(&body)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
+    let kind_u32 = buzz_core::kind::event_kind_u32(&event);
+
     // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
     super::relay_members::enforce_relay_membership(
@@ -570,16 +578,12 @@ pub async fn submit_event(
     )
     .await?;
 
-    let event: nostr::Event = serde_json::from_slice(&body)
-        .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
-
     // Mesh signaling kinds (24620 status report, 24621 connect request) are
     // ephemeral and deliberately absent from ingest_event's per-kind allowlist.
     // The desktop's Rust coordinator publishes them via this bridge, so route
     // them to the mesh handlers — the HTTP twin of the WS door's special-casing
     // in handlers::event. Membership was enforced above; the handlers re-check
     // it fail-closed.
-    let kind_u32 = buzz_core::kind::event_kind_u32(&event);
     if kind_u32 == buzz_core::kind::KIND_MESH_STATUS_REPORT
         || kind_u32 == buzz_core::kind::KIND_MESH_CONNECT_REQUEST
     {
