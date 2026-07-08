@@ -266,7 +266,7 @@ export function ProjectsOverviewPanel({
         </div>
         <div className="overflow-hidden rounded-2xl border border-border/50 bg-muted/20 p-4">
           <h3 className="text-sm font-semibold text-foreground">
-            Contribution activity
+            Contribution Activity
           </h3>
           <ProjectsContributionGraph
             activityByDay={activityByDay}

@@ -273,7 +273,7 @@ function PullRequestReviewersRow({
   }
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5 border-border/50 border-b px-3 py-2.5 text-xs text-muted-foreground">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 px-1 text-xs text-muted-foreground">
       <span className="font-medium">Reviewers</span>
       {pullRequest.reviewers.map((pubkey) => {
         const profile = profileForPubkey(pubkey, profiles);
@@ -426,14 +426,22 @@ function PullRequestReviewCard({
       : null;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border/50 bg-background/45">
+    <div className="space-y-2.5">
       <PullRequestReviewersRow
         canRequest={canRequestReview}
         profiles={profiles}
         project={project}
         pullRequest={pullRequest}
       />
-      <div className="flex min-w-0 flex-wrap items-center gap-3 p-3">
+      <div
+        className={`flex min-w-0 flex-wrap items-center gap-3 rounded-lg px-3 py-2.5 ${
+          isDraft
+            ? "bg-muted/40"
+            : approvalCount > 0
+              ? "bg-green-600/10 dark:bg-green-500/10"
+              : "border-green-600/35 border-l-2 bg-green-600/[0.04] pl-3 dark:border-green-500/35 dark:bg-green-500/[0.06]"
+        }`}
+      >
         {isDraft ? (
           <GitPullRequestDraft className="h-4 w-4 shrink-0 text-muted-foreground" />
         ) : approvalCount > 0 ? (
@@ -444,7 +452,15 @@ function PullRequestReviewCard({
           <GitPullRequest className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground">{reviewState}</p>
+          <p
+            className={`text-sm font-medium ${
+              approvalCount > 0
+                ? "text-green-700 dark:text-green-400"
+                : "text-foreground"
+            }`}
+          >
+            {reviewState}
+          </p>
           {reviewStateDetail ? (
             <p className="text-xs text-muted-foreground">{reviewStateDetail}</p>
           ) : null}
@@ -458,7 +474,7 @@ function PullRequestReviewCard({
           ) : null}
           {canApprove ? (
             <Button
-              className="h-7 gap-1.5 rounded-full bg-green-600 px-3 text-white hover:bg-green-700"
+              className="h-8 gap-1.5 rounded-full bg-green-600 px-3.5 text-white shadow-sm hover:bg-green-700"
               disabled={approveMutation.isPending}
               onClick={() => {
                 void handleApprove();
@@ -488,7 +504,7 @@ function PullRequestReviewCard({
         </div>
       </div>
       {canChangeStatus && pullRequest.status === "Open" ? (
-        <div className="border-border/50 border-t px-3 py-2 text-right text-xs text-muted-foreground">
+        <p className="px-1 text-right text-xs text-muted-foreground">
           Still in progress?{" "}
           <button
             className="font-medium underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
@@ -500,7 +516,7 @@ function PullRequestReviewCard({
           >
             Convert to draft
           </button>
-        </div>
+        </p>
       ) : null}
     </div>
   );
