@@ -176,7 +176,10 @@ export function usePersonasQuery() {
     queryKey: personasQueryKey,
     queryFn: listPersonas,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    // No refetchInterval: inbound relay changes to personas emit
+    // `agents-data-changed`, which `useAgentsDataRefresh` coalesces into an
+    // invalidate (200ms window). The 30s poll was belt-and-suspenders on top of
+    // that event path — redundant disk-read IPC.
   });
 }
 
@@ -231,12 +234,14 @@ export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
     staleTime: 5_000,
     refetchInterval: (query) => {
       const agents = query.state.data as ManagedAgent[] | undefined;
-      // Only local "running" agents need fast polling (process state can
-      // change). "deployed" is static control-plane state — presence polling
-      // handles the live signal for remote agents separately.
+      // Only local "running" agents need polling: process state can change
+      // with no relay event to signal it, so this poll is the only liveness
+      // path for them. When nothing is running there IS an event path —
+      // `agents-data-changed` (control-plane changes) — so the idle branch
+      // drops its poll entirely rather than falling back to 30s.
       return agents?.some((agent) => agent.status === "running")
         ? 5_000
-        : 30_000;
+        : false;
     },
   });
 }
@@ -689,7 +694,9 @@ export function useTeamsQuery() {
     queryKey: teamsQueryKey,
     queryFn: listTeams,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    // No refetchInterval: inbound relay team changes emit `agents-data-changed`
+    // (handled by useAgentsDataRefresh). Same redundant-poll removal as
+    // usePersonasQuery.
   });
 }
 
