@@ -15,6 +15,27 @@ const AT_BOTTOM_THRESHOLD_PX = 32;
 // latest message; this strict threshold decides when a programmatic bottom pin
 // has actually finished settling.
 const TRUE_BOTTOM_THRESHOLD_PX = 1;
+// Realization compensation only runs when the reading anchor's captured scroll
+// position is consistent with the frame the ResizeObserver fires in. Under
+// WebKit async ("coordinated") scrolling the rAF baseline read and the RO
+// post-layout read can straddle a compositor commit, so a fragment of the
+// user's own momentum can leak into the measured shift. If the scroll moved
+// more than this bound since the baseline was captured, momentum is clearly in
+// flight and the two reads are not trustworthy together — we SKIP the
+// correction rather than risk folding the wheel delta into the pin. Under-
+// correcting a single realization is invisible (the next quiet frame catches
+// it); fighting the wheel is the visible lurch. Chosen at roughly one frame of
+// aggressive trackpad momentum; tune against the gate.
+const COMPENSATION_SCROLL_SKIP_PX = 120;
+// Distance below the scroller top at which the reading anchor is chosen. We
+// pick the first row whose top sits at least this far below the viewport top
+// rather than the first row past the top edge, so the anchor stays OUT of the
+// freshly-exposed realization band hanging just under the fold during an
+// upscroll. A row inside that band can re-measure to a garbage position when
+// the ResizeObserver re-queries it mid-realization; a row a notch below the
+// churn moves only by the net height change above it. Matches the probe's
+// SAFE_MARGIN so the gate measures the same anchor the writer pins.
+const READING_ANCHOR_SAFE_MARGIN_PX = 60;
 
 type AnchorState =
   | { kind: "at-bottom" }
@@ -155,18 +176,35 @@ function computeAnchor(container: HTMLDivElement): AnchorState {
  * below the churn, so re-pinning it to its saved offset cancels the net height
  * change of everything above it (the layout engine sums those deltas for us —
  * a row resizing below the anchor doesn't move the anchor's top, so it's
- * excluded for free). Returns null when nothing is fully visible.
+ * excluded for free). We require the row's top to sit at least
+ * `READING_ANCHOR_SAFE_MARGIN_PX` below the scroller top so the anchor never
+ * sits inside the realization band itself. Returns null when no such row
+ * exists.
+ *
+ * We also capture `scrollTop` alongside the viewport-relative `topOffset` so
+ * compensation can be computed scroll-invariantly: the row's document position
+ * `scrollTop + topOffset` changes ONLY when content above it reflows — a user
+ * scroll moves `scrollTop` and `topOffset` by equal-and-opposite amounts and
+ * leaves the sum fixed. That decoupling is what makes the correction correct on
+ * WebKit even when the baseline is one frame stale relative to the user's live
+ * momentum: we compensate the reflow, never the wheel.
  */
 function snapshotReadingAnchor(
   container: HTMLDivElement,
-): { id: string; topOffset: number } | null {
+): { id: string; topOffset: number; scrollTop: number } | null {
   const containerTop = container.getBoundingClientRect().top;
+  const safeTop = containerTop + READING_ANCHOR_SAFE_MARGIN_PX;
   const rows = container.querySelectorAll<HTMLElement>("[data-message-id]");
   for (const row of rows) {
     const rect = row.getBoundingClientRect();
-    if (rect.top >= containerTop) {
+    if (rect.top >= safeTop) {
       const id = row.dataset.messageId;
-      if (id) return { id, topOffset: rect.top - containerTop };
+      if (id)
+        return {
+          id,
+          topOffset: rect.top - containerTop,
+          scrollTop: container.scrollTop,
+        };
     }
   }
   return null;
@@ -189,6 +227,36 @@ function reservedRowHeight(row: HTMLElement): number {
   const match = raw.match(/(-?\d+(?:\.\d+)?)px/);
   if (match) return Number.parseFloat(match[1]);
   return row.getBoundingClientRect().height;
+}
+
+/**
+ * Layout-shift compensation for the reading anchor, computed scroll-invariantly.
+ *
+ * Given the anchor row's document position (`scrollTop + topOffset`) at baseline
+ * and now, returns the absolute `scrollTop` the container should be written to
+ * so the row stays visually fixed across a reflow above it — WITHOUT folding in
+ * the user's own scroll motion since the baseline.
+ *
+ * The row's document position moves ONLY when content above it changes height:
+ * a user scroll changes `scrollTop` and `topOffset` by equal-and-opposite
+ * amounts and leaves the sum fixed. So `shift` (the reflow above the row) is the
+ * change in document position, and the corrected target is `currentScrollTop +
+ * shift`. When the user has purely scrolled (no reflow) the shift is 0 and the
+ * target equals the current position — the correction ignores the wheel.
+ *
+ * Returns `null` when the shift is within `epsilonPx` (nothing to correct).
+ */
+export function computeAnchorCorrection(
+  baseline: { topOffset: number; scrollTop: number },
+  current: { topOffset: number; scrollTop: number },
+  epsilonPx = 0.5,
+): number | null {
+  const shift =
+    current.scrollTop +
+    current.topOffset -
+    (baseline.scrollTop + baseline.topOffset);
+  if (Math.abs(shift) <= epsilonPx) return null;
+  return current.scrollTop + shift;
 }
 
 export function useAnchoredScroll({
@@ -232,13 +300,18 @@ export function useAnchoredScroll({
   // guard runs on a native scroll event, outside React's render cycle.
   const settlingRef = React.useRef(false);
   // Baseline for realization/reflow compensation: the first row fully inside
-  // the viewport (top at/below the scroller top) and its top offset, captured
-  // on every scroll event and after every correction. The ResizeObserver
-  // re-pins THIS row to THIS offset — a single measured pin that absorbs the
-  // net height change of everything above it (see `snapshotReadingAnchor`).
+  // the viewport (top at/below the scroller top), its top offset, and the
+  // scrollTop at capture. Sampled every rAF by a running loop while mid-history
+  // (see the rAF baseline effect) — NOT per-scroll-event, because scroll events
+  // dispatch async off WebKit's scrolling thread and would hand the RO a stale
+  // snapshot. rAF callbacks run in the frame's rendering steps before layout/RO
+  // delivery on every engine, so this baseline is the freshest pre-shift read
+  // cross-engine. The ResizeObserver re-pins THIS row using the scroll-invariant
+  // document-position delta (see the RO callback).
   const readingAnchorRef = React.useRef<{
     id: string;
     topOffset: number;
+    scrollTop: number;
   } | null>(null);
 
   // Reset everything when the channel changes — the layout effect that runs
@@ -374,11 +447,6 @@ export function useAnchoredScroll({
       }
     }
     anchorRef.current = computeAnchor(container);
-    // Baseline the realization-compensation anchor from THIS scroll snapshot —
-    // RO fires after layout, so the "before" position can only come from the
-    // last scroll event (or a prior correction), never from inside the RO
-    // callback. Missing/stale baseline => the RO path skips rather than drifts.
-    readingAnchorRef.current = snapshotReadingAnchor(container);
     const atBottom = anchorRef.current.kind === "at-bottom";
     setIsAtBottom((prev) => (prev === atBottom ? prev : atBottom));
     if (atBottom) {
@@ -563,7 +631,12 @@ export function useAnchoredScroll({
       // A programmatic bottom pin is still settling; `onScroll` owns the
       // floor-chase, so stay out of its way and don't double-write.
       if (settlingRef.current) return;
-      if (anchorRef.current.kind === "at-bottom") {
+      // Bottom vs mid-history is decided by SYNCHRONOUS geometry, not
+      // `anchorRef.current.kind` (scroll-event-maintained → stale under WebKit
+      // momentum). `isAtBottomNow` reads live scroll metrics, and it matches the
+      // exact signal the rAF baseline sampler uses to decide whether a reading
+      // anchor exists — so the branch here and the baseline can't disagree.
+      if (isAtBottomNow(container)) {
         // Bottom-glue: a row realizing/reflowing while pinned grows the content,
         // so re-pin to the new floor to stay glued, and refresh the height map
         // so we don't treat this growth as a mid-history delta later.
@@ -577,18 +650,18 @@ export function useAnchoredScroll({
         return;
       }
       // Mid-history: a batch of rows realized/reflowed this frame. The
-      // reading anchor — the first fully-visible row, snapshotted by the last
-      // scroll event — has shifted by the net height change of everything above
-      // it. Re-pin it to its saved offset: a single measured correction (the
-      // layout engine already summed the above-anchor deltas into the row's
-      // top, and rows resizing below the anchor don't move it, so they're
-      // excluded for free). This is the single scroll writer for realization;
-      // `overflow-anchor: none` (and WKWebView's absence of it) mean nothing
-      // else competes. We use the RO batch only as the TRIGGER — we detect that
-      // a row's laid-out height actually changed (seeded from the reserve so a
-      // first-realization delivery counts, not swallowed as a first sighting),
-      // then correct from the anchor's own measured drift, never from summing
-      // per-row deltas.
+      // reading anchor — the first row a safe margin below the fold,
+      // snapshotted by the per-rAF baseline sampler — has shifted by the net
+      // height change of everything above it. Re-pin it to its saved offset: a
+      // single measured correction (the layout engine already summed the
+      // above-anchor deltas into the row's top, and rows resizing below the
+      // anchor don't move it, so they're excluded for free). This is the single
+      // scroll writer for realization; `overflow-anchor: none` (and WKWebView's
+      // absence of it) mean nothing else competes. We use the RO batch only as
+      // the TRIGGER — we detect that a row's laid-out height actually changed
+      // (seeded from the reserve so a first-realization delivery counts, not
+      // swallowed as a first sighting), then correct from the anchor's own
+      // measured shift, never from summing per-row deltas.
       let changed = false;
       for (const entry of entries) {
         const row = entry.target as HTMLElement;
@@ -606,12 +679,32 @@ export function useAnchoredScroll({
       );
       if (!anchorRow) return;
       const containerTop = container.getBoundingClientRect().top;
+      const currentScrollTop = container.scrollTop;
+      // Staleness skip. The baseline was captured in this frame's rAF (pre-
+      // layout), but under async scrolling a compositor commit can land between
+      // that read and this post-layout read. A large scroll delta since
+      // baseline means momentum is in flight and the two reads may not describe
+      // one coherent state — skip rather than fold the wheel into the pin.
+      if (
+        Math.abs(currentScrollTop - baseline.scrollTop) >
+        COMPENSATION_SCROLL_SKIP_PX
+      ) {
+        return;
+      }
       const currentTopOffset =
         anchorRow.getBoundingClientRect().top - containerTop;
-      const drift = currentTopOffset - baseline.topOffset;
-      if (Math.abs(drift) > 0.5) {
-        container.scrollBy(0, drift);
-        // Re-baseline after the correction so the next RO batch measures drift
+      // Scroll-invariant correction: isolates the reflow above the reading row
+      // from the user's own scroll motion since baseline (see
+      // `computeAnchorCorrection`). Reads are taken as late as possible, here in
+      // the post-layout RO callback, and the write is absolute — no compounding
+      // of a stale `scrollTop` read against a newer committed offset.
+      const target = computeAnchorCorrection(baseline, {
+        topOffset: currentTopOffset,
+        scrollTop: currentScrollTop,
+      });
+      if (target !== null) {
+        container.scrollTo({ top: target, behavior: "auto" });
+        // Re-baseline after the correction so the next RO batch measures shift
         // from where we just pinned, not the pre-correction position.
         readingAnchorRef.current = snapshotReadingAnchor(container);
       }
@@ -621,7 +714,7 @@ export function useAnchoredScroll({
     // of THAT row's box but does not reliably fire a ResizeObserver on the
     // wrapper (Blink does not surface CV realization as an ancestor resize).
     // The RO callback runs after layout, before paint, so the compensating
-    // `scrollBy` is same-frame invisible.
+    // scroll write is same-frame invisible.
     for (const row of content.querySelectorAll<HTMLElement>(
       ".timeline-row-cv",
     )) {
@@ -630,6 +723,42 @@ export function useAnchoredScroll({
     }
     return () => observer.disconnect();
   }, [channelId, contentRef, scrollContainerRef, messages]);
+
+  // ---------------------------------------------------------------------------
+  // Per-rAF reading-anchor baseline. This is the single writer of
+  // `readingAnchorRef`, and the crux of the cross-engine fix. The RO
+  // compensation needs a "before the reflow" snapshot of the reading row; the
+  // natural place to take it — the scroll event — is wrong on WebKit, which
+  // dispatches scroll asynchronously off its scrolling thread, so under momentum
+  // the snapshot the RO consumes lags the live offset and the correction folds
+  // the user's own wheel delta into the pin (the 204px lurch). rAF callbacks
+  // run in every engine's frame rendering steps BEFORE style/layout and RO
+  // delivery, so a baseline captured here is the freshest possible pre-reflow
+  // read on both engines, decoupled from scroll-event timing entirely.
+  //
+  // Mid-history is derived from SYNCHRONOUS geometry every frame
+  // (`isAtBottomNow`), NOT from `anchorRef.current.kind`. `anchorRef` is
+  // maintained by the scroll event — the very thing that goes stale on WebKit
+  // under momentum — so gating on it would clear the baseline during exactly
+  // the frames the sampler exists to protect. Reading live scroll geometry is
+  // immune to scroll-event staleness. When at-bottom we clear the baseline
+  // (bottom-glue owns that path); while a programmatic bottom pin is settling
+  // we hold off — `onScroll` owns that window.
+  //
+  // No `channelId` dep: the loop reads `scrollContainerRef.current` fresh every
+  // frame, so it re-binds to the new scroller on channel switch on its own.
+  React.useEffect(() => {
+    let rafId = requestAnimationFrame(function sample() {
+      const container = scrollContainerRef.current;
+      if (container && !settlingRef.current) {
+        readingAnchorRef.current = isAtBottomNow(container)
+          ? null
+          : snapshotReadingAnchor(container);
+      }
+      rafId = requestAnimationFrame(sample);
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [scrollContainerRef]);
 
   // ---------------------------------------------------------------------------
   // Target message handling (deep link, jump-to-reply, etc.). Distinct from
