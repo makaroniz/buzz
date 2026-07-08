@@ -574,6 +574,7 @@ pub fn run() {
             parse_persona_files,
             export_persona_to_json,
             get_channel_workflows,
+            get_channels_workflows,
             get_workflow,
             create_workflow,
             update_workflow,
