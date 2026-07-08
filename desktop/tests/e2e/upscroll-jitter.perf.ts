@@ -84,7 +84,8 @@ const MAX_RMS_DEVIATION_PX = 0.6;
 // Fixed synchronous scroll step per notch (px). Constant by construction — no
 // wheel-scaling variance for median-of-run to misread as jitter.
 const STEP = 220;
-const MAX_STEPS = 80; // cap; stop early once we near the top of the window
+const MAX_STEPS = 80; // cap; the walk now survives fetchOlder re-anchors and
+// runs to the true top of history (~77 notches), scoring every paged-in window.
 // Keep the tracked row this far (px) from both viewport edges so it stays
 // realized across the step — no straddling-row un-realization artifact.
 const SAFE_MARGIN = 100;
@@ -95,6 +96,10 @@ type Result = {
   samples: StepSample[];
   reachedTop: boolean;
   rowCount: number;
+  // True once a `fetchOlder` prepend landed and was survived mid-run — the
+  // gate then keeps scoring notches in the newly paged-in population, so it
+  // exercises the pagination half of H1, not just in-window CV realization.
+  prependObserved: boolean;
 };
 
 // Drive one upscroll run and collect per-notch samples. `actuate` selects the
@@ -120,6 +125,11 @@ async function measure(
 
   const samples: StepSample[] = [];
   let reachedTop = false;
+  let prependObserved = false;
+  // Mounted-row count before the walk begins — the baseline a prepend grows.
+  const mountedAtRunStart = await timeline.evaluate(
+    (el) => (el as HTMLDivElement).querySelectorAll("[data-message-id]").length,
+  );
 
   for (let step = 0; step < MAX_STEPS; step += 1) {
     // Pick a row comfortably inside the viewport (SAFE_MARGIN from both edges)
@@ -174,11 +184,17 @@ async function measure(
       (element, args: { id: string; margin: number }) => {
         const el = element as HTMLDivElement;
         const box = el.getBoundingClientRect();
+        const mounted = el.querySelectorAll("[data-message-id]").length;
         const row = el.querySelector<HTMLElement>(
           `[data-message-id="${CSS.escape(args.id)}"]`,
         );
         if (!row)
-          return { top: null, inSafeBand: false, scrollTop: el.scrollTop };
+          return {
+            top: null,
+            inSafeBand: false,
+            scrollTop: el.scrollTop,
+            mounted,
+          };
         const rect = row.getBoundingClientRect();
         return {
           top: rect.top,
@@ -186,6 +202,7 @@ async function measure(
             rect.top > box.top + args.margin &&
             rect.bottom < box.bottom - args.margin,
           scrollTop: el.scrollTop,
+          mounted,
         };
       },
       { id: before.id, margin: SAFE_MARGIN },
@@ -193,6 +210,25 @@ async function measure(
 
     const appliedTop = before.scrollTop - after.scrollTop; // realized px moved up
     if (appliedTop <= 0) {
+      // scrollTop did not decrease. Two causes: (a) we reached the top of
+      // history (scrollTop ~ 0) — the real terminator; or (b) a `fetchOlder`
+      // prepend just landed ~CHANNEL_HISTORY_LIMIT older rows ABOVE the
+      // viewport, so scrollTop jumped UP to preserve the visible content — a
+      // RE-ANCHOR, not the top. Distinguish by mounted-count: a prepend grows
+      // it. On a re-anchor we skip scoring this step (its motion is the
+      // prepend jump, not a fixed STEP notch — scoring it would poison the
+      // metric with a one-off multi-thousand-px move) and CONTINUE; the next
+      // iteration re-baselines a fresh safe-band row in the newly paged-in
+      // window, so scoring resumes ACROSS the prepend. This is what makes the
+      // gate SCORE at least one prepend per run (T1.2) rather than terminate
+      // at the sentinel band — closing the pagination-coverage gap Quinn and
+      // Dawn flagged. Both the writer (GREEN) and the bare estimator (RED)
+      // survive the re-anchor, so RED still fails on the cold-realization
+      // jitter of the paged-in rows and GREEN still holds them to STEP.
+      if (after.mounted > mountedAtRunStart && after.scrollTop > 1) {
+        prependObserved = true;
+        continue;
+      }
       reachedTop = after.scrollTop <= 0;
       break;
     }
@@ -215,6 +251,7 @@ async function measure(
       (el) =>
         (el as HTMLDivElement).querySelectorAll("[data-message-id]").length,
     ),
+    prependObserved,
   };
 }
 
@@ -289,6 +326,9 @@ test("GATE: upscroll motion consistency stays below the realization-jitter thres
   console.log(`steps measured (sync):       ${result.samples.length}`);
   console.log(`reached top of history:      ${result.reachedTop}`);
   console.log(
+    `scored a fetchOlder prepend: ${result.prependObserved}  (T1.2: pagination half exercised)`,
+  );
+  console.log(
     `median per-notch motion:     ${s.median.toFixed(1)}px  (STEP=${STEP})`,
   );
   console.log(
@@ -316,6 +356,18 @@ test("GATE: upscroll motion consistency stays below the realization-jitter thres
   // DOM (de-virtualized), so ~100 mounted rows is the expected window.
   expect(result.rowCount).toBeGreaterThanOrEqual(80);
   expect(result.samples.length).toBeGreaterThan(8);
+
+  // COVERAGE (T1.2): the scored run must cross at least one `fetchOlder`
+  // prepend. Upscroll jitter has TWO sources (Eva's H1 + Quinn's seed trace):
+  // CV-skipped rows in the opening window that realize on entry, AND cold rows
+  // paged in above the viewport when scrollback fires near the top. The gate
+  // measures felt motion whatever the cause, but if the run terminated at the
+  // sentinel band it would only ever certify the first source. We assert it
+  // survived a re-anchor and kept scoring so BOTH sources are under the gate —
+  // pass or fail. This is corpus-structural (400-row seed > 300 limit), so it
+  // holds on the RED baseline and the GREEN fix alike; a run that stops before
+  // scoring a prepend is a coverage regression, not a jitter verdict.
+  expect(result.prependObserved).toBe(true);
 
   // ANTI-CHEAT: the reading row must actually track the input — a frozen or
   // half-applying scroller (near-zero motion, would false-green on deviation)
