@@ -21,6 +21,7 @@ import { UnreadPill, unreadCountLabel } from "@/shared/ui/UnreadPill";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { TimelineSkeleton, useTimelineSkeletonRows } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
+import type { TimelineVirtualizerApi } from "./TimelineMessageList";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
 
@@ -191,6 +192,10 @@ const MessageTimelineBase = React.forwardRef<
   const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const contentRef = React.useRef<HTMLDivElement>(null);
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
+  const [virtualizerScrollParent, setVirtualizerScrollParent] =
+    React.useState<HTMLDivElement | null>(null);
+  const [timelineVirtualizerApi, setTimelineVirtualizerApi] =
+    React.useState<TimelineVirtualizerApi | null>(null);
 
   // Gate the heavy timeline render (each row runs a synchronous
   // react-markdown parse) behind React concurrency. `useDeferredValue` lets the
@@ -230,6 +235,13 @@ const MessageTimelineBase = React.forwardRef<
   // painted at a stale offset until the user's next scroll event forces layout.
   const scrollContainerDomKey = channelId ?? "none";
 
+  React.useLayoutEffect(() => {
+    // Re-read after `scrollContainerDomKey` swaps the keyed scroll DOM node.
+    void scrollContainerDomKey;
+    setVirtualizerScrollParent(scrollContainerRef.current);
+    setTimelineVirtualizerApi(null);
+  }, [scrollContainerRef, scrollContainerDomKey]);
+
   const timelineBodySurface = selectTimelineBodySurface({
     deferredCount: deferredMessages.length,
     isLoading: isLoading || isDeferredSnapshotStale,
@@ -245,6 +257,7 @@ const MessageTimelineBase = React.forwardRef<
     scrollToBottom,
     scrollToBottomOnNextUpdate,
     scrollToMessage,
+    onVirtualizerAtBottomStateChange,
   } = useAnchoredScroll({
     channelId,
     contentRef,
@@ -253,6 +266,9 @@ const MessageTimelineBase = React.forwardRef<
     onTargetReached,
     scrollContainerRef,
     targetMessageId,
+    virtualScrollToMessage: timelineVirtualizerApi?.scrollToMessage,
+    virtualScrollToBottom: timelineVirtualizerApi?.scrollToBottom,
+    virtualizerOwnsPrependAnchoring: virtualizerScrollParent !== null,
   });
 
   const timelineIntroSurface = selectTimelineIntroSurface({
@@ -358,8 +374,13 @@ const MessageTimelineBase = React.forwardRef<
     }
   }, [deferredMessages, jumpToMessage, showTimelineSkeleton]);
 
+  const loadOlderViaVirtualizer = React.useCallback(() => {
+    if (!fetchOlder || showTimelineSkeleton || !hasOlderMessages) return;
+    void fetchOlder();
+  }, [fetchOlder, hasOlderMessages, showTimelineSkeleton]);
+
   useLoadOlderOnScroll({
-    fetchOlder,
+    fetchOlder: virtualizerScrollParent ? undefined : fetchOlder,
     hasOlderMessages,
     isLoading: showTimelineSkeleton,
     scrollContainerRef,
@@ -606,12 +627,16 @@ const MessageTimelineBase = React.forwardRef<
                     onReply={onReply}
                     isSendingVideoReviewComment={isSendingVideoReviewComment}
                     onSendVideoReviewComment={onSendVideoReviewComment}
+                    onStartReached={loadOlderViaVirtualizer}
                     onToggleReaction={onToggleReaction}
+                    onVirtualizerApiChange={setTimelineVirtualizerApi}
+                    onAtBottomStateChange={onVirtualizerAtBottomStateChange}
                     personaLookup={personaLookup}
                     profiles={profiles}
                     searchActiveMessageId={searchActiveMessageId}
                     searchMatchingMessageIds={searchMatchingMessageIds}
                     searchQuery={searchQuery}
+                    scrollParent={virtualizerScrollParent}
                     threadUnreadCounts={threadUnreadCounts}
                     unfollowThreadById={unfollowThreadById}
                   />
