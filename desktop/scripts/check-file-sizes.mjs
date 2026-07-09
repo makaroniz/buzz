@@ -189,16 +189,23 @@ const overrides = new Map([
   // (Quinn's merge-bar checklist #4), the one-clock/single-writer reasoning, and
   // the build-stamp/probe contract are all documented AT their sites. The file
   // was 888 lines at HEAD; this fix's code + load-bearing provenance comments
-  // crossed 1000. The 1140→1180 bump is the W4a chase instrumentation inflating
+  // crossed 1000. The 1140→1210 bump is the W4a chase instrumentation inflating
   // a load-bearing hook mid-investigation: the signed-shift grow/shrink probe
-  // (classifier arm) and the renderedScroll gate-clock rekey (w4a-gate-1 arm),
-  // both carrying their provenance inline. EXIT CONDITION: once #1662's fate is
-  // decided, the diagnostic emits get stripped or gated and the mid-history
-  // corrector + band walk split into a sibling module — Eva's ruling holds the
-  // structural split until the arms in flight against this file settle, so it is
-  // NOT done mid-chase. Comment-dominated overage on a correctness fix, not
-  // generic debt growth. Approved override; queued to split with the rest.
-  ["src/features/messages/ui/useAnchoredScroll.ts", 1180],
+  // (classifier arm, 1140→1156) and the renderedScroll gate-clock rekey
+  // (w4a-gate-1 arm, ~1156→1206). The gate-arm growth is the deferred-refresh
+  // commit path + the momentum-gate rationale + the `renderedScroll` field
+  // threaded through the shared result type and all four returns so the
+  // classifier fixture can PROVE the scroll/reflow decomposition (Eva required
+  // this in the arm's first run); biome reflows each 4-prop return object to
+  // multi-line, which is most of the line cost. FLAGGED to Eva: this is heavy
+  // for a diagnostic — if the decomposition proof moves behind a lighter
+  // gate-only probe, this drops back toward 1185. EXIT CONDITION: once #1662's
+  // fate is decided, the diagnostic emits get stripped or gated and the
+  // mid-history corrector + band walk split into a sibling module — Eva's ruling
+  // holds the structural split until the arms in flight settle, so it is NOT
+  // done mid-chase. Comment-dominated overage on a correctness fix, not generic
+  // debt growth. Approved override; queued to split.
+  ["src/features/messages/ui/useAnchoredScroll.ts", 1210],
   // AgentConfigPanel footer fold into ProfileFieldGroup for the config-bridge
   // panel — a small overage from load-bearing UI plumbing, not generic debt
   // growth. Approved override; still queued to split with the rest of this list.

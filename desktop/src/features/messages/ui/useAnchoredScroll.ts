@@ -19,13 +19,16 @@ const TRUE_BOTTOM_THRESHOLD_PX = 1;
 // position is consistent with the frame the ResizeObserver fires in. Under
 // WebKit async ("coordinated") scrolling the rAF baseline read and the RO
 // post-layout read can straddle a compositor commit, so a fragment of the
-// user's own momentum can leak into the measured shift. If the scroll moved
-// more than this bound since the baseline was captured, momentum is clearly in
-// flight and the two reads are not trustworthy together — we SKIP the
-// correction rather than risk folding the wheel delta into the pin. Under-
-// correcting a single realization is invisible (the next quiet frame catches
-// it); fighting the wheel is the visible lurch. Chosen at roughly one frame of
-// aggressive trackpad momentum; tune against the gate.
+// user's own momentum can leak into the measured shift. If the RENDERED scroll
+// (the painted wheel motion this frame — see `applyMidHistoryCorrection`)
+// exceeds this bound, momentum is clearly in flight and the two reads are not
+// trustworthy together — we SKIP the correction rather than risk folding the
+// wheel delta into the pin. We gate on rendered, not raw `scrollTop`, delta
+// because WebKit coalesces momentum into `scrollTop` on its own clock: a raw
+// delta can read large on a frame that painted still. Under-correcting a single
+// realization is invisible (the next quiet frame catches it); fighting the
+// wheel is the visible lurch. Chosen at roughly one frame of aggressive
+// trackpad momentum; tune against the gate.
 const COMPENSATION_SCROLL_SKIP_PX = 120;
 // Distance below the scroller top at which the reading anchor is chosen. We
 // pick the first row whose top sits at least this far below the viewport top
@@ -318,6 +321,14 @@ export function computeAnchorCorrection(
  * the anchor's net document-position shift (`computeAnchorCorrection`): the two
  * agree only when the net shift is genuinely an above-anchor reflow, not a
  * straddling-row miscount or scroll artifact.
+ *
+ * DEFERRED REFRESH: the cache write is staged, not applied inline — the walk
+ * returns `{ aboveShift, commit }` and the caller applies `commit()` ONLY when
+ * it keeps this frame (does not momentum-skip). This preserves "first observer
+ * wins, second no-ops" while letting the momentum gate — which now needs
+ * `aboveShift` to decide — skip a frame WITHOUT refreshing the cache, so the
+ * next quiet frame still sees the pending reflow. Refreshing on a skip would
+ * silently swallow it.
  */
 export function sumAboveAnchorShift(
   container: HTMLElement,
@@ -336,9 +347,9 @@ export function sumAboveAnchorShift(
   // whose realization still shifts the anchor — is included.
   scrollTop: number,
   heights: WeakMap<Element, number>,
-): number {
+): { aboveShift: number; commit: () => void } {
   const wrapper = anchorRow.closest<HTMLElement>(".timeline-row-cv");
-  if (!wrapper) return 0;
+  if (!wrapper) return { aboveShift: 0, commit: () => {} };
   const containerTop = container.getBoundingClientRect().top;
   const bandTop = scrollTop - REFLOW_BAND_ABOVE_FOLD_PX;
   // Document-order walk over `.timeline-row-cv` rows, structure-agnostic: rows
@@ -352,6 +363,10 @@ export function sumAboveAnchorShift(
   });
   walker.currentNode = wrapper;
   let aboveShift = 0;
+  // Staged cache writes, applied by `commit()` only when the caller keeps this
+  // frame (does not momentum-skip). Includes first-sighting seeds so a skipped
+  // frame does not seed either — the next quiet frame does the whole pass.
+  const staged: Array<[Element, number]> = [];
   for (
     let row = walker.previousNode() as HTMLElement | null;
     row;
@@ -365,11 +380,14 @@ export function sumAboveAnchorShift(
     if (rowDocTop < bandTop) break; // older than the band; all prior are too.
     const height = rect.height;
     const last = heights.get(row);
-    heights.set(row, height);
+    staged.push([row, height]);
     if (last === undefined) continue; // first sighting in band: seed, don't count.
     aboveShift += height - last;
   }
-  return aboveShift;
+  const commit = () => {
+    for (const [row, height] of staged) heights.set(row, height);
+  };
+  return { aboveShift, commit };
 }
 
 /**
@@ -394,6 +412,12 @@ type MidHistoryCorrection = {
   wouldFire: boolean;
   residual: number;
   signedShift: number;
+  // Diagnostic-only, rAF path only: the painted wheel motion the momentum gate
+  // keyed on this frame (`aboveShift − ΔtopOffset`). Lets the classifier fixture
+  // PROVE the scroll/reflow decomposition holds — a pure-scroll frame reads
+  // large here, a pure-reflow (rendered-still) frame reads ~0. The RO path has
+  // no momentum gate, so it omits this. Not consumed in production.
+  renderedScroll?: number;
 };
 
 /**
@@ -410,9 +434,9 @@ type MidHistoryCorrection = {
  *     refreshed cache → residual ≈ 0 → no-op.
  *
  * "First observer wins, second observer no-ops" is therefore implicit in the
- * cache, not coordinated by a flag. `sumAboveAnchorShift` both reads AND
- * refreshes the band entries (`heights.set` runs unconditionally as it walks),
- * so a correction and its cache refresh are one indivisible pass — the second
+ * cache, not coordinated by a flag. `sumAboveAnchorShift` reads the band and
+ * STAGES its refresh, applied by `commit()` only past the momentum gate, so a
+ * kept correction and its cache refresh are one indivisible pass — the second
  * observer cannot double-correct because the delta it would sum is already 0.
  *
  * `baseline` is the anchor's PRE-realization snapshot (the rAF frame-start read
@@ -425,28 +449,42 @@ function applyMidHistoryCorrection(
   baseline: ReadingAnchor,
   heights: WeakMap<Element, number>,
 ): MidHistoryCorrection {
-  // Momentum in flight: a large scroll delta since baseline means the two reads
-  // may not describe one coherent state — skip rather than fold the wheel in.
   const currentScrollTop = container.scrollTop;
-  if (
-    Math.abs(currentScrollTop - baseline.scrollTop) >
-    COMPENSATION_SCROLL_SKIP_PX
-  ) {
-    return { wouldFire: false, residual: 0, signedShift: 0 };
-  }
   const containerTop = container.getBoundingClientRect().top;
   const currentTopOffset =
     baseline.row.getBoundingClientRect().top - containerTop;
   const current = { topOffset: currentTopOffset, scrollTop: currentScrollTop };
-  // The band walk both computes `aboveShift` AND refreshes the band cache in
-  // place — this call is the refresh that zeroes the second observer.
-  const aboveShift = sumAboveAnchorShift(
+  // The band walk computes `aboveShift` and STAGES the band-cache refresh; we
+  // apply the refresh (`commit()`) only past the momentum gate, so a skip does
+  // not swallow the pending reflow (see `sumAboveAnchorShift`).
+  const { aboveShift, commit } = sumAboveAnchorShift(
     container,
     baseline.row,
     baseline.scrollTop + baseline.topOffset,
     currentScrollTop,
     heights,
   );
+  const residual = Math.abs(aboveShift);
+  // Momentum in flight: the two reads may not describe one coherent state, so
+  // skip rather than fold the wheel into the correction. We gate on RENDERED
+  // scroll, NOT the raw `scrollTop` delta: WebKit coalesces momentum into
+  // `scrollTop` on its own async clock, so a frame that PAINTED still can read a
+  // large raw delta and wrongly skip a genuine reflow (the survivor bin). The
+  // rendered scroll is the anchor's painted move (`ΔtopOffset`) with the
+  // reflow's own push removed — `renderedScroll = aboveShift − ΔtopOffset`,
+  // both terms from the painted DOM — so a still frame reads ~0 and corrects.
+  const renderedScroll = aboveShift - (currentTopOffset - baseline.topOffset);
+  if (Math.abs(renderedScroll) > COMPENSATION_SCROLL_SKIP_PX) {
+    return {
+      wouldFire: false,
+      residual,
+      signedShift: aboveShift,
+      renderedScroll,
+    };
+  }
+  // Past the gate: keep this frame, so refresh the band cache now (zeroes the
+  // second observer; first-observer-wins stays intact).
+  commit();
   // Net document-position shift of the anchor since baseline (scroll-invariant),
   // and the gated correction target — same math, epsilon gate, as the unit-
   // tested `computeAnchorCorrection`.
@@ -454,18 +492,27 @@ function applyMidHistoryCorrection(
     currentScrollTop +
     currentTopOffset -
     (baseline.scrollTop + baseline.topOffset);
-  const residual = Math.abs(aboveShift);
   const target = computeAnchorCorrection(baseline, current);
   if (target === null)
-    return { wouldFire: false, residual, signedShift: aboveShift };
+    return {
+      wouldFire: false,
+      residual,
+      signedShift: aboveShift,
+      renderedScroll,
+    };
   // Fire only when the two instruments agree — sufficiency cross-check that the
   // net shift is a real above-anchor reflow, not a straddler miscount.
   if (Math.abs(aboveShift - observedShift) > 0.5) {
-    return { wouldFire: false, residual, signedShift: aboveShift };
+    return {
+      wouldFire: false,
+      residual,
+      signedShift: aboveShift,
+      renderedScroll,
+    };
   }
   // Synchronous setter (not `scrollTo`, which WebKit may defer past paint).
   container.scrollTop = target;
-  return { wouldFire: true, residual, signedShift: aboveShift };
+  return { wouldFire: true, residual, signedShift: aboveShift, renderedScroll };
 }
 
 /**
@@ -479,7 +526,7 @@ function applyMidHistoryCorrection(
  * this string whenever the correction mechanism under test changes so a stale
  * bundle can never masquerade as the current experiment.
  */
-const ANCHOR_BUILD_STAMP = "w4a-classifier-1";
+const ANCHOR_BUILD_STAMP = "w4a-gate-1";
 
 /**
  * Test-only tripwire hook. In production `window.__ANCHOR_PROBE__` is undefined
@@ -504,6 +551,7 @@ function reportCorrection(
         wouldFire: boolean;
         residual: number;
         signedShift: number;
+        renderedScroll?: number;
       }>;
       __ANCHOR_BUILD_STAMP__?: string;
     }
@@ -517,6 +565,7 @@ function reportCorrection(
       wouldFire: result.wouldFire,
       residual: result.residual,
       signedShift: result.signedShift,
+      renderedScroll: result.renderedScroll,
     });
   }
 }

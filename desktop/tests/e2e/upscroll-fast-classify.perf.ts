@@ -3,34 +3,42 @@ import { expect, test } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 
 /**
- * Slow-scroll characterization leg — Tyler's felt-regime coverage.
+ * Fast-corpus reversal characterization — the SKIP admission gate.
  *
- * The W4a gate (`upscroll-raf-correction.perf.ts`) drives a CONSTANT 12px/32ms
- * (~375px/s) upscroll. That is not the regime Tyler reports the residual in: a
- * slow deliberate trackpad gesture moves 2-4px/frame and decays through a
- * momentum tail, and a mid-history correction that is invisible under momentum
- * is 5-7 frames of motion at 2-3px/frame (Eva's characterization, thread
- * event 2de99f4d). This leg drives that regime and CHARACTERIZES the reversal
- * distribution — it does NOT gate a pass/fail ceiling, because the slow-regime
- * floor is exactly what we're measuring. Liveness + stale-`dist` guard only.
+ * WHY THIS EXISTS. The W4a gate (`upscroll-raf-correction.perf.ts`) drives a
+ * CONSTANT 12px/32ms (~375px/s) upscroll and, on WebKit, leaves 3-4 bounded
+ * reversal survivors (rows mock-jitter-387/393/381/375) that PASS the ≤4 gate.
+ * The classifier that typed those survivors as SKIP (fired=false,
+ * signedShift=0.0 → momentum-skip gate) was run against a fast-drive variant of
+ * the slow-scroll leg that was NEVER committed — so the SKIP labels were not
+ * reproducible from the tree. This fixture is that fast-drive classifier,
+ * committed, so the admission evidence is permanent and re-runnable. It reuses
+ * the slow leg's `probeLen` append-count join verbatim and adds two Leg-5
+ * cross-checks (thread event 2a4e31fa, Eva's admission-gate ruling):
  *
- * HONESTY BOUND (flagged in-thread before build): Playwright `mouse.wheel` is a
- * synthetic discrete event. It faithfully reproduces "the correction WRITE as a
- * felt jump" (correction magnitude vs per-frame rendered row motion at low
- * velocity — measured here) but it does NOT reproduce a real trackpad's
- * compositor-coalesced momentum, so the WebKit `dScroll=0.0` coalesced still
- * frame is a real-device phenomenon this fixture cannot manufacture. A green
- * run here means "the correction is not a large felt jump in a low-velocity
- * synthetic gesture" — NOT "reproduces everything Tyler feels."
+ *   1. `dev = rowMove − scrollDelta` per reversal — Leg 5's rendered deviation
+ *      from pure scroll-tracking. On a SKIP frame scrollDelta≈0 so dev≈rowMove
+ *      with NO fired write behind it = abandonment, not a corrector footprint.
+ *   2. A WIDEN-INDEPENDENT neighborhood dump. Dawn's class attribution picks the
+ *      single largest-|signedShift| attempt in a ±1-frame append-count window;
+ *      the ±1 widen is the soft joint Eva flagged. This fixture ALSO reports,
+ *      for every reversal, whether ANY `wouldFire=true` record exists in a
+ *      WIDER ±2-frame window — attribution-free. If no fired write sits near a
+ *      survivor at any reasonable window width, SKIP is robust to the widen; if
+ *      one does, the largest-|shift| rule would have labelled it grow/shrink and
+ *      the SKIP bin is in question. That neighborhood flag is the admission gate.
+ *
+ * HONESTY BOUND (unchanged from the slow leg): Playwright `mouse.wheel` is a
+ * synthetic discrete event; the WebKit `dScroll=0.0` coalesced still frame is a
+ * real-device phenomenon. But the fast gate corpus DOES surface the bounded
+ * survivors on Playwright WebKit, so this fixture reproduces the frames the
+ * admission gate must rule on. It CHARACTERIZES; it does not gate a ceiling.
  */
 
-// Momentum-decay drive: initial slow velocity decaying toward a tail. Each
-// wheel event is small (2-4px early, ~1px in the tail) so a correction landing
-// mid-gesture is many frames of the eye's motion, not one.
-const WHEEL_START_DELTA = 4; // px/event at gesture start (slow deliberate)
-const WHEEL_TAIL_DELTA = 1; // px/event in the momentum tail
-const DECAY_PER_EVENT = 0.98; // geometric decay toward the tail
-const WHEEL_PERIOD_MS = 16; // one event per frame (60fps trackpad cadence)
+// Fast constant drive — identical to the W4a gate (`upscroll-raf-correction`),
+// so this fixture surfaces the same bounded survivors the gate leaves.
+const WHEEL_DELTA = 12; // px/event — matches the gate's constant velocity
+const WHEEL_PERIOD_MS = 32; // gate cadence (~375px/s)
 const DURATION_MS = 12_000;
 const SAFE_MARGIN = 100;
 // Same reversal definition as the gate: row moving against the scroll by more
@@ -50,7 +58,7 @@ type Frame = {
   probeLen: number;
 };
 
-test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", async ({
+test("W4a fast-classify: SKIP admission — no fired write near the survivors", async ({
   page,
   browserName,
 }) => {
@@ -158,20 +166,12 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     requestAnimationFrame(tick);
   }, SAFE_MARGIN);
 
-  // Momentum-decay drive: velocity decays geometrically from START toward TAIL,
-  // so the gesture spends most of its time in the 1-2px/frame regime where a
-  // correction is felt. Fractional deltas accumulate a remainder so sub-pixel
-  // velocity still produces integer wheel steps at the right average rate.
+  // Fast constant drive — matches the W4a gate exactly, so the same bounded
+  // survivors surface. No decay: this is the fast regime, not Tyler's slow one.
   const started = Date.now();
-  let delta = WHEEL_START_DELTA;
-  let remainder = 0;
   while (Date.now() - started < DURATION_MS) {
-    remainder += delta;
-    const step = Math.max(1, Math.round(remainder));
-    remainder -= step;
-    await page.mouse.wheel(0, -step);
+    await page.mouse.wheel(0, -WHEEL_DELTA);
     await page.waitForTimeout(WHEEL_PERIOD_MS);
-    delta = Math.max(WHEEL_TAIL_DELTA, delta * DECAY_PER_EVENT);
   }
 
   const frames: Frame[] = await timeline.evaluate((_el) => {
@@ -197,6 +197,7 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
         wouldFire: boolean;
         residual: number;
         signedShift: number;
+        renderedScroll?: number;
       }>;
       __ANCHOR_BUILD_STAMP__?: string;
     };
@@ -231,9 +232,16 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     i: number;
     rowMove: number;
     dScroll: number;
+    dev: number; // Leg 5: rowMove − scrollDelta (rendered deviation from tracking)
     signedShift: number | null;
     fired: boolean;
     klass: Klass;
+    // Widen-independent admission flag: any wouldFire=true record in a WIDER
+    // ±2-frame append-count window than the ±1 attribution window. If false,
+    // no fired write sits near this reversal at any reasonable width → SKIP is
+    // robust to the widen. If true, the class attribution's largest-|shift| rule
+    // could have labelled it grow/shrink and the SKIP bin is in question.
+    firedNear: boolean;
     rowId: string | null;
   }> = [];
   for (let i = 1; i < frames.length; i += 1) {
@@ -280,13 +288,29 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     } else {
       klass = attempt.signedShift >= 0 ? "grow" : "shrink";
     }
+    // Leg 5 rendered deviation from pure scroll-tracking. A correctly-anchored
+    // row moves only with scroll (rowMove == scrollDelta), so any deviation is
+    // the corrector's footprint — or, on a SKIP, its ABSENCE.
+    const dev = rowMove - dScroll;
+    // Widen-independent admission check. Look one frame WIDER than the ±1
+    // attribution window ([i-2 .. i+2] via probeLen) and ask only: is there ANY
+    // fired write in that neighborhood? This does not pick a single attempt or
+    // depend on the largest-|shift| tie-break, so it cannot be flipped by the
+    // widen. A SKIP survivor must have firedNear=false: no write could be the
+    // backward mover if none fired near the frame at all.
+    const lo = frames[i - 2] ?? a;
+    const hi = frames[i + 2] ?? next;
+    const neighborhood = corrections.slice(lo.probeLen, hi.probeLen);
+    const firedNear = neighborhood.some((c) => c.wouldFire);
     reversals.push({
       i,
       rowMove,
       dScroll,
+      dev,
       signedShift: attempt?.signedShift ?? null,
       fired: attempt?.wouldFire ?? false,
       klass,
+      firedNear,
       rowId: b.rowId,
     });
   }
@@ -303,7 +327,7 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
   const byClass = (k: Klass) => reversals.filter((r) => r.klass === k).length;
 
   /* eslint-disable no-console */
-  console.log("\n=== W4a SLOW-SCROLL CHARACTERIZATION ===");
+  console.log("\n=== W4a FAST-CORPUS SKIP ADMISSION ===");
   console.log(`engine:                 ${browserName}`);
   console.log(`build stamp:            ${buildStamp ?? "(absent)"}`);
   console.log(`frames sampled:         ${frames.length}`);
@@ -329,22 +353,115 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     .slice(0, 12)) {
     const s = r.signedShift === null ? "n/a" : r.signedShift.toFixed(1);
     console.log(
-      `  frame ${r.i} rowMove=${r.rowMove.toFixed(1)} dScroll=${r.dScroll.toFixed(1)} signedShift=${s} fired=${r.fired} class=${r.klass} row=${r.rowId}`,
+      `  frame ${r.i} rowMove=${r.rowMove.toFixed(1)} dScroll=${r.dScroll.toFixed(1)} dev=${r.dev.toFixed(1)} signedShift=${s} fired=${r.fired} firedNear=${r.firedNear} class=${r.klass} row=${r.rowId}`,
     );
   }
   console.log("========================================\n");
   /* eslint-enable no-console */
 
-  // Sanity: the actuation actually produced a scored slow upscroll.
+  // Sanity: the actuation actually produced a scored upscroll.
   expect(scored).toBeGreaterThan(50);
-  // Stale-`dist` guard — a slow-regime characterization on a stale bundle would
-  // mislead exactly like a stale gate run. Assert the experiment's stamp ran.
+  // Stale-`dist` guard — a characterization on a stale bundle misleads exactly
+  // like a stale gate run. Assert the experiment's stamp ran.
   expect(buildStamp).toBe(EXPECTED_BUILD_STAMP);
   // Liveness: at least one mid-history correction fired, else the corpus
   // realized nothing and the distribution above is vacuous.
   const anyFired = corrections.some((c) => c.wouldFire);
   expect(anyFired).toBe(true);
-  // Characterization only — no reversal ceiling asserted. The distribution and
-  // still-frame count above are the deliverable; the slow-regime floor is what
-  // we are measuring, not gating.
+
+  // --- SKIP ADMISSION GATE (Eva, thread event 2a4e31fa) -----------------------
+  // Every reversal typed SKIP must have NO fired write in its ±2-frame
+  // neighborhood. This is attribution-free: it does not depend on the ±1 widen
+  // or the largest-|shift| tie-break, so a SKIP that survives it is robust to
+  // the soft joint in the classifier. If any SKIP shows firedNear=true, a write
+  // did land near the frame and the class attribution mis-labelled it — the bin
+  // is not admissible and this fails loudly rather than passing a stale claim.
+  // (Characterization otherwise; the reversal count itself is not gated.)
+  const skips = reversals.filter((r) => r.klass === "skip");
+  for (const r of skips) {
+    expect(
+      r.firedNear,
+      `SKIP survivor frame ${r.i} (row ${r.rowId}) has a fired write in its ±2-frame neighborhood — attribution is not widen-robust, bin in question`,
+    ).toBe(false);
+  }
+
+  // --- DECOMPOSITION SELF-TEST (Eva: arm's first run must SHOW it holds) -------
+  // The w4a-gate-1 fix keys the momentum gate off the RENDERED scroll
+  // (`renderedScroll = aboveShift − ΔtopOffset`) the hook emits per rAF attempt,
+  // not the raw `Δscrolltop`. The load-bearing claim is that `renderedScroll`
+  // ISOLATES the painted wheel component by subtracting the reflow's own push on
+  // the anchor — so it stays small on a genuine reflow even when `signedShift`
+  // (the reflow) is large. Prove that independence from the emit, NOT the gate's
+  // own branch (asserting the gate skips when |renderedScroll|>bound is
+  // circular). We compare two populations of rAF attempts:
+  //   • PURE-REFLOW — a real above-anchor reflow (`|signedShift|` well past the
+  //     0.5px epsilon) on a rendered-still frame. If the decomposition works,
+  //     `renderedScroll` here is SMALL (the reflow push was removed), NOT tracking
+  //     `signedShift`. This is the WebKit survivor the raw gate dropped.
+  //   • PURE-SCROLL — no reflow (`signedShift` ≈ 0). `renderedScroll` here is
+  //     free to be large: it is the wheel motion, with nothing to subtract.
+  // The proof: pure-reflow's median |renderedScroll| is well BELOW its median
+  // |signedShift| — the reflow did not leak into the gated quantity — while
+  // pure-scroll shows |renderedScroll| CAN run large. If renderedScroll merely
+  // echoed signedShift (a broken decomposition) the reflow bin would fail this.
+  const median = (xs: number[]): number => {
+    if (xs.length === 0) return 0;
+    const s = [...xs].sort((p, q) => p - q);
+    return s[Math.floor(s.length / 2)];
+  };
+  const rafWithRendered = corrections.filter(
+    (c): c is typeof c & { renderedScroll: number } =>
+      c.source === "raf" && typeof c.renderedScroll === "number",
+  );
+  const pureReflow = rafWithRendered.filter((c) => Math.abs(c.signedShift) > 5);
+  const pureScroll = rafWithRendered.filter(
+    (c) => Math.abs(c.signedShift) <= 0.5,
+  );
+  const reflowMedRendered = median(
+    pureReflow.map((c) => Math.abs(c.renderedScroll)),
+  );
+  const reflowMedShift = median(pureReflow.map((c) => Math.abs(c.signedShift)));
+  const scrollMaxRendered = pureScroll.length
+    ? Math.max(...pureScroll.map((c) => Math.abs(c.renderedScroll)))
+    : 0;
+  /* eslint-disable no-console */
+  console.log("=== DECOMPOSITION SELF-TEST (w4a-gate-1) ===");
+  console.log(`rAF attempts w/ renderedScroll: ${rafWithRendered.length}`);
+  console.log(`pure-reflow attempts (|shift|>5):   ${pureReflow.length}`);
+  console.log(
+    `  median |signedShift|:             ${reflowMedShift.toFixed(1)}`,
+  );
+  console.log(
+    `  median |renderedScroll|:          ${reflowMedRendered.toFixed(1)}`,
+  );
+  console.log(
+    `  fired:                            ${pureReflow.filter((c) => c.wouldFire).length}`,
+  );
+  console.log(`pure-scroll attempts (|shift|<=.5): ${pureScroll.length}`);
+  console.log(
+    `  max |renderedScroll|:             ${scrollMaxRendered.toFixed(1)}`,
+  );
+  console.log("============================================\n");
+  /* eslint-enable no-console */
+  // Both populations must be exercised, else the decomposition is untested.
+  // Assertions are WEBKIT-ONLY: the rAF momentum gate is the ACTIVE corrector
+  // only on WebKit (the RO is late). On Chromium the on-time RO corrects and
+  // refreshes the cache first, so the rAF path is the passive loser observer —
+  // it never fires (ratified mechanism) and reads the reflow BEFORE the RO's
+  // compensation, so `renderedScroll` there does not cancel and tracks
+  // `signedShift` instead. That is the correct Chromium behavior, not a
+  // decomposition failure, so we characterize it (logged above) but only assert
+  // the decomposition on the engine whose gate the fix rekeyed.
+  if (browserName === "webkit") {
+    expect(pureReflow.length).toBeGreaterThan(0);
+    expect(pureScroll.length).toBeGreaterThan(0);
+    // THE PROOF: on real reflow frames the reflow does NOT leak into
+    // renderedScroll — its median stays well below the reflow magnitude (a
+    // broken decomposition that echoed signedShift would fail this).
+    expect(reflowMedRendered).toBeLessThan(reflowMedShift);
+    // And a genuine rendered-still reflow is let through the gate — the survivor
+    // the raw-delta gate dropped on WebKit's coalesced clock. If none fires the
+    // rekey did nothing.
+    expect(pureReflow.some((c) => c.wouldFire)).toBe(true);
+  }
 });

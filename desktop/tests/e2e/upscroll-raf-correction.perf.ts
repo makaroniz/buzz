@@ -47,7 +47,7 @@ const REVERSAL_PX = 3;
 // is `tsc && vite build`, and a tsc failure leaves the PRIOR bundle in `dist/`,
 // so a fixture can silently exercise stale code. Must equal `ANCHOR_BUILD_STAMP`
 // in `useAnchoredScroll.ts`; bump BOTH together per experiment.
-const EXPECTED_BUILD_STAMP = "w4a-classifier-1";
+const EXPECTED_BUILD_STAMP = "w4a-gate-1";
 
 type Frame = {
   t: number;
