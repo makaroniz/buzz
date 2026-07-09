@@ -39,7 +39,7 @@ const SAFE_MARGIN = 100;
 const REVERSAL_PX = 3;
 // Must equal `ANCHOR_BUILD_STAMP` in `useAnchoredScroll.ts` — stale-`dist`
 // guard (see the gate fixture). Bump BOTH together per experiment.
-const EXPECTED_BUILD_STAMP = "w4a-ungated-ro-2";
+const EXPECTED_BUILD_STAMP = "w4a-classifier-1";
 
 type Frame = {
   t: number;
@@ -47,6 +47,7 @@ type Frame = {
   scrollTop: number;
   mounted: number;
   rowId: string | null;
+  probeLen: number;
 };
 
 test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", async ({
@@ -85,12 +86,26 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
   await page.waitForTimeout(200);
   await timeline.hover();
 
-  // Per-frame sampler (identical to the gate: one clock, same row-tracking) so
-  // the two legs' distributions are directly comparable.
+  // Per-frame sampler (identical row-tracking to the gate, plus a join key into
+  // the hook's correction probe). The fixture sampler and the hook's rAF sampler
+  // are SEPARATE rAF loops, so "the correction for frame i" is not reliably the
+  // same-tick probe entry (two rAF callbacks in one frame fire in registration
+  // order, which we don't control). The order-robust join is by APPEND COUNT:
+  // each frame records `probeLen` (the correction-probe array length at that
+  // tick) and the signed shift + fire flag of any attempts that appended since
+  // the previous frame. A reversal between frame i-1 and i is then attributed to
+  // the attempts in that interval — no same-tick ordering assumption.
   await timeline.evaluate((element, margin: number) => {
     const el = element as HTMLDivElement;
     const w = window as unknown as {
       __PROBE__: { frames: Frame[]; stop: boolean };
+    };
+    const g = globalThis as unknown as {
+      __ANCHOR_PROBE__?: Array<{
+        wouldFire: boolean;
+        residual: number;
+        signedShift: number;
+      }>;
     };
     type Frame = {
       t: number;
@@ -98,6 +113,8 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
       scrollTop: number;
       mounted: number;
       rowId: string | null;
+      // Correction-probe array length at this tick — the append-count join key.
+      probeLen: number;
     };
     w.__PROBE__ = { frames: [], stop: false };
     let trackedId: string | null = null;
@@ -134,6 +151,7 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
         scrollTop: el.scrollTop,
         mounted,
         rowId: trackedId,
+        probeLen: g.__ANCHOR_PROBE__?.length ?? 0,
       });
       requestAnimationFrame(tick);
     };
@@ -166,6 +184,7 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
       scrollTop: number;
       mounted: number;
       rowId: string | null;
+      probeLen: number;
     };
     w.__PROBE__.stop = true;
     return w.__PROBE__.frames;
@@ -177,6 +196,7 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
         source: "raf" | "ro";
         wouldFire: boolean;
         residual: number;
+        signedShift: number;
       }>;
       __ANCHOR_BUILD_STAMP__?: string;
     };
@@ -186,15 +206,34 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     };
   });
 
-  // Score same-row frame pairs. A reversal is rowMove <= -REVERSAL_PX. Pair each
-  // with the per-frame rendered scroll delta (dScroll) so we can see whether a
-  // reversal lands on a near-still frame (the felt case) or rides momentum.
+  // Score same-row frame pairs. A reversal is rowMove <= -REVERSAL_PX. For each
+  // reversal, join to the correction attempt(s) that appended to the hook probe
+  // BETWEEN frame i-1 and i (append-count window: probe indices [a.probeLen,
+  // b.probeLen)). Classify by the SIGN of aboveShift + whether the write fired —
+  // the three-way discriminator Sami specced (thread event 5b46582e):
+  //   • wouldFire == false                → SKIP: momentum gate (:29) / cross-
+  //     check (:451) suppressed the write. The reversal is UNCORRECTED reflow;
+  //     absorption never got to act. A 27→27 here = wiring/gate, not physics.
+  //   • fired, signedShift > 0 (GROW)     → content above grew, anchor shoved
+  //     DOWN, the correction WRITE is the felt backward snap. Absorption's
+  //     amortizable topology — deferring the pullback into forward frames helps.
+  //   • fired, signedShift < 0 (SHRINK)   → content above shrank, the reflow
+  //     ITSELF pulls the anchor up and renders the reversal before any write.
+  //     Structurally uncorrectable by us; only smaller per-frame realization
+  //     (Max's pre-realization band / contain-intrinsic-size) shrinks it.
+  // A reversal with no attempt in its window is UNATTRIBUTED (the correcting
+  // observer's attempt landed in an adjacent frame under rAF interleave) — we
+  // count it separately rather than force it into a class.
   let scored = 0;
   let reanchors = 0;
+  type Klass = "skip" | "grow" | "shrink" | "unattributed";
   const reversals: Array<{
     i: number;
     rowMove: number;
     dScroll: number;
+    signedShift: number | null;
+    fired: boolean;
+    klass: Klass;
     rowId: string | null;
   }> = [];
   for (let i = 1; i < frames.length; i += 1) {
@@ -212,9 +251,36 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     scored += 1;
     const rowMove = b.top - a.top;
     const dScroll = b.scrollTop - a.scrollTop;
-    if (rowMove <= -REVERSAL_PX) {
-      reversals.push({ i, rowMove, dScroll, rowId: b.rowId });
+    if (rowMove > -REVERSAL_PX) continue;
+    // Attempts appended in this frame's window; pick the one whose |signedShift|
+    // is largest (the dominant reflow this frame drives the felt motion).
+    const window = corrections.slice(a.probeLen, b.probeLen);
+    let attempt: (typeof corrections)[number] | null = null;
+    for (const c of window) {
+      if (
+        attempt === null ||
+        Math.abs(c.signedShift) > Math.abs(attempt.signedShift)
+      ) {
+        attempt = c;
+      }
     }
+    let klass: Klass;
+    if (attempt === null) {
+      klass = "unattributed";
+    } else if (!attempt.wouldFire) {
+      klass = "skip";
+    } else {
+      klass = attempt.signedShift >= 0 ? "grow" : "shrink";
+    }
+    reversals.push({
+      i,
+      rowMove,
+      dScroll,
+      signedShift: attempt?.signedShift ?? null,
+      fired: attempt?.wouldFire ?? false,
+      klass,
+      rowId: b.rowId,
+    });
   }
 
   const maxReversalPx =
@@ -226,6 +292,7 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
   const stillFrameReversals = reversals.filter(
     (r) => Math.abs(r.dScroll) < REVERSAL_PX,
   );
+  const byClass = (k: Klass) => reversals.filter((r) => r.klass === k).length;
 
   /* eslint-disable no-console */
   console.log("\n=== W4a SLOW-SCROLL CHARACTERIZATION ===");
@@ -237,12 +304,24 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
   console.log(`reversal frames:        ${reversals.length}`);
   console.log(`  of which still-frame: ${stillFrameReversals.length}`);
   console.log(`max reversal px:        ${maxReversalPx.toFixed(1)}`);
+  console.log("--- reversal class mix (Sami's discriminator) ---");
+  console.log(`  SKIP (gate/xcheck, uncorrected reflow):   ${byClass("skip")}`);
+  console.log(
+    `  GROW (fired, write is the snap — absorb):  ${byClass("grow")}`,
+  );
+  console.log(
+    `  SHRINK (fired, reflow renders it — Max):   ${byClass("shrink")}`,
+  );
+  console.log(
+    `  UNATTRIBUTED (no attempt in window):       ${byClass("unattributed")}`,
+  );
   for (const r of reversals
     .slice()
     .sort((x, y) => x.rowMove - y.rowMove)
     .slice(0, 12)) {
+    const s = r.signedShift === null ? "n/a" : r.signedShift.toFixed(1);
     console.log(
-      `  frame ${r.i} rowMove=${r.rowMove.toFixed(1)} dScroll=${r.dScroll.toFixed(1)} row=${r.rowId}`,
+      `  frame ${r.i} rowMove=${r.rowMove.toFixed(1)} dScroll=${r.dScroll.toFixed(1)} signedShift=${s} fired=${r.fired} class=${r.klass} row=${r.rowId}`,
     );
   }
   console.log("========================================\n");

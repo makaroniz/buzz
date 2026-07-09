@@ -379,10 +379,21 @@ export function sumAboveAnchorShift(
  * instruments agreed on a real above-anchor reflow this call; `residual` is the
  * `|aboveShift|` the walk saw — the second observer of the same realization
  * sees this at ~0 because the first observer's walk already refreshed the cache.
+ *
+ * `signedShift` is `aboveShift` WITHOUT the abs — diagnostic-only, read by the
+ * slow-scroll classifier. Its sign is the grow/shrink discriminator the escape
+ * counter cannot recover from magnitude alone: `> 0` = content above grew, the
+ * anchor was pushed down and the correction WRITE is the felt backward snap
+ * (absorption's amortizable topology); `< 0` = content above shrank, the reflow
+ * itself pulls the anchor up and renders the reversal BEFORE any write touches
+ * it (structurally uncorrectable by us — only smaller per-frame realization
+ * helps). `residual = |signedShift|` throws that sign away, so the classifier
+ * reads `signedShift` directly. Not consumed in production.
  */
 type MidHistoryCorrection = {
   wouldFire: boolean;
   residual: number;
+  signedShift: number;
 };
 
 /**
@@ -421,7 +432,7 @@ function applyMidHistoryCorrection(
     Math.abs(currentScrollTop - baseline.scrollTop) >
     COMPENSATION_SCROLL_SKIP_PX
   ) {
-    return { wouldFire: false, residual: 0 };
+    return { wouldFire: false, residual: 0, signedShift: 0 };
   }
   const containerTop = container.getBoundingClientRect().top;
   const currentTopOffset =
@@ -445,15 +456,16 @@ function applyMidHistoryCorrection(
     (baseline.scrollTop + baseline.topOffset);
   const residual = Math.abs(aboveShift);
   const target = computeAnchorCorrection(baseline, current);
-  if (target === null) return { wouldFire: false, residual };
+  if (target === null)
+    return { wouldFire: false, residual, signedShift: aboveShift };
   // Fire only when the two instruments agree — sufficiency cross-check that the
   // net shift is a real above-anchor reflow, not a straddler miscount.
   if (Math.abs(aboveShift - observedShift) > 0.5) {
-    return { wouldFire: false, residual };
+    return { wouldFire: false, residual, signedShift: aboveShift };
   }
   // Synchronous setter (not `scrollTo`, which WebKit may defer past paint).
   container.scrollTop = target;
-  return { wouldFire: true, residual };
+  return { wouldFire: true, residual, signedShift: aboveShift };
 }
 
 /**
@@ -467,7 +479,7 @@ function applyMidHistoryCorrection(
  * this string whenever the correction mechanism under test changes so a stale
  * bundle can never masquerade as the current experiment.
  */
-const ANCHOR_BUILD_STAMP = "w4a-ungated-ro-2";
+const ANCHOR_BUILD_STAMP = "w4a-classifier-1";
 
 /**
  * Test-only tripwire hook. In production `window.__ANCHOR_PROBE__` is undefined
@@ -491,6 +503,7 @@ function reportCorrection(
         source: "raf" | "ro";
         wouldFire: boolean;
         residual: number;
+        signedShift: number;
       }>;
       __ANCHOR_BUILD_STAMP__?: string;
     }
@@ -503,6 +516,7 @@ function reportCorrection(
       source,
       wouldFire: result.wouldFire,
       residual: result.residual,
+      signedShift: result.signedShift,
     });
   }
 }
@@ -944,7 +958,11 @@ export function useAnchoredScroll({
         if (Math.abs(height - last) > 0.5) changed = true;
       }
       if (!changed) {
-        reportCorrection("ro", { wouldFire: false, residual: 0 });
+        reportCorrection("ro", {
+          wouldFire: false,
+          residual: 0,
+          signedShift: 0,
+        });
         return;
       }
       // Correct from the anchor's own measured drift. The layout engine already
@@ -956,7 +974,11 @@ export function useAnchoredScroll({
         baseline.row.getBoundingClientRect().top - containerTop;
       const drift = currentTopOffset - baseline.topOffset;
       if (Math.abs(drift) <= 0.5) {
-        reportCorrection("ro", { wouldFire: false, residual: Math.abs(drift) });
+        reportCorrection("ro", {
+          wouldFire: false,
+          residual: Math.abs(drift),
+          signedShift: drift,
+        });
         return;
       }
       // Synchronous setter (not `scrollTo`, which WebKit may defer past paint).
@@ -964,7 +986,11 @@ export function useAnchoredScroll({
       // Re-baseline so a second RO batch this frame measures from where we
       // pinned, not the pre-correction position.
       readingAnchorRef.current = snapshotReadingAnchor(container);
-      reportCorrection("ro", { wouldFire: true, residual: Math.abs(drift) });
+      reportCorrection("ro", {
+        wouldFire: true,
+        residual: Math.abs(drift),
+        signedShift: drift,
+      });
     });
     // Observe every timeline row (not the content wrapper): a
     // `content-visibility: auto` row realizing to its true height is a resize
