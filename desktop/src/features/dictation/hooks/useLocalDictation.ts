@@ -351,6 +351,35 @@ export function useLocalDictation({
         if (state === "stopped") {
           setIsRecording(false);
           setIsTranscribing(false);
+          // Tear down this instance's local capture pipeline. The native
+          // engine is a singleton: when another mounted composer calls
+          // `start_dictation`, it stops this session's engine, so we can
+          // receive `stopped` without our own `stopRecording()`/`cleanup()`
+          // having run. Without tearing down here, `streamRef`/`workletRef`/
+          // `batchTimerRef` stay alive and this composer keeps the mic open,
+          // pushing stale audio, until it unmounts. Don't re-invoke
+          // `stop_dictation` — the native side already stopped (that's why
+          // this event fired).
+          if (batchTimerRef.current) {
+            clearInterval(batchTimerRef.current);
+            batchTimerRef.current = null;
+          }
+          if (streamRef.current) {
+            for (const track of streamRef.current.getTracks()) {
+              track.stop();
+            }
+            streamRef.current = null;
+          }
+          if (workletRef.current) {
+            workletRef.current.port.onmessage = null;
+            workletRef.current.disconnect();
+            workletRef.current = null;
+          }
+          audioBatchRef.current = [];
+          if (audioContextRef.current) {
+            void audioContextRef.current.close();
+            audioContextRef.current = null;
+          }
           // Clean up event listeners now that the session is fully done.
           if (unlistenTranscriptRef.current) {
             unlistenTranscriptRef.current();

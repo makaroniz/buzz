@@ -643,6 +643,13 @@ export function AppShell() {
     window.addEventListener("blur", releaseDictationKey);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
+      // Release a held ⌘D before unregistering. If `settingsOpen` (or another
+      // dep) flips while the key is down, this cleanup runs and the next effect
+      // pass returns early (Settings) or rebinds fresh — either way the `keyup`
+      // listener is gone and the effect-local `dictationKeyHeld` is lost, so the
+      // release would never fire and the mic would keep recording. Dispatch it
+      // here first.
+      releaseDictationKey();
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", releaseDictationKey);
