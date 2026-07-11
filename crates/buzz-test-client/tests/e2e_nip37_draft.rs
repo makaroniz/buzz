@@ -733,6 +733,11 @@ async fn test_draft_rejected_k_tag_out_of_range() {
 async fn test_draft_rejected_p_tag() {
     let client = http_client();
     let owner = Keys::generate();
+    // Use a different pubkey for the `p` tag — EventBuilder silently strips
+    // `p` tags that match the signer's own key (NIP self-tagging rule), so
+    // testing with owner.public_key() would produce an event with NO `p` tag
+    // and the rejection would never be exercised.
+    let other = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
     let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
@@ -740,7 +745,7 @@ async fn test_draft_rejected_p_tag() {
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
             Tag::parse(["h", &ch_id]).unwrap(),
-            Tag::parse(["p", &owner.public_key().to_hex()]).unwrap(),
+            Tag::parse(["p", &other.public_key().to_hex()]).unwrap(),
         ])
         .sign_with_keys(&owner)
         .unwrap();
