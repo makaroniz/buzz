@@ -2895,9 +2895,11 @@ async fn test_channel_window_cursor_boundary_excludes_draft() {
     add_member_http(&client, &author, &ch_id, &attacker).await;
 
     // Post 3 public kind:9 messages with strictly increasing timestamps.
-    // Then post a draft between message 1 and 2 (same second as msg-1 so it
-    // sits in the middle of the window) to make it straddle the cursor
-    // boundary when limit=2.
+    // The draft is placed at base+3 — inside the raw first page of limit=2
+    // (raw DESC order: msg2@+4, draft@+3, msg1@+2, msg0@+0).  A regression
+    // that filters drafts AFTER computing the cursor would pick draft as the
+    // cursor candidate and leak it.  Correct SQL-layer exclusion computes
+    // the cursor from the filtered set, giving msg1@+2 as the page-1 cursor.
     let base_ts = nostr::Timestamp::now().as_secs() - 10;
     let mut msg_ids = Vec::new();
     for i in 0..3u64 {
@@ -2912,10 +2914,11 @@ async fn test_channel_window_cursor_boundary_excludes_draft() {
         assert!(ok, "kind:9 message {i} must be accepted: {err}");
     }
 
-    // Post a draft with a timestamp between msg-0 and msg-1 so it lands in
-    // the middle of the window (created_at = base_ts + 1).
+    // Draft at base+3: sits between msg2@+4 and msg1@+2, inside the raw
+    // first page.  A filter-after-pagination regression would use it as
+    // the cursor (leaking the draft id via 39006 next_cursor).
     let d = uuid::Uuid::new_v4().to_string();
-    let draft_ts = nostr::Timestamp::from(base_ts + 1);
+    let draft_ts = nostr::Timestamp::from(base_ts + 3);
     let draft = nostr::EventBuilder::new(nostr::Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             nostr::Tag::parse(["d", &d]).unwrap(),
@@ -2996,62 +2999,65 @@ async fn test_channel_window_cursor_boundary_excludes_draft() {
         Some((cursor_ts, cursor_id))
     });
 
-    // If the relay returned has_more=true and a cursor, paginate to page 2
-    // and verify the second page also contains no draft id.
-    if let Some((cursor_ts, cursor_id)) = cursor {
-        // The cursor must not be the draft id.
-        assert_ne!(
-            cursor_id, draft_id,
-            "next_cursor.id must not be the draft id — cursor must be computed on the \
-             draft-excluded row set"
-        );
+    // With 3 public messages and limit=2, has_more MUST be true and a cursor
+    // MUST be present — the test is structured to force pagination.  If the
+    // relay returned has_more=false, the SQL-layer exclusion likely mis-counted.
+    let (cursor_ts, cursor_id) = cursor.expect(
+        "page 1 must have has_more=true and a next_cursor — 3 public messages + limit=2 \
+         guarantees pagination; if this fails the draft may have been counted or the \
+         cursor may have been computed from the unfiltered row set",
+    );
 
-        let page2_filter = serde_json::json!({
-            "kinds": [9, KIND_DRAFT],
-            "#h": [ch_id],
-            "top_level": true,
-            "limit": 2,
-            "until": cursor_ts,
-            "before_id": cursor_id,
-            "include_aux": true,
-            "include_summaries": false,
-        });
-        let resp2 = client
-            .post(format!("{}/query", relay_http_url()))
-            .header("X-Pubkey", &attacker.public_key().to_hex())
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&serde_json::json!([page2_filter])).unwrap())
-            .send()
-            .await
-            .expect("page 2 window query");
-        assert!(resp2.status().is_success(), "page 2 must succeed");
-        let page2_events: Vec<Value> = resp2.json().await.expect("page 2 parse");
+    // The cursor must not be the draft id.
+    assert_ne!(
+        cursor_id, draft_id,
+        "next_cursor.id must not be the draft id — cursor must be computed on the \
+         draft-excluded row set"
+    );
 
-        let page2_ids: Vec<String> = page2_events
-            .iter()
-            .filter_map(|e| e["id"].as_str().map(|s| s.to_string()))
-            .collect();
-        assert!(
-            !page2_ids.iter().any(|id| id == &draft_id),
-            "draft id must not appear in page 2: draft_id={draft_id}, page2={page2_events:?}"
-        );
+    let page2_filter = serde_json::json!({
+        "kinds": [9, KIND_DRAFT],
+        "#h": [ch_id],
+        "top_level": true,
+        "limit": 2,
+        "until": cursor_ts,
+        "before_id": cursor_id,
+        "include_aux": true,
+        "include_summaries": false,
+    });
+    let resp2 = client
+        .post(format!("{}/query", relay_http_url()))
+        .header("X-Pubkey", &attacker.public_key().to_hex())
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&serde_json::json!([page2_filter])).unwrap())
+        .send()
+        .await
+        .expect("page 2 window query");
+    assert!(resp2.status().is_success(), "page 2 must succeed");
+    let page2_events: Vec<Value> = resp2.json().await.expect("page 2 parse");
 
-        // Gapless invariant: the two pages together cover all 3 public messages.
-        let all_msg_ids: std::collections::HashSet<String> = page1_ids
-            .iter()
-            .chain(page2_ids.iter())
-            .filter(|id| msg_ids.contains(id))
-            .cloned()
-            .collect();
-        assert_eq!(
-            all_msg_ids.len(),
-            3,
-            "all 3 public messages must appear across both pages with no gaps; \
-             got: page1={page1_ids:?}, page2={page2_ids:?}"
-        );
-    }
-    // If has_more=false, all 3 messages fit in one page — cursor test skipped,
-    // but the no-draft assertion above already passed.
+    let page2_ids: Vec<String> = page2_events
+        .iter()
+        .filter_map(|e| e["id"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        !page2_ids.iter().any(|id| id == &draft_id),
+        "draft id must not appear in page 2: draft_id={draft_id}, page2={page2_events:?}"
+    );
+
+    // Gapless invariant: the two pages together cover all 3 public messages.
+    let all_msg_ids: std::collections::HashSet<String> = page1_ids
+        .iter()
+        .chain(page2_ids.iter())
+        .filter(|id| msg_ids.contains(id))
+        .cloned()
+        .collect();
+    assert_eq!(
+        all_msg_ids.len(),
+        3,
+        "all 3 public messages must appear across both pages with no gaps; \
+         got: page1={page1_ids:?}, page2={page2_ids:?}"
+    );
 }
 
 // ─── Q15 oracle-closure e2e — write-path id-oracle guards ────────────────────
@@ -3448,5 +3454,106 @@ async fn test_draft_target_kind5_oracle_closed() {
         drafts[0]["id"].as_str().unwrap(),
         draft_id_hex,
         "draft head must be the original draft — attacker's kind:5 must not have altered it"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_reminder_target_reaction_oracle_closed() {
+    // Behavioral companion to test_draft_target_reaction_oracle_closed for
+    // kind:30300 (NIP-ER reminders).  This proves the author-only mask in
+    // derive_reaction_channel generalizes over ALL AUTHOR_ONLY_KINDS, not
+    // just kind:31234 drafts.
+    //
+    // Attacker reacts (kind:7) to:
+    //   (A) a real kind:30300 reminder event id authored by `author`
+    //   (B) a random 64-hex id that definitely does not exist
+    //
+    // Both must return the SAME byte-identical error string.  After each
+    // rejected submission, the attacker queries for kind:7 events that
+    // e-tag the target id and asserts zero are stored.
+    //
+    // Reminders are global (no channel association), so the test does not
+    // need a channel and the relay must fire the author-only guard before
+    // any channel-derivation logic.
+    let client = http_client();
+    let author = Keys::generate();
+    let attacker = Keys::generate();
+
+    // Author publishes a kind:30300 reminder.  Minimal valid shape: d tag + alt tag.
+    let d = uuid::Uuid::new_v4().to_string();
+    let reminder =
+        nostr::EventBuilder::new(nostr::Kind::Custom(30300), "nip44-ciphertext-placeholder")
+            .tags([
+                nostr::Tag::parse(["d", &d]).unwrap(),
+                nostr::Tag::parse(["alt", "Encrypted reminder"]).unwrap(),
+            ])
+            .sign_with_keys(&author)
+            .unwrap();
+    let reminder_id_hex = reminder.id.to_hex();
+    let (ok_r, err_r) = submit_event_http(&client, &author, &reminder).await;
+    assert!(ok_r, "reminder must be accepted: {err_r}");
+
+    let random_id_hex = "3".repeat(64);
+
+    let build_reaction = |target_hex: &str| {
+        nostr::EventBuilder::new(nostr::Kind::Custom(7), "+")
+            .tags([nostr::Tag::parse(["e", target_hex]).unwrap()])
+            .sign_with_keys(&attacker)
+            .unwrap()
+    };
+
+    // (A) Attacker reacts to the real reminder id.
+    let reaction_a = build_reaction(&reminder_id_hex);
+    let (accepted_a, msg_a) = submit_event_http(&client, &attacker, &reaction_a).await;
+    assert!(
+        !accepted_a,
+        "reaction to a real reminder id must be rejected; relay said: {msg_a}"
+    );
+
+    // (B) Attacker reacts to the random (nonexistent) id.
+    let reaction_b = build_reaction(&random_id_hex);
+    let (accepted_b, msg_b) = submit_event_http(&client, &attacker, &reaction_b).await;
+    assert!(
+        !accepted_b,
+        "reaction to a nonexistent id must be rejected; relay said: {msg_b}"
+    );
+
+    // Oracle-closure: error strings must be byte-identical.
+    assert_eq!(
+        msg_a, msg_b,
+        "reaction rejection for real-reminder-id vs random-id must be BYTE-IDENTICAL; \
+         real_reminder='{msg_a}', random='{msg_b}'"
+    );
+    assert_eq!(
+        msg_a, "invalid: reaction target event not found",
+        "expected byte-exact masking error for reminder target; got: '{msg_a}'"
+    );
+
+    // Post-rejection storage check: no kind:7 events e-tagging the reminder id
+    // must be stored.
+    let kind7_filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(7))
+        .custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::E),
+            reminder_id_hex.as_str(),
+        );
+    let kind7_as_attacker = query_events_http(
+        &client,
+        &attacker.public_key().to_hex(),
+        vec![kind7_filter.clone()],
+    )
+    .await;
+    assert!(
+        kind7_as_attacker.is_empty(),
+        "zero kind:7 events referencing the reminder id must be stored after attacker's \
+         rejected reaction attempt; found: {kind7_as_attacker:?}"
+    );
+    let kind7_as_author =
+        query_events_http(&client, &author.public_key().to_hex(), vec![kind7_filter]).await;
+    assert!(
+        kind7_as_author.is_empty(),
+        "author-side query must also return zero kind:7 events referencing the reminder id; \
+         found: {kind7_as_author:?}"
     );
 }

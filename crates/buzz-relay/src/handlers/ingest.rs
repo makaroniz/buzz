@@ -4153,11 +4153,16 @@ mod tests {
     }
 
     // ── actor_can_reference_target: author-only mask ───────────────────────────
-    // These unit tests verify that `actor_can_reference_target` masks kind:31234
-    // (draft wraps) and kind:30300 (reminders) — all `AUTHOR_ONLY_KINDS` — without
-    // requiring a live Postgres.  The helper is the single seam that closes the
-    // write-path id-oracle on reaction, thread-parent, stream-edit, forum-vote,
-    // and kind:5 e-tag deletion paths.
+    // These unit tests verify AUTHOR_ONLY_KINDS membership for kind:31234 and
+    // kind:30300 — the constant that `actor_can_reference_target` (and the
+    // inline guards in `derive_reaction_channel` / `resolve_nip10_thread_meta`)
+    // derive their mask from.  They do NOT exercise the async helper or any
+    // call site directly (no live Postgres is available here).
+    //
+    // Behavioral coverage — that the guard actually fires in the live relay for
+    // both draft and reminder targets — is provided by the e2e tests:
+    //   - e2e_nip37_draft.rs: test_draft_target_reaction_oracle_closed (kind:31234)
+    //   - e2e_nip37_draft.rs: test_reminder_target_reaction_oracle_closed (kind:30300)
 
     #[test]
     fn author_only_kinds_covers_draft_and_reminder() {
