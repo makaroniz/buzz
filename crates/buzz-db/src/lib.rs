@@ -1453,6 +1453,7 @@ impl Db {
         limit: u32,
         cursor: Option<(DateTime<Utc>, Vec<u8>)>,
         kind_filter: Option<&[u32]>,
+        author_pubkey: Option<&[u8]>,
     ) -> Result<thread::ChannelWindow> {
         thread::get_channel_window(
             &self.pool,
@@ -1461,6 +1462,7 @@ impl Db {
             limit,
             cursor,
             kind_filter,
+            author_pubkey,
         )
         .await
     }

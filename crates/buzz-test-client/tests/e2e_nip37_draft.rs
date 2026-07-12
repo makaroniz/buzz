@@ -2382,3 +2382,200 @@ async fn test_removed_member_cannot_read_drafts_after_removal() {
     }
     removed_client.disconnect().await.expect("disconnect");
 }
+
+// ─── Channel-window (top_level) draft privacy ────────────────────────────────
+
+/// POST /query with `top_level: true`, mixed `kinds:[9,31234]`, as `as_keys`.
+/// Returns the raw event array (rows + overlays + aux).
+async fn query_channel_window_mixed(
+    as_keys: &Keys,
+    channel_id: &str,
+    include_aux: bool,
+    include_summaries: bool,
+) -> Vec<Value> {
+    let client = http_client();
+    let filter = serde_json::json!({
+        "kinds": [9, KIND_DRAFT],
+        "#h": [channel_id],
+        "top_level": true,
+        "include_aux": include_aux,
+        "include_summaries": include_summaries,
+    });
+    let resp = client
+        .post(format!("{}/query", relay_http_url()))
+        .header("X-Pubkey", &as_keys.public_key().to_hex())
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&serde_json::json!([filter])).unwrap())
+        .send()
+        .await
+        .expect("channel window mixed query");
+    assert!(
+        resp.status().is_success(),
+        "window query failed: {}",
+        resp.status()
+    );
+    resp.json::<Vec<Value>>()
+        .await
+        .expect("parse window response")
+}
+
+/// `top_level: true` channel-window path with mixed `kinds:[9,31234]`:
+/// a non-author channel member must receive zero kind:31234 draft rows and
+/// zero draft event-ids anywhere in the response (rows, aux, overlays).
+///
+/// Contract: the channel-window path applies the same author-only visibility
+/// rule as every other read path — kind:31234 drafts are excluded for any
+/// requester who is not their author. The SQL-level guard ensures that
+/// `next_cursor` and `has_more` are also computed from the draft-excluded row
+/// set, so no draft id can leak via the 39006 bounds overlay or aux closure.
+#[tokio::test]
+#[ignore]
+async fn test_channel_window_draft_excluded_for_non_author() {
+    let client = http_client();
+    let author = Keys::generate();
+    let attacker = Keys::generate();
+    let ch_id = create_open_channel(&author).await;
+
+    // Attacker joins the channel so they can issue a valid top_level query.
+    add_member_http(&client, &author, &ch_id, &attacker).await;
+
+    // Author posts a visible kind:9 message — provides a positive control row.
+    let msg = EventBuilder::new(nostr::Kind::Custom(9), "hello channel")
+        .tags([nostr::Tag::parse(["h", &ch_id]).unwrap()])
+        .sign_with_keys(&author)
+        .unwrap();
+    let msg_id = msg.id.to_hex();
+    let (ok_m, reason_m) = submit_event_http(&client, &author, &msg).await;
+    assert!(ok_m, "kind:9 message must be accepted: {reason_m}");
+
+    // Author posts a kind:31234 draft in the same channel.
+    let d = uuid::Uuid::new_v4().to_string();
+    let draft = build_draft(&author, &d, "9", &ch_id, &fake_nip44_v2());
+    let draft_id = draft.id.to_hex();
+    let (ok_d, reason_d) = submit_event_http(&client, &author, &draft).await;
+    assert!(ok_d, "draft must be accepted: {reason_d}");
+
+    // Attacker issues a top_level window query with kinds:[9,31234] — must
+    // not receive the draft in rows, aux, or overlays.
+    let events = query_channel_window_mixed(&attacker, &ch_id, true, true).await;
+
+    // Collect all event-ids that appear anywhere in the response (own id +
+    // any id referenced in tags — covers bounds `d` tag, summary `e`/`d` tags).
+    let all_ids: Vec<String> = events
+        .iter()
+        .flat_map(|e| {
+            let own_id = e["id"].as_str().map(|s| s.to_string());
+            let tag_values: Vec<String> = e["tags"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|t| {
+                    t.as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                })
+                .collect();
+            own_id.into_iter().chain(tag_values)
+        })
+        .collect();
+
+    assert!(
+        !all_ids.iter().any(|id| id == &draft_id),
+        "draft id must not appear anywhere in the channel-window response for a non-author: \
+        draft_id={draft_id}, response={events:?}"
+    );
+
+    // Positive control: the kind:9 message MUST be present as a row.
+    let row_kinds: Vec<u64> = events.iter().filter_map(|e| e["kind"].as_u64()).collect();
+    assert!(
+        row_kinds.contains(&9),
+        "kind:9 row must appear in window response for attacker: {events:?}"
+    );
+    // msg_id must specifically be in the rows.
+    let ids_in_response: Vec<String> = events
+        .iter()
+        .filter_map(|e| e["id"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        ids_in_response.contains(&msg_id),
+        "kind:9 message id must appear in window rows: msg_id={msg_id}, response={events:?}"
+    );
+
+    assert!(
+        !row_kinds.contains(&(KIND_DRAFT as u64)),
+        "no kind:31234 event may appear in window response for non-author: {events:?}"
+    );
+
+    // Exactly one 39006 bounds overlay must be present (window invariant).
+    let bounds_count = events
+        .iter()
+        .filter(|e| e["kind"].as_u64() == Some(39006))
+        .count();
+    assert_eq!(
+        bounds_count, 1,
+        "exactly one 39006 bounds overlay required: {events:?}"
+    );
+}
+
+/// `top_level: true` channel-window with kinds:[9,31234]: the author themselves
+/// CAN see their own draft in the window — consistent with all other read paths
+/// which allow authors to retrieve their own author-only events.
+#[tokio::test]
+#[ignore]
+async fn test_channel_window_draft_visible_to_author() {
+    let client = http_client();
+    let author = Keys::generate();
+    let ch_id = create_open_channel(&author).await;
+
+    // Post a kind:9 message and a draft in the same channel.
+    let msg = EventBuilder::new(nostr::Kind::Custom(9), "public message")
+        .tags([nostr::Tag::parse(["h", &ch_id]).unwrap()])
+        .sign_with_keys(&author)
+        .unwrap();
+    let (ok_m, reason_m) = submit_event_http(&client, &author, &msg).await;
+    assert!(ok_m, "kind:9 message must be accepted: {reason_m}");
+
+    let d = uuid::Uuid::new_v4().to_string();
+    let draft = build_draft(&author, &d, "9", &ch_id, &fake_nip44_v2());
+    let draft_id = draft.id.to_hex();
+    let (ok_d, reason_d) = submit_event_http(&client, &author, &draft).await;
+    assert!(ok_d, "draft must be accepted: {reason_d}");
+
+    // Author queries the window — their own draft must appear.
+    let events = query_channel_window_mixed(&author, &ch_id, false, false).await;
+
+    let row_kinds: Vec<u64> = events.iter().filter_map(|e| e["kind"].as_u64()).collect();
+
+    // Both kind:9 and kind:31234 (own draft) must be present.
+    assert!(
+        row_kinds.contains(&9),
+        "kind:9 row must appear for author: {events:?}"
+    );
+    assert!(
+        row_kinds.contains(&(KIND_DRAFT as u64)),
+        "author must see their own kind:31234 draft in the window: {events:?}"
+    );
+
+    // Verify the specific draft id is present.
+    let ids_in_response: Vec<String> = events
+        .iter()
+        .filter_map(|e| e["id"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        ids_in_response.contains(&draft_id),
+        "author's draft id must appear in window rows: draft_id={draft_id}, response={events:?}"
+    );
+
+    // 39006 bounds overlay invariant.
+    let bounds_count = events
+        .iter()
+        .filter(|e| e["kind"].as_u64() == Some(39006))
+        .count();
+    assert_eq!(
+        bounds_count, 1,
+        "exactly one 39006 bounds overlay required: {events:?}"
+    );
+}

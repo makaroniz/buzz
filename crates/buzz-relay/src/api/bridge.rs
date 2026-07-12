@@ -374,6 +374,7 @@ async fn handle_channel_window_filter(
     filter: &nostr::Filter,
     accessible_channels: &[uuid::Uuid],
     events: &mut Vec<Value>,
+    pubkey_bytes: &[u8],
 ) -> Result<(), (StatusCode, Json<Value>)> {
     use buzz_core::kind::{KIND_THREAD_SUMMARY, KIND_WINDOW_BOUNDS};
 
@@ -436,6 +437,7 @@ async fn handle_channel_window_filter(
             limit,
             cursor.clone(),
             kind_filter.as_deref(),
+            Some(pubkey_bytes),
         )
         .await
         .map_err(|e| internal_error(&format!("channel window error: {e}")))?;
@@ -768,6 +770,7 @@ pub async fn query_events(
             filter,
             &accessible_channels,
             &mut events,
+            &pubkey_bytes,
         )
         .await?;
         handled.insert(idx);
