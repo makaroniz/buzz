@@ -1731,6 +1731,10 @@ async fn test_draft_live_fanout_reaches_author_own_subscription() {
     let d = uuid::Uuid::new_v4().to_string();
 
     // Author opens a subscription with limit:0 (skip historical, live only).
+    // The subscription MUST be channel-scoped (#h ch_id): drafts are channel-bound
+    // events and fan_out_scoped's symmetric scoping invariant means a global
+    // (no #h) sub never sees channel-scoped events, regardless of the author-only
+    // gate.
     let mut ac = BuzzTestClient::connect(&url, &author)
         .await
         .expect("connect author");
@@ -1738,6 +1742,10 @@ async fn test_draft_live_fanout_reaches_author_own_subscription() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_DRAFT))
         .author(author.public_key())
+        .custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            ch_id.as_str(),
+        )
         .limit(0);
     ac.subscribe(&sid, vec![filter])
         .await
@@ -1834,13 +1842,20 @@ async fn test_draft_not_returned_in_kindless_channel_query_by_attacker() {
 #[tokio::test]
 #[ignore]
 async fn test_draft_not_returned_in_kindless_channel_http_query() {
-    // HTTP bridge catchall /query mirror of the WS kindless h-tag test above.
-    // Exercises bridge.rs catchall path (distinct from req.rs), proving the
-    // reader_can_receive_event gate is live there.
+    // HTTP bridge /query tests for draft privacy.  The bridge runs sensitive-kind
+    // gates unconditionally, so a kindless h-tag filter (wildcard) triggers
+    // p_gated_filters_authorized and returns 403 for any caller that is not the
+    // p-tagged owner.  This is fail-closed, pre-existing main behavior — NOT a
+    // production defect.
     //
-    // Non-author queries the channel with a kindless h-tag filter via HTTP
-    // /query.  Kind:9 message must appear (positive control); kind:31234 draft
-    // must be absent.
+    // Two sub-cases:
+    //   (i)  Kindless h-tag /query as non-author → 403.  The fail-closed
+    //        outcome IS the oracle; the route simply does not exist over HTTP.
+    //  (ii)  Mixed kinds:[9, KIND_DRAFT] h-tag /query as attacker (passes all
+    //        three HTTP gates — neither kind is p-gated, not exclusively
+    //        author-only).  Kind:9 message must appear; kind:31234 draft must
+    //        be absent, proving reader_can_receive_event is live on the bridge
+    //        per-event path.
     let client = http_client();
     let owner = Keys::generate();
     let attacker = Keys::generate();
@@ -1861,31 +1876,50 @@ async fn test_draft_not_returned_in_kindless_channel_http_query() {
     let (ok_m, msg_m) = submit_event_http(&client, &owner, &msg_event).await;
     assert!(ok_m, "channel message must be accepted: {msg_m}");
 
-    // Kindless h-tag filter over HTTP /query as non-author.
+    // (i) Kindless h-tag /query as non-author must return 403 (fail-closed).
     let kindless_filter = Filter::new().custom_tag(
         nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
         ch_id.as_str(),
     );
-    let results = query_events_http(
-        &client,
-        &attacker.public_key().to_hex(),
-        vec![kindless_filter],
-    )
-    .await;
+    let kindless_resp = client
+        .post(format!("{}/query", relay_http_url()))
+        .header("X-Pubkey", &attacker.public_key().to_hex())
+        .header("Content-Type", "application/json")
+        .json(&vec![kindless_filter])
+        .send()
+        .await
+        .expect("kindless query request");
+    assert_eq!(
+        kindless_resp.status().as_u16(),
+        403,
+        "kindless h-tag /query as non-author must be rejected with 403 (bridge fail-closed)"
+    );
 
-    // Kind:9 message must appear — proves the subscription is live.
+    // (ii) Mixed kinds:[9, KIND_DRAFT] h-tag /query as attacker.
+    //      Both kinds pass the p-gated and exclusively-author-only HTTP gates,
+    //      so the query reaches the per-event reader_can_receive_event guard.
+    let mixed_filter = Filter::new()
+        .kinds([Kind::Custom(9), Kind::Custom(KIND_DRAFT)])
+        .custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            ch_id.as_str(),
+        );
+    let results =
+        query_events_http(&client, &attacker.public_key().to_hex(), vec![mixed_filter]).await;
+
+    // Kind:9 message must appear — proves the filter reached the data path.
     assert!(
         results
             .iter()
             .any(|e| e["id"].as_str() == Some(&msg_id.to_hex())),
-        "kind:9 channel message must appear in HTTP kindless query (positive control)"
+        "kind:9 channel message must appear in mixed-kinds HTTP query (positive control)"
     );
-    // Draft must be absent — bridge.rs catchall author-only gate must suppress it.
+    // Draft must be absent — reader_can_receive_event must strip it for non-author.
     assert!(
         !results
             .iter()
             .any(|e| e["id"].as_str() == Some(&draft_id.to_hex())),
-        "kind:31234 draft must not appear in non-author HTTP kindless channel query"
+        "kind:31234 draft must not appear in mixed-kinds HTTP query for non-author"
     );
 }
 
