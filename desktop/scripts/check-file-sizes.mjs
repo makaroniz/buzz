@@ -166,9 +166,10 @@ const overrides = new Map([
   // setup-mode requirements. The Windows-only requirement and serialization
   // test add eight lines; split remains queued with the existing file debt.
   // Windows Doctor install fix: cli_install_commands_windows field added to test stubs.
-  // team-instructions-first-class: ManagedAgentRecord fixture gains the new
-  // team_id field (+1 line).
-  ["src-tauri/src/managed_agents/readiness.rs", 1765],
+  // `team-instructions-first-class` added `team_id`; MCP configuration added
+  // the required `mcp_servers` minimal-fixture field. The gate counts the
+  // trailing newline, so 1,765 physical lines are 1,766 counted lines.
+  ["src-tauri/src/managed_agents/readiness.rs", 1766],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing
@@ -429,7 +430,11 @@ const overrides = new Map([
   // is_safe_to_reveal allowlist + baked_env_thinking_effort_is_unmasked test.
   // +1: doctor-install-reliability: login_hint: None added to goose_runtime test stub.
   // +1: doctor-install-reliability review fixes: auth_probe_args: None added to stub.
-  ["src-tauri/src/commands/agent_config.rs", 1021],
+  // MCP config surface: `resolve_config_surface` receives the effective command
+  // and exposes the effective `buzz_agent_mcp_servers` merge; coverage pins the
+  // merge, disabled-mask, and non-buzz-agent cases. The gate counts trailing
+  // newlines, so 1,139 physical lines are 1,140 counted lines.
+  ["src-tauri/src/commands/agent_config.rs", 1140],
   // codex-install-auto-restart review-fixes: should_restart_after_install
   // takes pid_alive:bool (pure predicate, no OS-dependent call); 3 racy
   // cache tests replaced with 6 pure availability_drift predicate tests;
