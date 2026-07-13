@@ -32,6 +32,7 @@ type MockWindow = Window & {
     mentionPubkeys?: string[];
     id?: string;
     kind?: number;
+    createdAt?: number;
     extraTags?: string[][];
   }) => RelayEvent;
   __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
