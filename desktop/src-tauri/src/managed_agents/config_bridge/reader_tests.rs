@@ -2,7 +2,7 @@
 //! `reader.rs` stays under the 1000-line budget; `#[path]`-included from
 //! there).
 
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{collections::BTreeMap, path::Path, sync::Mutex};
 
 use super::*;
 use crate::managed_agents::discovery::KnownAcpRuntime;
@@ -142,8 +142,9 @@ fn surface_reports_mcp_specific_config_path() {
         .sources
         .mcp_config_file_path
         .expect("mcp config path");
+    let expected_suffix = Path::new(".config").join("goose").join("config.yaml");
     assert!(
-        path.ends_with(".config/goose/config.yaml"),
+        Path::new(&path).ends_with(&expected_suffix),
         "unexpected MCP config path: {path}"
     );
 }
@@ -156,9 +157,16 @@ fn goose_mcp_config_path_follows_path_root_override() {
         read_config_surface(&record, Some(runtime), None, None)
     });
 
+    let expected_path = Path::new("/tmp/buzz-goose-root")
+        .join("config")
+        .join("config.yaml");
     assert_eq!(
-        surface.sources.mcp_config_file_path.as_deref(),
-        Some("/tmp/buzz-goose-root/config/config.yaml")
+        surface
+            .sources
+            .mcp_config_file_path
+            .as_deref()
+            .map(Path::new),
+        Some(expected_path.as_path())
     );
 }
 
