@@ -1542,6 +1542,7 @@ pub fn spawn_agent_child(
     };
 
     // Augment PATH for DMG launches so child processes can find:
+    //   - bundled ACP bridge tools (pinned versions shipped with the app)
     //   - bundled CLI via ~/.local/bin symlink
     //   - nvm-managed node/npm (nvm initializes only in interactive shells)
     //   - bundled sidecars (buzz, buzz-acp, etc.) via exe parent (Contents/MacOS/)
@@ -1550,6 +1551,7 @@ pub fn spawn_agent_child(
         .as_deref()
         .and_then(super::find_nvm_default_bin);
     let augmented_path = build_augmented_path(
+        super::acp_tools::bundled_acp_tools_dir(),
         dirs::home_dir(),
         std::env::current_exe()
             .ok()

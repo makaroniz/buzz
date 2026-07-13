@@ -446,6 +446,12 @@ pub fn run() {
                 return Ok(());
             }
 
+            // Register the bundled ACP bridge tools dir before anything can
+            // resolve agent commands — resolutions are cached for the app
+            // lifetime, so a resolve that runs before registration would pin
+            // the user-installed copy instead of the bundled one.
+            managed_agents::acp_tools::register_bundled_acp_tools_dir(&app_handle);
+
             // Run all pre-identity data migrations before state loads from disk.
             if reset_outcome.completed {
                 migration::run_boot_migrations_after_reset(&app_handle);

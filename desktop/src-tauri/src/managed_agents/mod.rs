@@ -1,3 +1,4 @@
+pub(crate) mod acp_tools;
 mod agent_env;
 pub(crate) mod agent_events;
 pub(crate) mod agent_snapshot;

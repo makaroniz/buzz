@@ -268,12 +268,12 @@ fn workspace_root_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn command_looks_like_path(command: &str) -> bool {
+pub(in crate::managed_agents) fn command_looks_like_path(command: &str) -> bool {
     let path = Path::new(command);
     path.is_absolute() || path.components().count() > 1
 }
 
-fn executable_basename(command: &str) -> String {
+pub(in crate::managed_agents) fn executable_basename(command: &str) -> String {
     let suffix = std::env::consts::EXE_SUFFIX;
     if suffix.is_empty() || command.ends_with(suffix) {
         command.to_string()
@@ -469,7 +469,7 @@ fn command_search_dirs() -> Vec<PathBuf> {
     unique
 }
 
-fn is_executable_file(path: &Path) -> bool {
+pub(in crate::managed_agents) fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
     };
@@ -629,6 +629,13 @@ fn command_basenames(command: &str) -> Vec<String> {
 }
 
 fn resolve_command_uncached(command: &str) -> Option<PathBuf> {
+    // Bundled ACP bridge tools (see `managed_agents::acp_tools`) win over
+    // every other source, so the pinned bridges shipped with the app are
+    // preferred to user-installed copies.
+    if let Some(path) = super::acp_tools::command_in_bundled_dir(command) {
+        return Some(path);
+    }
+
     if let Some(path) = resolve_workspace_command(command) {
         return Some(path);
     }

@@ -279,7 +279,11 @@ const overrides = new Map([
   // +13: fetch_login_shell_path_inner Windows guard (POSIX PATH → None).
   // resolve_git_bash made pub(crate) for Windows test access.
   // +1: login_shell_candidates doc comment expanded for resolve_bash_path.
-  ["src-tauri/src/managed_agents/discovery.rs", 1366],
+  // bundle-acps: bundled ACP bridge check at the top of the resolution sweep
+  // (+4 lines over the Windows baseline). Temporary — the codex version-gate
+  // retirement later in the same series deletes far more from this file and
+  // ratchets this back down.
+  ["src-tauri/src/managed_agents/discovery.rs", 1371],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
