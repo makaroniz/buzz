@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
+import { syncDraftChannel } from "@/features/messages/lib/draftSync";
 import type { DraftState } from "@/features/messages/lib/useDrafts";
 
 type UseDraftPersistLifecycleParams = {
@@ -83,6 +84,7 @@ export function useDraftPersistLifecycle({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
   React.useEffect(() => {
+    if (channelId) syncDraftChannel(channelId);
     // The outgoing draft is persisted by the cleanup below, which runs before
     // this body on key changes and has the correct outgoing channelId in its
     // closure. Do NOT re-persist prevKey here: channelId in this render

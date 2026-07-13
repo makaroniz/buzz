@@ -1,6 +1,8 @@
 import * as React from "react";
 
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
+import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
+import { syncDeletedDraft, syncPersistedDraft } from "./draftSync";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
 // ── Store reactivity ─────────────────────────────────────────────────────────
@@ -71,14 +73,24 @@ export type DraftState = {
 /** Serialised shape stored in localStorage (same as DraftState for round-trips). */
 type StoredDrafts = Record<string, DraftState>;
 
-const DRAFT_STORE_KEY_PREFIX = "buzz-drafts.v1";
+const DRAFT_STORE_KEY_PREFIX = "buzz-drafts.v2";
+const LEGACY_DRAFT_STORE_KEY_PREFIX = "buzz-drafts.v1";
 const MAX_DRAFTS = 100;
 
-/** Module-level pubkey set by `initDraftStore`. Empty string = no identity. */
+/** Module-level workspace identity set by `initDraftStore`. Empty = no workspace. */
 let currentPubkey = "";
+let currentRelayScope = "";
 
 function storageKey(): string {
-  return `${DRAFT_STORE_KEY_PREFIX}:${currentPubkey}`;
+  // The no-relay form is retained for direct legacy callers/tests. App startup
+  // always supplies a normalized relay and therefore uses the v2 scoped key.
+  return currentRelayScope
+    ? `${DRAFT_STORE_KEY_PREFIX}:${currentRelayScope}:${currentPubkey}`
+    : legacyStorageKey();
+}
+
+function legacyStorageKey(): string {
+  return `${LEGACY_DRAFT_STORE_KEY_PREFIX}:${currentPubkey}`;
 }
 
 /**
@@ -88,11 +100,13 @@ function storageKey(): string {
  * identity switch (without a prior `clearAllDrafts`) never serves the
  * wrong identity's drafts.
  */
-export function initDraftStore(pubkey: string): void {
-  if (currentPubkey !== pubkey) {
+export function initDraftStore(pubkey: string, relayUrl = ""): void {
+  const relayScope = normalizeRelayUrl(relayUrl);
+  if (currentPubkey !== pubkey || currentRelayScope !== relayScope) {
     _memCache = null;
   }
   currentPubkey = pubkey;
+  currentRelayScope = relayScope;
   // Eagerly load to surface corruption errors in console at startup rather
   // than on first draft interaction.
   readStore();
@@ -104,6 +118,7 @@ export function initDraftStore(pubkey: string): void {
  */
 export function clearAllDrafts(): void {
   currentPubkey = "";
+  currentRelayScope = "";
   _memCache = null;
 }
 
@@ -123,13 +138,19 @@ function readStore(): Map<string, DraftState> {
   }
 
   const raw = localStorage.getItem(storageKey());
-  if (!raw) {
+  // One-time forward migration keeps pre-NIP-37 local-only drafts available
+  // after keys become relay-scoped. Never read legacy entries once a v2 store
+  // exists, so another workspace cannot import them later.
+  const legacyRaw =
+    raw || !currentRelayScope ? null : localStorage.getItem(legacyStorageKey());
+  const source = raw ?? legacyRaw;
+  if (!source) {
     _memCache = map;
     return map;
   }
 
   try {
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(source);
     if (
       parsed !== null &&
       typeof parsed === "object" &&
@@ -152,6 +173,10 @@ function readStore(): Map<string, DraftState> {
   }
 
   _memCache = map;
+  if (legacyRaw !== null) {
+    flushStore(map);
+    localStorage.removeItem(legacyStorageKey());
+  }
   return map;
 }
 
@@ -222,15 +247,40 @@ export function saveDraftEntry(draftKey: string, draft: DraftState): void {
   evictOldest(map);
   flushStore(map);
   notifySubscribers();
+  syncPersistedDraft(draftKey, draft);
 }
 
 export function loadDraftEntry(draftKey: string): DraftState | undefined {
   return readStore().get(draftKey);
 }
 
+/** Replace a local entry from a validated remote payload without scheduling a publish. */
+export function mergeRemoteDraftEntry(
+  draftKey: string,
+  draft: DraftState,
+): void {
+  const map = readStore();
+  map.set(draftKey, draft);
+  evictOldest(map);
+  flushStore(map);
+  notifySubscribers();
+}
+
+/** Remove a draft after observing its remote NIP-37 tombstone. */
+export function removeRemoteDraftEntry(draftKey: string): void {
+  const map = readStore();
+  if (!map.delete(draftKey)) return;
+  flushStore(map);
+  notifySubscribers();
+}
+
 export function clearDraftEntry(draftKey: string): void {
   const map = readStore();
-  if (map.has(draftKey)) {
+  const existing = map.get(draftKey);
+  if (existing) {
+    // Ask the sync layer to durably record a deletion before the visible cache
+    // is removed. The local clear remains synchronous/offline-first.
+    syncDeletedDraft(draftKey, existing.channelId);
     map.delete(draftKey);
     flushStore(map);
     notifySubscribers();
