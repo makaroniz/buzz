@@ -11,8 +11,8 @@ use super::{effective_agent_command, known_acp_runtime};
 /// inherits.
 ///
 /// Comparison is by RUNTIME IDENTITY, not raw string: a persona on the `claude`
-/// runtime resolves to `claude-agent-acp`, but a client with only the
-/// `claude-code-acp` adapter installed sends that command instead. Both map to
+/// runtime resolves to `claude-agent-acp`, but a record created by an older
+/// Buzz may echo the legacy `claude-code-acp` command instead. Both map to
 /// the same `claude` runtime, so neither is a real divergence — string equality
 /// would wrongly bake a pin. An unknown/custom command (no matching runtime)
 /// only inherits when it exactly equals the persona command.
@@ -116,7 +116,7 @@ pub fn apply_agent_command_update(
 /// - DELIBERATE OVERRIDE (`harness_override` true): the user explicitly picked a
 ///   runtime command in UI that exposes a runtime selector. This is a real pin
 ///   and is preserved when it differs from the command inheritance would spawn,
-///   including installed aliases such as `claude-code-acp`.
+///   including legacy adapter names such as `claude-code-acp`.
 /// - MISSING-RUNTIME FALLBACK (`harness_override` false): the persona's runtime
 ///   isn't installed locally, so `resolvePersonaRuntime` substitutes a fallback
 ///   default. This is NOT a pin — baking it would freeze the agent on the fallback

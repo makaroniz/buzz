@@ -364,10 +364,10 @@ fn divergent_override_none_when_picked_matches_persona_runtime() {
 
 #[test]
 fn divergent_override_none_for_alternate_command_of_same_runtime() {
-    // A client with only `claude-code-acp` installed sends that command for
-    // a `claude` persona whose primary command is `claude-agent-acp`. Both
-    // map to the `claude` runtime, so it inherits — string equality would
-    // wrongly bake a pin (CRITICAL-3).
+    // A record created by an older Buzz echoes the legacy `claude-code-acp`
+    // command for a `claude` persona whose primary command is
+    // `claude-agent-acp`. Both map to the `claude` runtime, so it inherits —
+    // string equality would wrongly bake a pin (CRITICAL-3).
     let personas = vec![persona_with_runtime("p1", Some("claude"))];
     assert_eq!(
         divergent_agent_command_override(Some("p1"), &personas, Some("claude-code-acp")),
@@ -446,9 +446,9 @@ fn create_time_override_none_when_persona_runtime_installed() {
 #[test]
 fn create_time_override_preserves_selected_runtime_alias() {
     // A `claude` persona inherits the primary command `claude-agent-acp`,
-    // but discovery may select an installed alias such as `claude-code-acp`.
-    // When UI marks that create-time selection as explicit, preserve the
-    // alias so the first spawn uses a command known to be installed.
+    // but the UI may send a legacy adapter name such as `claude-code-acp`
+    // (e.g. copied forward from an older record). When UI marks that
+    // create-time selection as explicit, preserve it verbatim.
     let personas = vec![persona_with_runtime("p1", Some("claude"))];
     assert_eq!(
         create_time_agent_command_override(Some("p1"), &personas, Some("claude-code-acp"), true),
@@ -509,7 +509,7 @@ fn update_time_override_preserves_exact_persona_command_when_overriding() {
 
 #[test]
 fn update_time_override_preserves_alias_pin_when_overriding() {
-    // A `claude` persona with an installed `claude-code-acp` alias: picking
+    // A `claude` persona with the legacy `claude-code-acp` name: picking
     // it as a Custom pin is a deliberate divergence from the primary
     // command and must be preserved when overriding.
     let personas = vec![persona_with_runtime("p1", Some("claude"))];

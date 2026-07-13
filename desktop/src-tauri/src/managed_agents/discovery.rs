@@ -10,7 +10,10 @@ use crate::managed_agents::{
 pub(crate) struct KnownAcpRuntime {
     pub id: &'static str,
     pub label: &'static str,
+    /// Adapter binaries swept for resolution; the first is the default command.
     pub commands: &'static [&'static str],
+    /// Identity-only names (stored records, overrides) — recognized by
+    /// [`known_acp_runtime`], never resolved or spawned.
     pub aliases: &'static [&'static str],
     pub avatar_url: &'static str,
     /// Legacy MCP server binary field. Vestigial — all agents now use the bundled CLI.
@@ -166,8 +169,10 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
     KnownAcpRuntime {
         id: "claude",
         label: "Claude Code",
-        commands: &["claude-agent-acp", "claude-code-acp"],
-        aliases: &["claude-code", "claudecode"],
+        commands: &["claude-agent-acp"],
+        // The retired `claude-code-acp` adapter stays recognized for stored
+        // records from older installs, but is never resolved or spawned.
+        aliases: &["claude-code-acp", "claude-code", "claudecode"],
         avatar_url: CLAUDE_CODE_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
