@@ -33,6 +33,7 @@ type PendingPublish = {
   draft: DraftState;
   channelId: string;
   address?: string;
+  base?: RemoteHead;
 };
 type PendingDeletion = {
   draftKey: string;
@@ -121,7 +122,12 @@ export class DraftSyncManager {
       return;
     }
     entry.draftKey = draftKey;
-    entry.pendingPublish = { draftKey, draft, channelId: draft.channelId };
+    entry.pendingPublish = {
+      draftKey,
+      draft,
+      channelId: draft.channelId,
+      base: entry.remoteHead?.content === "" ? entry.remoteHead : undefined,
+    };
     this.state.set(draftKey, entry);
     // Resolve the opaque address while the draft is alive so normal delete
     // paths can durably record it before removing visible local state.
@@ -248,7 +254,7 @@ export class DraftSyncManager {
         this.reschedulePublishes();
         return;
       }
-      if (state.remoteHead?.content === "") {
+      if (state.remoteHead?.content === "" && !pending.base) {
         state.pendingPublish = undefined;
         removeRemoteDraftEntry(pending.draftKey);
         this.reschedulePublishes();
@@ -328,12 +334,16 @@ export class DraftSyncManager {
         "Failed to delete draft.",
       );
       const current = this.state.get(pending.address) ?? state;
+      const winning =
+        !current.remoteHead || compareHeads(event, current.remoteHead) >= 0
+          ? event
+          : current.remoteHead;
       if (
         current.pendingDeletion?.address === pending.address &&
-        (!current.remoteHead || compareHeads(event, current.remoteHead) >= 0)
+        winning.content === ""
       ) {
         current.pendingDeletion = undefined;
-        current.remoteHead = event;
+        current.remoteHead = winning;
         this.writeSidecar();
       }
     } catch (error) {
