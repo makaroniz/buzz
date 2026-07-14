@@ -61,7 +61,7 @@ export function ChannelContextMenu({
   return (
     <ContextMenu modal={modal} onOpenChange={setOpen}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent forceMount className={open ? undefined : "hidden"}>
+      <ContextMenuContent>
         <ChannelContextMenuItems {...contentProps} menuOpen={open} />
       </ContextMenuContent>
     </ContextMenu>
@@ -238,22 +238,18 @@ export function ChannelContextMenuItems({
     selfMember?.role === "owner" ||
     selfMember?.role === "admin" ||
     canManageOwnedAgentChannel;
-  // Snapshot capabilities for each open session. Permission responses that
-  // arrive after the menu opens apply on the next open instead of inserting
-  // immediate actions beneath the user's pointer.
-  const [showManagementActions, setShowManagementActions] =
-    React.useState(false);
-  const menuWasOpenRef = React.useRef(false);
-  React.useLayoutEffect(() => {
-    if (menuOpen && !menuWasOpenRef.current) {
-      setShowManagementActions(
-        channel.channelType !== "dm" &&
-          channel.archivedAt === null &&
-          canManageChannel,
-      );
-    }
-    menuWasOpenRef.current = menuOpen;
-  }, [canManageChannel, channel.archivedAt, channel.channelType, menuOpen]);
+  const managementActionsAreResolved =
+    menuOpen &&
+    membersQuery.data !== undefined &&
+    (ownerPubkeys.length === 0 || ownerProfilesQuery.data !== undefined);
+  const managementActionsAreEligible =
+    channel.channelType !== "dm" && channel.archivedAt === null;
+  // Reserve the final two action rows while permissions load. If the viewer can
+  // manage this channel, the rows become actionable without changing the menu
+  // geometry; otherwise they disappear without ever exposing Archive.
+  const showManagementActions =
+    managementActionsAreEligible &&
+    (!managementActionsAreResolved || canManageChannel);
   const showStar = Boolean(onStarChannel && onUnstarChannel);
   const showReadToggle = hasUnread
     ? Boolean(onMarkChannelRead)
@@ -284,6 +280,7 @@ export function ChannelContextMenuItems({
         <>
           <ContextMenuSeparator />
           <ContextMenuItem
+            disabled={!managementActionsAreResolved}
             onSelect={() =>
               deferMenuAction(() =>
                 openChannelManagement(channel.id, { edit: true }),
@@ -297,6 +294,7 @@ export function ChannelContextMenuItems({
           </ContextMenuItem>
           <ContextMenuItem
             className="text-destructive focus:text-destructive"
+            disabled={!managementActionsAreResolved}
             onSelect={() =>
               deferMenuAction(() => {
                 void archiveChannelMutation.mutateAsync().catch((error) => {
