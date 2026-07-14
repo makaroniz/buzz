@@ -2335,7 +2335,7 @@ test("open channel management supports join and leave", async ({ page }) => {
 });
 
 test("channel context menu edits a stream", async ({ page }) => {
-  await installMockBridge(page, { channelMembersDelayMs: 500 });
+  await installMockBridge(page, { channelMembersDelayMs: 2_000 });
   await page.goto("/");
 
   await page.getByTestId("channel-agents").click({ button: "right" });

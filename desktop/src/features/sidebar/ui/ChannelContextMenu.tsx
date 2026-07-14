@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import {
   Archive,
   Bell,
@@ -229,17 +231,22 @@ export function ChannelContextMenuItems({
     selfMember?.role === "owner" ||
     selfMember?.role === "admin" ||
     canManageOwnedAgentChannel;
-  const hasResolvedMembers = membersQuery.data !== undefined;
+  const hasResolvedMembers =
+    membersQuery.data !== undefined || membersQuery.isError;
   const hasResolvedOwnerProfiles =
-    ownerPubkeys.length === 0 || ownerProfilesQuery.data !== undefined;
+    ownerPubkeys.length === 0 ||
+    ownerProfilesQuery.data !== undefined ||
+    ownerProfilesQuery.isError;
   const isManagementCandidate =
     channel.channelType !== "dm" && channel.archivedAt === null;
-  // Reserve disabled rows while capability queries resolve. This keeps the
-  // menu stable under the pointer without making owners close and reopen a
-  // cold-cache menu before the actions appear.
-  const showManagementActions =
-    isManagementCandidate &&
-    (!hasResolvedMembers || !hasResolvedOwnerProfiles || canManageChannel);
+  // Context-menu content mounts per open session. Once these rows are reserved,
+  // keep them until close so permission resolution cannot move another action
+  // beneath the pointer; eligible rows transition from disabled to enabled.
+  const [showManagementActions] = React.useState(
+    () =>
+      isManagementCandidate &&
+      (!hasResolvedMembers || !hasResolvedOwnerProfiles || canManageChannel),
+  );
   const disableManagementActions = !canManageChannel;
   const showStar = Boolean(onStarChannel && onUnstarChannel);
   const showReadToggle = hasUnread
