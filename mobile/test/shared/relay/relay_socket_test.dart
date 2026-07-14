@@ -44,11 +44,37 @@ void main() {
     expect(socket.state, SocketState.authenticating);
 
     await channel.closeStream();
-    await connecting;
+    await connecting.timeout(const Duration(seconds: 1));
 
     expect(disconnections, hasLength(1));
     expect(disconnections.single, isA<Exception>());
     expect(socket.state, SocketState.disconnected);
+    expect(channel.closeCount, 1);
+  });
+
+  test('auth-phase stream error reports one disconnection', () async {
+    final channel = _ReadyWebSocketChannel();
+    final disconnections = <Object?>[];
+    final socket = RelaySocket(
+      wsUrl: 'wss://relay.example',
+      nsec: null,
+      onMessage: (_) {},
+      onConnected: () => fail('socket must not connect'),
+      onDisconnected: disconnections.add,
+      channelFactory: (_) => channel,
+    );
+
+    final connecting = socket.connect();
+    await Future<void>.delayed(Duration.zero);
+    expect(socket.state, SocketState.authenticating);
+
+    channel.addStreamError(StateError('connection reset'));
+    await connecting.timeout(const Duration(seconds: 1));
+
+    expect(disconnections, hasLength(1));
+    expect(disconnections.single, isA<StateError>());
+    expect(socket.state, SocketState.disconnected);
+    expect(channel.closeCount, 1);
   });
 
   test('hung handshake times out, closes, and reports disconnection', () async {
@@ -92,6 +118,8 @@ class _ReadyWebSocketChannel implements WebSocketChannel {
   Stream<dynamic> get stream => _controller.stream;
 
   Future<void> closeStream() => _controller.close();
+
+  void addStreamError(Object error) => _controller.addError(error);
 
   @override
   late final WebSocketSink sink = _RecordingWebSocketSink(
