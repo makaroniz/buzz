@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
@@ -101,6 +101,10 @@ Queries npm for the latest release of each supported ACP bridge tool and
 writes acp-tools.lock.json. Fails loudly when a package or one of its
 per-target native dependencies cannot be resolved — never silently pins an
 older version.
+
+A --target run regenerates only the selected targets; the existing lock's
+entries for every other target are preserved verbatim, so a partial bump
+never drops another target's pins.
 
 Supported targets:
   ${SUPPORTED_TARGETS.join("\n  ")}
@@ -341,14 +345,62 @@ async function lockToolForTarget(tool, target) {
   };
 }
 
+// Entries preserved from the existing lock when --target selects a subset.
+// A missing lock preserves nothing (there is nothing to drop); an unreadable
+// or malformed one aborts the run rather than clobbering pins we cannot see.
+async function preservedLockEntries(lockFile, selectedTargets) {
+  let raw;
+  try {
+    raw = await readFile(lockFile, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw new Error(
+      `Cannot read existing lock ${lockFile} to preserve unselected targets: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `Existing lock ${lockFile} is not valid JSON — refusing to overwrite it with a partial --target run: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!Array.isArray(parsed?.tools)) {
+    throw new Error(
+      `Existing lock ${lockFile} has no tools array — refusing to overwrite it with a partial --target run`,
+    );
+  }
+  return parsed.tools.filter((entry) => !selectedTargets.has(entry?.target));
+}
+
 async function main() {
   const { targets, lockFile } = parseArgs(process.argv.slice(2));
+  const selectedTargets = new Set(targets);
+  const fullRun = SUPPORTED_TARGETS.every((target) =>
+    selectedTargets.has(target),
+  );
+  const preserved = fullRun
+    ? []
+    : await preservedLockEntries(lockFile, selectedTargets);
   const tools = [];
   for (const tool of TOOL_SPECS) {
     for (const target of targets) {
       tools.push(await lockToolForTarget(tool, target));
     }
   }
+  if (preserved.length) {
+    console.log(
+      `Preserved ${preserved.length} existing lock entr${
+        preserved.length === 1 ? "y" : "ies"
+      } for unselected targets`,
+    );
+  }
+  tools.push(...preserved);
   tools.sort((left, right) =>
     `${left.id}:${left.target}`.localeCompare(`${right.id}:${right.target}`),
   );
