@@ -3454,12 +3454,17 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
 }
 
 fn configured_mcp_server(server: &config::ConfiguredMcpServer) -> McpServer {
-    // Shell-split: users may type `uv run /path/to/jambot` as the command.
-    // First whitespace-delimited token is the executable; remaining tokens
-    // are prepended before `server.args`.
-    let mut parts = server.command.split_whitespace();
-    let command = parts.next().unwrap_or_default().to_string();
-    let prefix_args: Vec<String> = parts.map(String::from).collect();
+    // Shell-word split: users may type `uv run "/My Bot/jambot"` as the command.
+    // shlex handles quoting so paths with spaces survive. On parse failure
+    // (unmatched quote), pass the whole string as the command verbatim — the
+    // spawn will fail, and D1 surfaces MCP spawn errors as warnings.
+    let (command, prefix_args) = match shlex::split(&server.command) {
+        Some(mut tokens) if !tokens.is_empty() => {
+            let cmd = tokens.remove(0);
+            (cmd, tokens)
+        }
+        _ => (server.command.clone(), vec![]),
+    };
 
     let mut args = prefix_args;
     args.extend(server.args.iter().cloned());
@@ -4109,6 +4114,39 @@ mod build_mcp_servers_tests {
         let result = super::configured_mcp_server(&server);
         assert_eq!(result.command, "npx");
         assert_eq!(result.args, vec!["github-mcp"]);
+    }
+
+    #[test]
+    fn configured_mcp_server_quoted_path_with_spaces() {
+        let server = config::ConfiguredMcpServer {
+            name: "jambot".into(),
+            command: r#"uv run "/Users/me/My Bot/.venv/bin/jambot""#.into(),
+            args: vec!["--port".into(), "8080".into()],
+            env: vec![],
+        };
+
+        let result = super::configured_mcp_server(&server);
+        assert_eq!(result.command, "uv");
+        assert_eq!(
+            result.args,
+            vec!["run", "/Users/me/My Bot/.venv/bin/jambot", "--port", "8080"],
+            "quoted path must preserve internal spaces and strip quotes"
+        );
+    }
+
+    #[test]
+    fn configured_mcp_server_unmatched_quote_falls_back_to_verbatim() {
+        let server = config::ConfiguredMcpServer {
+            name: "broken".into(),
+            command: r#"uv run "/unclosed/path"#.into(),
+            args: vec!["--flag".into()],
+            env: vec![],
+        };
+
+        let result = super::configured_mcp_server(&server);
+        // Unmatched quote → shlex returns None → verbatim fallback
+        assert_eq!(result.command, r#"uv run "/unclosed/path"#);
+        assert_eq!(result.args, vec!["--flag"]);
     }
 }
 
