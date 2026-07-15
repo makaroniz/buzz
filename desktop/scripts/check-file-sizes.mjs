@@ -125,7 +125,9 @@ const overrides = new Map([
   // the availability_drift half of needs_restart deleted (the bundled bridge
   // can't drift out-of-band); ratcheted to bank the deletions (main's
   // team-instructions spawn-hash growth stays).
-  ["src-tauri/src/managed_agents/runtime.rs", 2087],
+  // bridge-only bundling: spawn-time CLAUDE_CODE_EXECUTABLE/CODEX_PATH export
+  // pointing the bundled bridge at the user's CLI (+25 lines incl. rationale).
+  ["src-tauri/src/managed_agents/runtime.rs", 2112],
   // config-bridge setup-payload env-boundary fix adds readiness wiring in
   // spawn_agent_child; load-bearing security fix, queued to split.
   ["src-tauri/src/managed_agents/config_bridge/reader.rs", 1016],
@@ -168,7 +170,9 @@ const overrides = new Map([
   // bundle-acps: codex version-gate retirement removes the AdapterOutdated
   // probe from cli_login_requirements and its gate tests, both obsolete now
   // that the bridges ship bundled; ratcheting 1765 -> 1599 to bank the headroom.
-  ["src-tauri/src/managed_agents/readiness.rs", 1599],
+  // bridge-only bundling: bridge_cli_env_var + adapter_ships_with_app fields
+  // in the make_cli_runtime stub (+2 lines).
+  ["src-tauri/src/managed_agents/readiness.rs", 1601],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing
@@ -231,11 +235,11 @@ const overrides = new Map([
   // "adapter_outdated" availability retired with the codex version gate (-1 line).
   // bundled-adapter-doctor-copy: adapterBundled field on
   // AcpRuntimeCatalogEntry (+2 lines).
-  // bundled-cli-probes: "cli_missing" availability retired; +4 doc lines on
-  // AcpAvailabilityStatus explaining why the state no longer exists.
-  // acp-dead-machinery retirement: nodeRequired field deleted;
-  // ratcheted 1075 -> 1073.
-  ["src/shared/api/types.ts", 1073],
+  // acp-dead-machinery retirement: nodeRequired field deleted.
+  // bridge-only bundling: the "cli_missing" availability literal returns —
+  // the bundled bridges run the user's claude/codex CLI again; ratcheted
+  // to bank the node_required-era headroom.
+  ["src/shared/api/types.ts", 1069],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -299,13 +303,14 @@ const overrides = new Map([
   // claude-code-acp-fallback-retirement: the legacy command moved from the
   // resolution sweep to identity-only aliases; +5 comment lines documenting
   // the commands/aliases split that move makes load-bearing.
-  // bundled-cli-probes: resolve_probe_binary (bundled-CLI-first probe
-  // resolution) + classify_runtime/underlying_cli doc rewrites for the
-  // CliMissing retirement (+8 lines).
   // acp-dead-machinery retirement: adapter-availability cache +
   // availability_drift, runtime_needs_npm/is_npm_global_install, and the
   // node_required computation deleted; ratcheted 1267 -> 1166.
-  ["src-tauri/src/managed_agents/discovery.rs", 1166],
+  // bridge-only bundling: CliMissing classification and user-CLI probe
+  // resolution return with the cli_missing gate; bridge_cli_env_var +
+  // adapter_ships_with_app catalog fields (docs + 4 initializers) and the
+  // restored curl/PowerShell CLI install commands (+15 lines).
+  ["src-tauri/src/managed_agents/discovery.rs", 1181],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
@@ -320,11 +325,10 @@ const overrides = new Map([
   // bundle-acps: version-gate retirement deletes the probe/availability test
   // sections; ratcheting 1271 -> 1067 to bank the deletions (main's Windows
   // Doctor test growth keeps this above the 1000 default).
-  // bundled-cli-probes: CliMissing test reworked to assert Available when the
-  // adapter resolves without an underlying CLI (+2 comment lines); main's
-  // Windows install-command tests inverted to assert the bundled runtimes
-  // expose no install commands (-13 lines).
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 1056],
+  // bridge-only bundling: classifies_cli_missing returns with the CliMissing
+  // gate + bridge_cli_env_vars catalog mapping test (+24 lines), and main's
+  // Windows install-command tests return with the restored CLI installers.
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 1093],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode
@@ -460,7 +464,9 @@ const overrides = new Map([
   // is_safe_to_reveal allowlist + baked_env_thinking_effort_is_unmasked test.
   // +1: doctor-install-reliability: login_hint: None added to goose_runtime test stub.
   // +1: doctor-install-reliability review fixes: auth_probe_args: None added to stub.
-  ["src-tauri/src/commands/agent_config.rs", 1021],
+  // +2: bridge-only bundling: bridge_cli_env_var + adapter_ships_with_app
+  // added to the runtime test stub (union with main's Windows stub field).
+  ["src-tauri/src/commands/agent_config.rs", 1022],
   // codex-install-auto-restart review-fixes: should_restart_after_install
   // takes pid_alive:bool (pure predicate, no OS-dependent call); 3 racy
   // cache tests replaced with 6 pure availability_drift predicate tests;
@@ -486,7 +492,9 @@ const overrides = new Map([
   // groups, and the availability_drift tests deleted; ratcheted
   // 1576 -> 1184 to bank the deletions (main's Windows install-shell
   // machinery and tests stay).
-  ["src-tauri/src/commands/agent_discovery.rs", 1184],
+  // bridge-only bundling: runtime_adapter_is_bundled reads the explicit
+  // adapter_ships_with_app catalog field (+2 doc lines).
+  ["src-tauri/src/commands/agent_discovery.rs", 1187],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to

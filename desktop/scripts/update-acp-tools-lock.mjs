@@ -21,13 +21,18 @@ const SUPPORTED_TARGETS = [
 // Zed package.
 const CODEX_ACP_PACKAGE = "@agentclientprotocol/codex-acp";
 
+// Bridge-only bundling: only the bridge JS trees are pinned and installed
+// (`npm install --omit=optional` skips the SDK/codex platform packages that
+// vendor the native claude/codex CLIs). The desktop app points each bridge at
+// the user's own CLI via CLAUDE_CODE_EXECUTABLE / CODEX_PATH at spawn time.
+// The trees are therefore platform-independent, but the lock stays per-target
+// so a single target's pins can still be bumped or dropped independently.
 const TOOL_SPECS = [
   {
     id: "claude-acp",
     binary: "claude-agent-acp",
     package: "@agentclientprotocol/claude-agent-acp",
     dependencyPackage: "@anthropic-ai/claude-agent-sdk",
-    nativePackageKey: "claudeAgentSdk",
     includeClaudeCodeVersion: true,
   },
   {
@@ -35,74 +40,8 @@ const TOOL_SPECS = [
     binary: "codex-acp",
     package: CODEX_ACP_PACKAGE,
     dependencyPackage: "@openai/codex",
-    nativePackageKey: "openaiCodex",
   },
 ];
-
-const NPM_TARGET_CONFIG = {
-  "aarch64-apple-darwin": {
-    npmOs: "darwin",
-    npmCpu: "arm64",
-    nativePackages: {
-      claudeAgentSdk: "@anthropic-ai/claude-agent-sdk-darwin-arm64",
-      openaiCodex: "@openai/codex-darwin-arm64",
-    },
-    nativeExecutables: {
-      claudeAgentSdk: "claude",
-      openaiCodex: "vendor/aarch64-apple-darwin/bin/codex",
-    },
-  },
-  "x86_64-apple-darwin": {
-    npmOs: "darwin",
-    npmCpu: "x64",
-    nativePackages: {
-      claudeAgentSdk: "@anthropic-ai/claude-agent-sdk-darwin-x64",
-      openaiCodex: "@openai/codex-darwin-x64",
-    },
-    nativeExecutables: {
-      claudeAgentSdk: "claude",
-      openaiCodex: "vendor/x86_64-apple-darwin/bin/codex",
-    },
-  },
-  "aarch64-unknown-linux-gnu": {
-    npmOs: "linux",
-    npmCpu: "arm64",
-    npmLibc: "glibc",
-    nativePackages: {
-      claudeAgentSdk: "@anthropic-ai/claude-agent-sdk-linux-arm64",
-      openaiCodex: "@openai/codex-linux-arm64",
-    },
-    nativeExecutables: {
-      claudeAgentSdk: "claude",
-      openaiCodex: "vendor/aarch64-unknown-linux-musl/bin/codex",
-    },
-  },
-  "x86_64-unknown-linux-gnu": {
-    npmOs: "linux",
-    npmCpu: "x64",
-    npmLibc: "glibc",
-    nativePackages: {
-      claudeAgentSdk: "@anthropic-ai/claude-agent-sdk-linux-x64",
-      openaiCodex: "@openai/codex-linux-x64",
-    },
-    nativeExecutables: {
-      claudeAgentSdk: "claude",
-      openaiCodex: "vendor/x86_64-unknown-linux-musl/bin/codex",
-    },
-  },
-  "x86_64-pc-windows-msvc": {
-    npmOs: "win32",
-    npmCpu: "x64",
-    nativePackages: {
-      claudeAgentSdk: "@anthropic-ai/claude-agent-sdk-win32-x64",
-      openaiCodex: "@openai/codex-win32-x64",
-    },
-    nativeExecutables: {
-      claudeAgentSdk: "claude.exe",
-      openaiCodex: "vendor/x86_64-pc-windows-msvc/bin/codex.exe",
-    },
-  },
-};
 
 // Tarball URLs in the lock are informational — ensure-acp-tools.sh installs
 // via the ambient npm registry and validates the registry-agnostic sha512
@@ -118,9 +57,11 @@ function usage() {
   console.log(`Usage: desktop/scripts/update-acp-tools-lock.mjs [--target <triple>]... [--lock-file <path>]
 
 Queries npm for the latest release of each supported ACP bridge tool and
-writes acp-tools.lock.json. Fails loudly when a package or one of its
-per-target native dependencies cannot be resolved — never silently pins an
-older version.
+writes acp-tools.lock.json. Only the bridge JS packages are pinned — the
+SDK/codex platform packages that vendor native CLIs are optional dependencies
+the install omits; the app runs the user's own claude/codex CLI. Fails loudly
+when a package or its pinned dependency cannot be resolved — never silently
+pins an older version.
 
 A --target run regenerates only the selected targets; the existing lock's
 entries for every other target are preserved verbatim, so a partial bump
@@ -203,8 +144,8 @@ function requireString(value, label) {
 }
 
 // Rebuild the tarball URL on PUBLIC_NPM_REGISTRY, keeping the registry's
-// `<package>/-/<basename>.tgz` path (the basename is not always derivable
-// from name@version — @openai/codex native tarballs carry a platform suffix).
+// `<package>/-/<basename>.tgz` path rather than deriving the basename from
+// name@version — registries own that naming, not us.
 function normalizeTarballUrl(tarball, packageName, label) {
   const separator = "/-/";
   const separatorIndex = tarball.lastIndexOf(separator);
@@ -257,27 +198,7 @@ function pickLatestMatch(metadata, label) {
   );
 }
 
-function parseNpmAliasSpec(spec, fallbackPackage) {
-  if (!spec.startsWith("npm:")) {
-    return { packageName: fallbackPackage, version: spec };
-  }
-  const aliased = spec.slice("npm:".length);
-  const versionSeparator = aliased.lastIndexOf("@");
-  if (versionSeparator <= 0) {
-    throw new Error(`Unsupported npm alias spec: ${spec}`);
-  }
-  return {
-    packageName: aliased.slice(0, versionSeparator),
-    version: aliased.slice(versionSeparator + 1),
-  };
-}
-
 async function lockToolForTarget(tool, target) {
-  const npmTarget = NPM_TARGET_CONFIG[target];
-  if (!npmTarget) {
-    throw new Error(`No npm target mapping for ${target}`);
-  }
-
   const packageName = tool.package;
   const packageMetadata = await npmView(`${packageName}@latest`, [
     "name",
@@ -308,9 +229,6 @@ async function lockToolForTarget(tool, target) {
     integrity: packageInfo.integrity,
     tarball: packageInfo.tarball,
     target,
-    npmOs: npmTarget.npmOs,
-    npmCpu: npmTarget.npmCpu,
-    ...(npmTarget.npmLibc ? { npmLibc: npmTarget.npmLibc } : {}),
     nodeEngine: packageMetadata.engines?.node ?? ">=22",
   };
 
@@ -323,7 +241,6 @@ async function lockToolForTarget(tool, target) {
       "name",
       "version",
       "dist",
-      "optionalDependencies",
       "claudeCodeVersion",
     ]),
     `${tool.dependencyPackage}@${dependencyRange}`,
@@ -344,46 +261,7 @@ async function lockToolForTarget(tool, target) {
     entry.claudeCodeVersion = dependencyMetadata.claudeCodeVersion ?? null;
   }
 
-  const nativePackage = requireString(
-    npmTarget.nativePackages?.[tool.nativePackageKey],
-    `${target} native package for ${tool.nativePackageKey}`,
-  );
-  const nativeExecutable = requireString(
-    npmTarget.nativeExecutables?.[tool.nativePackageKey],
-    `${target} native executable for ${tool.nativePackageKey}`,
-  );
-  const nativeSpec = requireString(
-    dependencyMetadata.optionalDependencies?.[nativePackage],
-    `${tool.dependencyPackage}@${dependencyVersion} optional dependency ${nativePackage}`,
-  );
-  const nativeAlias = parseNpmAliasSpec(nativeSpec, nativePackage);
-  const nativeMetadata = await npmView(
-    `${nativeAlias.packageName}@${nativeAlias.version}`,
-    ["name", "version", "dist"],
-  );
-  const nativeVersion = requireString(
-    nativeMetadata.version,
-    `${nativeAlias.packageName}@${nativeAlias.version} version`,
-  );
-  if (nativeVersion !== nativeAlias.version) {
-    throw new Error(
-      `${nativeAlias.packageName}@${nativeAlias.version} resolved to ${nativeVersion}`,
-    );
-  }
-  const nativeInfo = packageDist(
-    nativeMetadata,
-    `${nativeAlias.packageName}@${nativeVersion}`,
-  );
-
-  return {
-    ...entry,
-    nativePackage,
-    nativePackageName: nativeMetadata.name ?? nativePackage,
-    nativeVersion,
-    nativeIntegrity: nativeInfo.integrity,
-    nativeTarball: nativeInfo.tarball,
-    nativeExecutable,
-  };
+  return entry;
 }
 
 // Entries preserved from the existing lock when --target selects a subset.

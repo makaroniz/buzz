@@ -26,11 +26,6 @@ const ACP_TOOLS_RESOURCE_DIR: &str = "resources/acp/bin";
 /// Node runtime manifest staged by `desktop/scripts/prepare-acp-tools-resource.sh`
 /// next to the bundled bin dir.
 const NODE_RUNTIME_MANIFEST_FILE: &str = "node-runtime.json";
-/// Harness CLI manifest staged next to the bin dir: one entry per native CLI
-/// vendored inside a bundled bridge (`claude` inside the claude-agent-sdk
-/// native package, `codex` inside @openai/codex), with paths relative to the
-/// acp resource root.
-const HARNESS_CLI_MANIFEST_FILE: &str = "harness-clis.json";
 
 static BUNDLED_ACP_TOOLS_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -84,52 +79,6 @@ pub(in crate::managed_agents) fn node_runtime_manifest_path(bin_dir: &Path) -> O
         .map(|dir| dir.join(NODE_RUNTIME_MANIFEST_FILE))
 }
 
-/// On-disk shape of `resources/acp/harness-clis.json`.
-#[derive(serde::Deserialize)]
-struct HarnessCliManifest {
-    #[serde(default)]
-    clis: Vec<HarnessCliEntry>,
-}
-
-#[derive(serde::Deserialize)]
-struct HarnessCliEntry {
-    cli: String,
-    path: String,
-}
-
-/// Resolve the pinned native harness CLI (`claude`, `codex`) vendored inside
-/// a bundled bridge, via the staged `harness-clis.json` manifest. This is the
-/// same binary the bridge itself runs, so auth probes against it can never
-/// drift from what agent sessions see. Bare command names only, mirroring
-/// [`command_in_bundled_dir`]. Deliberately separate from the bin dir: these
-/// CLIs must never join the agent-spawn PATH, where they would shadow the
-/// user's (possibly newer) installs inside every session.
-pub(in crate::managed_agents) fn bundled_harness_cli(cli: &str) -> Option<PathBuf> {
-    let bin_dir = bundled_acp_tools_dir()?;
-    bundled_harness_cli_in_root(bin_dir.parent()?, cli)
-}
-
-fn bundled_harness_cli_in_root(acp_root: &Path, cli: &str) -> Option<PathBuf> {
-    if command_looks_like_path(cli) {
-        return None;
-    }
-    let manifest = std::fs::read_to_string(acp_root.join(HARNESS_CLI_MANIFEST_FILE)).ok()?;
-    let manifest: HarnessCliManifest = serde_json::from_str(&manifest).ok()?;
-    let entry = manifest.clis.into_iter().find(|entry| entry.cli == cli)?;
-    let relative = PathBuf::from(entry.path);
-    // Manifest paths are acp-root-relative by contract; anything absolute or
-    // escaping the root is malformed and must not resolve.
-    let escapes = relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir));
-    if escapes {
-        return None;
-    }
-    let candidate = acp_root.join(relative);
-    is_executable_file(&candidate).then_some(candidate)
-}
-
 fn command_in_dir(dir: &Path, command: &str) -> Option<PathBuf> {
     if command_looks_like_path(command) {
         return None;
@@ -152,10 +101,7 @@ fn bundled_acp_tools_dir_from_parts(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bundled_acp_tools_dir_from_parts, bundled_harness_cli_in_root, command_in_dir,
-        path_is_in_dir,
-    };
+    use super::{bundled_acp_tools_dir_from_parts, command_in_dir, path_is_in_dir};
     use std::ffi::OsStr;
     use std::path::Path;
 
@@ -253,74 +199,6 @@ mod tests {
         // the regular resolution order untouched.
         assert!(command_in_dir(temp.path(), tool.to_str().expect("utf8")).is_none());
         assert!(command_in_dir(temp.path(), "custom/codex-acp").is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bundled_harness_cli_resolves_manifest_relative_path() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = tempfile::tempdir().expect("temp dir");
-        let vendored = temp.path().join("node/claude-acp/node_modules/sdk-native");
-        fs::create_dir_all(&vendored).expect("vendored dir");
-        let cli = vendored.join("claude");
-        fs::write(&cli, "#!/bin/sh\n").expect("write cli");
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("chmod cli");
-        fs::write(
-            temp.path().join("harness-clis.json"),
-            r#"{"clis":[{"id":"claude-acp","cli":"claude","path":"node/claude-acp/node_modules/sdk-native/claude"}]}"#,
-        )
-        .expect("write manifest");
-
-        assert_eq!(
-            bundled_harness_cli_in_root(temp.path(), "claude").as_deref(),
-            Some(cli.as_path()),
-        );
-        assert!(
-            bundled_harness_cli_in_root(temp.path(), "codex").is_none(),
-            "a CLI absent from the manifest must not resolve"
-        );
-    }
-
-    #[test]
-    fn bundled_harness_cli_without_manifest_is_none() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        assert!(bundled_harness_cli_in_root(temp.path(), "claude").is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bundled_harness_cli_rejects_escaping_paths_and_path_like_names() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = tempfile::tempdir().expect("temp dir");
-        let outside = temp.path().join("outside");
-        fs::write(&outside, "#!/bin/sh\n").expect("write outside");
-        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).expect("chmod outside");
-        let root = temp.path().join("acp");
-        fs::create_dir_all(&root).expect("acp root");
-        fs::write(
-            root.join("harness-clis.json"),
-            format!(
-                r#"{{"clis":[{{"id":"a","cli":"escape","path":"../outside"}},{{"id":"b","cli":"absolute","path":"{}"}}]}}"#,
-                outside.display()
-            ),
-        )
-        .expect("write manifest");
-
-        assert!(
-            bundled_harness_cli_in_root(&root, "escape").is_none(),
-            "a ..-escaping manifest path must not resolve"
-        );
-        assert!(
-            bundled_harness_cli_in_root(&root, "absolute").is_none(),
-            "an absolute manifest path must not resolve"
-        );
-        // Path-like probe names bypass the manifest entirely — they name a
-        // specific binary and must fall through to regular resolution.
-        assert!(bundled_harness_cli_in_root(&root, "some/claude").is_none());
     }
 
     #[cfg(unix)]

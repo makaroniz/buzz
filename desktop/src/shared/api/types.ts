@@ -554,14 +554,10 @@ export type GitBashPrerequisite = {
   installHint: string;
 };
 
-/**
- * The retired "cli_missing" state (adapter present, user CLI absent) is gone:
- * the bundled bridges vendor their own CLI, so a resolving adapter is
- * available regardless of user installs — sign-in state lives in AuthStatus.
- */
 export type AcpAvailabilityStatus =
   | "available"
   | "adapter_missing"
+  | "cli_missing"
   | "not_installed";
 
 /** Authentication/login status for a CLI-based ACP runtime. */

@@ -108,7 +108,7 @@ test("validateLinkedAgentRuntimeEdit rejects unavailable linked-agent runtime ch
       input: updateInput({ runtime: "claude" }),
       managedAgent: agent(),
       previousPersona: persona({ runtime: "goose" }),
-      runtimes: [runtime({ availability: "not_installed", command: null })],
+      runtimes: [runtime({ availability: "cli_missing", command: null })],
     }),
     "Claude Code is not available. Install it before saving this linked agent.",
   );

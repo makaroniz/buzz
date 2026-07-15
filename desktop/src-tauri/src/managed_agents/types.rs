@@ -523,14 +523,12 @@ pub struct ManagedAgentLogResponse {
     pub log_path: String,
 }
 
-/// The retired `CliMissing` variant (adapter present, user CLI absent) is
-/// gone: the bundled bridges vendor their own CLI, so a resolving adapter is
-/// available regardless of user installs — sign-in state is `AuthStatus`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpAvailabilityStatus {
     Available,
     AdapterMissing,
+    CliMissing,
     NotInstalled,
 }
 

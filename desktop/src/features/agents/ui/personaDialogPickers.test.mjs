@@ -97,7 +97,7 @@ test("getDefaultPersonaRuntime falls back to goose when buzz-agent is unavailabl
 test("getDefaultPersonaRuntime returns first available when neither buzz-agent nor goose is available", () => {
   const runtimes = [
     makeRuntime("buzz-agent", "adapter_missing"),
-    makeRuntime("goose", "not_installed"),
+    makeRuntime("goose", "cli_missing"),
     makeRuntime("claude"),
   ];
   const result = getDefaultPersonaRuntime(runtimes);
@@ -111,7 +111,7 @@ test("getDefaultPersonaRuntime returns null for an empty list", () => {
 test("getDefaultPersonaRuntime returns null when no runtime is available", () => {
   const runtimes = [
     makeRuntime("buzz-agent", "not_installed"),
-    makeRuntime("goose", "adapter_missing"),
+    makeRuntime("goose", "cli_missing"),
   ];
   assert.equal(getDefaultPersonaRuntime(runtimes), null);
 });
@@ -168,7 +168,11 @@ test("getPersonaModelOptions for buzz-agent with no provider returns default mod
 // is non-null (so the UI surfaces the reason) for each unavailability reason.
 
 test("formatModelDiscoveryErrorStatus returns a non-null status for runtime unavailable errors", () => {
-  for (const availability of ["adapter_missing", "not_installed"]) {
+  for (const availability of [
+    "adapter_missing",
+    "cli_missing",
+    "not_installed",
+  ]) {
     const status = formatModelDiscoveryErrorStatus(
       new Error(`Runtime not available: ${availability}`),
       "anthropic",

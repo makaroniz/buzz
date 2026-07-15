@@ -1579,6 +1579,31 @@ pub fn spawn_agent_child(
         command.env("MCP_HOOK_SERVERS", "*");
     }
 
+    // Point the bundled bridge at the user's harness CLI. The bridge-only
+    // bundles vendor no CLI: the claude bridge only looks at
+    // CLAUDE_CODE_EXECUTABLE (or the omitted SDK native package) and the
+    // codex bridge's CODEX_PATH fallback hard-requires the omitted platform
+    // package — neither falls back to PATH. A value already present in the
+    // desktop's own environment is inherited untouched (it names a binary the
+    // user picked), and a per-agent env var applied below overrides this one.
+    // Resolution failure is non-fatal here: readiness classifies the runtime
+    // CliMissing and the agent enters setup mode instead of the pool.
+    if let Some((cli, env_var)) =
+        runtime_meta.and_then(|r| r.underlying_cli.zip(r.bridge_cli_env_var))
+    {
+        if std::env::var_os(env_var).is_none() {
+            match resolve_command(cli) {
+                Some(path) => {
+                    command.env(env_var, &path);
+                }
+                None => eprintln!(
+                    "buzz-desktop: {cli} not found for {env_var}; \
+                     bridge sessions will fail until it is installed"
+                ),
+            }
+        }
+    }
+
     // ── Readiness check: set setup-payload if agent is not ready ─────────────
     //
     // Build the effective env the agent would have at start-time, run the

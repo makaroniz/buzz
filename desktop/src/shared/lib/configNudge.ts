@@ -32,7 +32,8 @@ export type ConfigNudgeRequirement =
        * Determines which message and CTA the nudge card shows:
        * - "available"         → tooling installed, needs login
        * - "adapter_missing"   → CLI installed but ACP adapter missing
-       * - "not_installed"     → no adapter found
+       * - "cli_missing"       → ACP adapter installed but CLI missing
+       * - "not_installed"     → neither adapter nor CLI found
        */
       availability: AcpAvailabilityStatus;
     }
@@ -138,11 +139,9 @@ function isConfigNudgeRequirement(v: unknown): v is ConfigNudgeRequirement {
         Array.isArray(r.probe_args) &&
         r.probe_args.every((a) => typeof a === "string") &&
         typeof r.setup_copy === "string" &&
-        // Retired literals ("adapter_outdated", "cli_missing") emitted by
-        // older app versions are rejected here so stale nudge JSON cannot
-        // render a card the current UI has no branch for.
         (r.availability === "available" ||
           r.availability === "adapter_missing" ||
+          r.availability === "cli_missing" ||
           r.availability === "not_installed")
       );
     case "git_bash":

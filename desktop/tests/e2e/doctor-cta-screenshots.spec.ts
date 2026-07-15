@@ -257,7 +257,44 @@ test.describe("doctor CTA nudge card screenshots", () => {
     });
   });
 
-  // The former 04-cli-login-cli-missing-state test retired with the
-  // cli_missing gate: the validator now rejects that availability literal,
-  // so no card renders for it (see configNudge.test.mjs).
+  /**
+   * 04 — cli_missing state: ACP adapter present but underlying CLI absent.
+   * Shows "claude CLI is missing" copy.
+   */
+  test("04-cli-login-cli-missing-state", async ({ page }) => {
+    await installMockBridge(page, {
+      managedAgents: [
+        {
+          pubkey: AGENT_PUBKEY,
+          name: AGENT_NAME,
+          status: "stopped" as const,
+          channelNames: ["general"],
+        },
+      ],
+    });
+
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+
+    const content = makeNudgeSentinel(AGENT_NAME, AGENT_PUBKEY, [
+      {
+        surface: "cli_login",
+        probe_args: ["claude"],
+        setup_copy: "install the Claude CLI",
+        availability: "cli_missing",
+      },
+    ]);
+
+    await injectNudgeAndNavigate(page, content);
+
+    const card = page.locator("[data-config-nudge]").last();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await expect(card.getByText(/CLI is missing/)).toBeVisible();
+
+    await card.scrollIntoViewIfNeeded();
+    await settleAnimations(page);
+
+    await card.screenshot({
+      path: `${SHOTS}/04-cli-login-cli-missing-state.png`,
+    });
+  });
 });

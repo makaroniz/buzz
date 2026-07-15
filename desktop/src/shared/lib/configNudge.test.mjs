@@ -103,30 +103,6 @@ test("extractConfigNudge rejects retired adapter_outdated availability", () => {
   );
 });
 
-test("extractConfigNudge rejects retired cli_missing availability", () => {
-  // The cli_missing gate was retired when auth probes moved to the CLIs
-  // vendored inside the bundled bridges — a user CLI install no longer gates
-  // availability. Stale nudge JSON emitted by an older app version must not
-  // parse into a card the current UI has no rendering for.
-  const payload = {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
-    requirements: [
-      {
-        surface: "cli_login",
-        probe_args: ["claude", "auth", "status"],
-        setup_copy: "install the Claude CLI",
-        availability: "cli_missing",
-      },
-    ],
-  };
-  assert.equal(
-    extractConfigNudge(withSentinel("prose", payload)),
-    null,
-    "retired cli_missing availability must be rejected by the validator",
-  );
-});
-
 test("extractConfigNudge returns null for cli_login without availability", () => {
   // availability is required — old-format payloads (no availability field)
   // must not parse so stale nudge JSON from before the Doctor-CTA update

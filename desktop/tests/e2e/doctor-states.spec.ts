@@ -48,9 +48,6 @@ const BUZZ_AGENT_AVAILABLE = {
 /**
  * Claude available and logged in — used as a neutral entry when claude is not
  * the runtime under test, and as the base for the auth states being tested.
- * No `underlying_cli_path` and no auto-install: the bundled bridge vendors
- * its own CLI, so the backend reports neither for claude since the
- * cli_missing gate was retired.
  */
 const CLAUDE_AVAILABLE_LOGGED_IN = {
   id: "claude",
@@ -64,8 +61,8 @@ const CLAUDE_AVAILABLE_LOGGED_IN = {
   install_hint: "",
   install_instructions_url:
     "https://github.com/agentclientprotocol/claude-agent-acp",
-  can_auto_install: false,
-  underlying_cli_path: null,
+  can_auto_install: true,
+  underlying_cli_path: "/usr/local/bin/claude",
   auth_status: { status: "logged_in" },
 };
 
@@ -149,6 +146,7 @@ test.describe("Doctor panel state screenshots", () => {
           availability: "available",
           command: "codex-acp",
           binary_path: "/usr/local/bin/codex-acp",
+          underlying_cli_path: "/usr/local/bin/codex",
           auth_status: { status: "logged_out" },
           login_hint: "Run `codex login` to authenticate.",
         },
@@ -416,8 +414,8 @@ test.describe("Doctor panel state screenshots", () => {
   /**
    * 09 — available runtime whose adapter is the bridge bundled with the app:
    * the row says "Bundled with Buzz" instead of rendering the
-   * resource-dir path, and no CLI path renders — the bundled bridge vendors
-   * its own CLI, so the user-CLI row retired with the cli_missing gate.
+   * resource-dir path; the user's CLI path still renders (the bridge-only
+   * bundle runs the user's claude CLI).
    */
   test("09-bundled-adapter", async ({ page }) => {
     const bundledPath =
@@ -441,7 +439,7 @@ test.describe("Doctor panel state screenshots", () => {
     const row = page.getByTestId("doctor-runtime-claude");
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row).toContainText("Bundled with Buzz.");
-    await expect(row).not.toContainText("CLI:");
+    await expect(row).toContainText("/usr/local/bin/claude");
     await expect(row).not.toContainText(bundledPath);
     await expect(row).not.toContainText("installed on PATH");
 

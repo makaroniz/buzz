@@ -103,6 +103,8 @@ function cliLoginMessage(
   switch (req.availability) {
     case "not_installed":
       return `${harness} isn't installed`;
+    case "cli_missing":
+      return `${harness} CLI is missing`;
     case "adapter_missing":
       return `${harness} ACP adapter isn't installed`;
     case "available":

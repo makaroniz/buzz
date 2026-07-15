@@ -16,10 +16,13 @@ Installs the ACP bridge tools pinned in acp-tools.lock.json into the shared
 Buzz dev cache. The lockfile is target-specific; only entries matching the
 requested target are prepared. Each tool is installed as a vendored npm
 package tree with a small executable wrapper, validated against the locked
-versions and integrity hashes. Unix targets get a bash wrapper shim; Windows
-targets get the compiled buzz-acp-node-launcher staged as <binary>.exe next
-to a <binary>.shim.json manifest (built with cargo, override with
-ACP_NODE_LAUNCHER_EXE).
+versions and integrity hashes. Installs are bridge-only: --omit=optional
+skips the SDK/codex platform packages that vendor native CLIs, so the trees
+stay pure JS and the desktop app points each bridge at the user's own
+claude/codex CLI at spawn time. Unix targets get a bash wrapper shim;
+Windows targets get the compiled buzz-acp-node-launcher staged as
+<binary>.exe next to a <binary>.shim.json manifest (built with cargo,
+override with ACP_NODE_LAUNCHER_EXE).
 
 Environment variables:
   ACP_TOOLS_LOCK_FILE    lockfile path (default: desktop/acp-tools.lock.json)
@@ -111,18 +114,10 @@ for (const entry of entries) {
     "version",
     "integrity",
     "tarball",
-    "npmOs",
-    "npmCpu",
     "dependencyPackage",
     "dependencyVersion",
     "dependencyIntegrity",
     "dependencyTarball",
-    "nativePackage",
-    "nativePackageName",
-    "nativeVersion",
-    "nativeIntegrity",
-    "nativeTarball",
-    "nativeExecutable",
   ]) {
     requireString(entry, field);
   }
@@ -161,14 +156,9 @@ validate_npm_install() {
   local dependency_package="$5"
   local dependency_version="$6"
   local dependency_integrity="$7"
-  local native_package="$8"
-  local native_package_name="$9"
-  local native_version="${10}"
-  local native_integrity="${11}"
-  local native_executable="${12}"
-  local claude_code_version="${13}"
+  local claude_code_version="$8"
 
-  node - "$install_dir" "$package" "$version" "$integrity" "$dependency_package" "$dependency_version" "$dependency_integrity" "$native_package" "$native_package_name" "$native_version" "$native_integrity" "$native_executable" "$claude_code_version" <<'NODE'
+  node - "$install_dir" "$package" "$version" "$integrity" "$dependency_package" "$dependency_version" "$dependency_integrity" "$claude_code_version" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -180,11 +170,6 @@ const [
   dependencyPackageName,
   expectedDependencyVersion,
   expectedDependencyIntegrity,
-  nativePackageName,
-  expectedNativePackageName,
-  expectedNativeVersion,
-  expectedNativeIntegrity,
-  nativeExecutable,
   expectedClaudeCodeVersion,
 ] = process.argv.slice(2);
 
@@ -242,23 +227,25 @@ assertEqual(
   `${dependencyPackageName} integrity`,
 );
 
-const nativePackageJson = readJson(packagePath(nativePackageName, "package.json"));
-assertEqual(
-  nativePackageJson.name,
-  expectedNativePackageName,
-  `${nativePackageName} package name`,
+// Bridge-only invariant: --omit=optional must have skipped the platform
+// packages that vendor a native CLI. They install as scope siblings of the
+// dependency package (`<dependencyPackage>-<platform>`), so any such
+// directory means a native CLI slipped into the bundle.
+const dependencySegments = dependencyPackageName.split("/");
+const dependencyBasename = dependencySegments.at(-1);
+const scopeDir = path.join(
+  installDir,
+  "node_modules",
+  ...dependencySegments.slice(0, -1),
 );
-assertEqual(
-  nativePackageJson.version,
-  expectedNativeVersion,
-  `${nativePackageName} version`,
-);
-fs.accessSync(packagePath(nativePackageName, nativeExecutable), fs.constants.X_OK);
-assertEqual(
-  packageLockEntry(lock, nativePackageName).integrity,
-  expectedNativeIntegrity,
-  `${nativePackageName} integrity`,
-);
+const vendoredPlatformPackages = fs
+  .readdirSync(scopeDir)
+  .filter((name) => name.startsWith(`${dependencyBasename}-`));
+if (vendoredPlatformPackages.length > 0) {
+  throw new Error(
+    `bridge-only install unexpectedly vendored native CLI package(s): ${vendoredPlatformPackages.join(", ")}`,
+  );
+}
 NODE
 }
 
@@ -272,31 +259,21 @@ for (const entry of entries) {
     entry.version,
     entry.integrity,
     entry.tarball,
-    entry.npmOs,
-    entry.npmCpu,
-    entry.npmLibc ?? "",
     entry.nodeEngine ?? ">=22",
     entry.dependencyPackage,
     entry.dependencyVersion,
     entry.dependencyIntegrity,
     entry.dependencyTarball,
-    entry.nativePackage,
-    entry.nativePackageName,
-    entry.nativeVersion,
-    entry.nativeIntegrity,
-    entry.nativeTarball,
-    entry.nativeExecutable,
     entry.claudeCodeVersion ?? "",
   ].join("\x1f"));
 }
-' "$lock_entries" | while IFS=$'\x1f' read -r id binary package version integrity tarball npm_os npm_cpu npm_libc node_engine dependency_package dependency_version dependency_integrity dependency_tarball native_package native_package_name native_version native_integrity native_tarball native_executable claude_code_version; do
+' "$lock_entries" | while IFS=$'\x1f' read -r id binary package version integrity tarball node_engine dependency_package dependency_version dependency_integrity dependency_tarball claude_code_version; do
   [[ -n "$id" ]] || continue
 
   tool_dir="$cache_root/$target/$id/$version"
   install_dir="$tool_dir/npm"
   package_dir="$install_dir/node_modules/$package"
   entrypoint="$package_dir/dist/index.js"
-  native_binary="$install_dir/node_modules/$native_package/$native_executable"
   staged_bin="$bin_dir/$(acp_staged_binary_name "$binary" "$target")"
   # Windows shims embed a bin-dir-relative entrypoint: under Git Bash the
   # absolute cache path is POSIX-style (/c/Users/...), which the native
@@ -306,10 +283,13 @@ for (const entry of entries) {
   # must live next to it, not in the per-version tool_dir: a per-version stamp
   # stays self-consistent after a lock revert and would skip re-staging.
   stamp="$staged_bin.stamp"
-  if [[ -x "$staged_bin" && -f "$stamp" && -f "$entrypoint" && -x "$native_binary" ]]; then
+  if [[ -x "$staged_bin" && -f "$stamp" && -f "$entrypoint" ]]; then
     # shellcheck disable=SC1090
     source "$stamp"
-    if [[ "${STAMP_PACKAGE:-}" == "$package" && "${STAMP_VERSION:-}" == "$version" && "${STAMP_INTEGRITY:-}" == "$integrity" && "${STAMP_DEPENDENCY_PACKAGE:-}" == "$dependency_package" && "${STAMP_DEPENDENCY_VERSION:-}" == "$dependency_version" && "${STAMP_DEPENDENCY_INTEGRITY:-}" == "$dependency_integrity" && "${STAMP_NATIVE_PACKAGE:-}" == "$native_package" && "${STAMP_NATIVE_PACKAGE_NAME:-}" == "$native_package_name" && "${STAMP_NATIVE_VERSION:-}" == "$native_version" && "${STAMP_NATIVE_INTEGRITY:-}" == "$native_integrity" && "${STAMP_NATIVE_EXECUTABLE:-}" == "$native_executable" ]]; then
+    # STAMP_INSTALL_MODE distinguishes bridge-only trees from caches staged by
+    # the retired full-CLI bundling (whose stamps lack the marker): those trees
+    # still vendor the native CLIs and must be reinstalled, not reused.
+    if [[ "${STAMP_INSTALL_MODE:-}" == "bridge-only" && "${STAMP_PACKAGE:-}" == "$package" && "${STAMP_VERSION:-}" == "$version" && "${STAMP_INTEGRITY:-}" == "$integrity" && "${STAMP_DEPENDENCY_PACKAGE:-}" == "$dependency_package" && "${STAMP_DEPENDENCY_VERSION:-}" == "$dependency_version" && "${STAMP_DEPENDENCY_INTEGRITY:-}" == "$dependency_integrity" ]]; then
       # The npm tree is fresh, but the compiled launcher tracks the crate,
       # not the lock, so the stamp cannot see it change — refresh it every
       # run (the copy no-ops when already identical).
@@ -323,50 +303,37 @@ for (const entry of entries) {
   echo "Installing ACP tool $id $version from npm for $target..." >&2
   rm -rf "$install_dir"
   mkdir -p "$install_dir" "$bin_dir"
-  npm_args=(
-    install
-    --prefix "$install_dir"
-    --omit=dev
-    --include=optional
-    --ignore-scripts
-    --no-audit
-    --no-fund
-    --os "$npm_os"
-    --cpu "$npm_cpu"
-  )
-  if [[ -n "$npm_libc" ]]; then
-    npm_args+=(--libc "$npm_libc")
-  fi
-  npm_args+=("$package@$version")
-  npm "${npm_args[@]}" >&2
+  # --omit=optional is what makes the install bridge-only: the native
+  # claude/codex CLIs ship as optional platform packages of the pinned
+  # dependency, and skipping them keeps the tree pure JS.
+  npm install \
+    --prefix "$install_dir" \
+    --omit=dev \
+    --omit=optional \
+    --ignore-scripts \
+    --no-audit \
+    --no-fund \
+    "$package@$version" >&2
 
-  validate_npm_install "$install_dir" "$package" "$version" "$integrity" "$dependency_package" "$dependency_version" "$dependency_integrity" "$native_package" "$native_package_name" "$native_version" "$native_integrity" "$native_executable" "$claude_code_version"
+  validate_npm_install "$install_dir" "$package" "$version" "$integrity" "$dependency_package" "$dependency_version" "$dependency_integrity" "$claude_code_version"
   if acp_target_is_windows "$target"; then
     write_windows_node_launcher "$staged_bin" "$launcher_exe" "$entrypoint_from_bin_dir" "$node_engine"
   else
     write_node_wrapper "$staged_bin" "$entrypoint" "$node_engine"
   fi
   {
+    printf 'STAMP_INSTALL_MODE=bridge-only\n'
     printf 'STAMP_TARGET=%q\n' "$target"
     printf 'STAMP_PACKAGE=%q\n' "$package"
     printf 'STAMP_VERSION=%q\n' "$version"
     printf 'STAMP_INTEGRITY=%q\n' "$integrity"
     printf 'STAMP_TARBALL=%q\n' "$tarball"
-    printf 'STAMP_NPM_OS=%q\n' "$npm_os"
-    printf 'STAMP_NPM_CPU=%q\n' "$npm_cpu"
-    printf 'STAMP_NPM_LIBC=%q\n' "$npm_libc"
     printf 'STAMP_NODE_ENGINE=%q\n' "$node_engine"
     printf 'STAMP_DEPENDENCY_PACKAGE=%q\n' "$dependency_package"
     printf 'STAMP_DEPENDENCY_VERSION=%q\n' "$dependency_version"
     printf 'STAMP_DEPENDENCY_INTEGRITY=%q\n' "$dependency_integrity"
     printf 'STAMP_DEPENDENCY_TARBALL=%q\n' "$dependency_tarball"
     printf 'STAMP_CLAUDE_CODE_VERSION=%q\n' "$claude_code_version"
-    printf 'STAMP_NATIVE_PACKAGE=%q\n' "$native_package"
-    printf 'STAMP_NATIVE_PACKAGE_NAME=%q\n' "$native_package_name"
-    printf 'STAMP_NATIVE_VERSION=%q\n' "$native_version"
-    printf 'STAMP_NATIVE_INTEGRITY=%q\n' "$native_integrity"
-    printf 'STAMP_NATIVE_TARBALL=%q\n' "$native_tarball"
-    printf 'STAMP_NATIVE_EXECUTABLE=%q\n' "$native_executable"
     printf 'STAMP_BINARY=%q\n' "$binary"
   } > "$stamp"
 done

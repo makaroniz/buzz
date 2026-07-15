@@ -176,17 +176,40 @@ fn classifies_not_installed_when_no_underlying_cli() {
 }
 
 #[test]
-fn classifies_available_when_adapter_found_even_without_underlying_cli() {
-    // The retired CliMissing gate must not come back: a resolving adapter is
-    // available regardless of whether an underlying CLI is on the user PATH.
+fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
     let (status, cmd, path) = classify_runtime(
         Some(("codex-acp", PathBuf::from("/opt/homebrew/bin/codex-acp"))),
         Some("codex"),
         false,
     );
-    assert_eq!(status, AcpAvailabilityStatus::Available);
+    assert_eq!(status, AcpAvailabilityStatus::CliMissing);
     assert_eq!(cmd.as_deref(), Some("codex-acp"));
     assert_eq!(path.as_deref(), Some("/opt/homebrew/bin/codex-acp"));
+}
+
+#[test]
+fn bridge_cli_env_vars_map_bundled_bridges_to_the_user_cli() {
+    // The bridge-only bundles vendor no CLI, so spawn must export exactly
+    // these env vars for the bridges to find the user's install. Pinned here
+    // because a drifted mapping fails silently — sessions die at bridge
+    // startup, not at build time.
+    let expectations = [
+        ("claude", Some("CLAUDE_CODE_EXECUTABLE")),
+        ("codex", Some("CODEX_PATH")),
+        ("goose", None),
+        ("buzz-agent", None),
+    ];
+    for (id, expected) in expectations {
+        let runtime = crate::managed_agents::known_acp_runtime_exact(id)
+            .unwrap_or_else(|| panic!("{id} must be in the catalog"));
+        assert_eq!(runtime.bridge_cli_env_var, expected, "runtime {id}");
+        if runtime.bridge_cli_env_var.is_some() {
+            assert!(
+                runtime.underlying_cli.is_some(),
+                "{id}: a bridge CLI env var is meaningless without an underlying CLI to resolve"
+            );
+        }
+    }
 }
 
 fn persona_with_runtime(id: &str, runtime: Option<&str>) -> crate::managed_agents::AgentDefinition {
@@ -870,51 +893,65 @@ fn test_command_basenames_dotted_name_no_extra_candidates() {
 
 // ── Phase B: cli_install_commands_for_os ────────────────────────────────────
 
-/// Claude and Codex vendor their CLIs inside the bundled ACP packages —
-/// the curl-pipe install commands are retired with the cli_missing gate.
+/// Claude and Codex have non-empty default cli_install_commands (install.sh) —
+/// bridge-only bundling means the user's own CLI must be installable again.
 #[test]
-fn test_claude_and_codex_have_no_cli_install_commands() {
+fn test_claude_and_codex_have_cli_install_commands() {
     let claude = super::known_acp_runtime_exact("claude").unwrap();
     let codex = super::known_acp_runtime_exact("codex").unwrap();
     assert!(
-        claude.cli_install_commands.is_empty(),
-        "claude CLI ships inside the bundled adapter — must not have cli install commands"
+        !claude.cli_install_commands.is_empty(),
+        "claude must have cli install commands"
     );
     assert!(
-        codex.cli_install_commands.is_empty(),
-        "codex CLI ships inside the bundled adapter — must not have cli install commands"
+        !codex.cli_install_commands.is_empty(),
+        "codex must have cli install commands"
     );
 }
 
-/// cli_install_commands_for_os is empty for claude and codex on every platform.
+/// cli_install_commands_for_os returns a non-empty slice for claude and codex.
 #[test]
-fn test_cli_install_commands_for_os_empty_for_claude_codex() {
+fn test_cli_install_commands_for_os_non_empty_for_claude_codex() {
     let claude = super::known_acp_runtime_exact("claude").unwrap();
     let codex = super::known_acp_runtime_exact("codex").unwrap();
     assert!(
-        claude.cli_install_commands_for_os().is_empty(),
-        "claude must not have install commands on any platform"
+        !claude.cli_install_commands_for_os().is_empty(),
+        "claude must have install commands on every platform"
     );
     assert!(
-        codex.cli_install_commands_for_os().is_empty(),
-        "codex must not have install commands on any platform"
+        !codex.cli_install_commands_for_os().is_empty(),
+        "codex must have install commands on every platform"
     );
 }
 
-/// On Windows, the bundled runtimes still expose no install commands, and
-/// goose keeps its platform-neutral commands.
+/// On Windows, Claude and Codex select the PowerShell install commands.
 #[cfg(windows)]
 #[test]
-fn test_cli_install_commands_for_os_on_windows() {
+fn test_cli_install_commands_for_os_selects_powershell_on_windows() {
     let claude = super::known_acp_runtime_exact("claude").unwrap();
     let codex = super::known_acp_runtime_exact("codex").unwrap();
+
+    // Windows must select the PowerShell commands, not the curl|bash ones.
+    let claude_cmds = claude.cli_install_commands_for_os();
+    let codex_cmds = codex.cli_install_commands_for_os();
+
+    assert_ne!(
+        claude_cmds, claude.cli_install_commands,
+        "Windows must NOT use the default curl|bash commands for claude"
+    );
+    assert_ne!(
+        codex_cmds, codex.cli_install_commands,
+        "Windows must NOT use the default curl|bash commands for codex"
+    );
+
+    // Verify they are the PowerShell installers.
     assert!(
-        claude.cli_install_commands_for_os().is_empty(),
-        "claude ships bundled — no Windows install commands"
+        claude_cmds.iter().any(|c| c.contains("powershell")),
+        "claude Windows install must use powershell; got: {claude_cmds:?}"
     );
     assert!(
-        codex.cli_install_commands_for_os().is_empty(),
-        "codex ships bundled — no Windows install commands"
+        codex_cmds.iter().any(|c| c.contains("powershell")),
+        "codex Windows install must use powershell; got: {codex_cmds:?}"
     );
 
     // Goose and buzz-agent must NOT use Windows-specific commands.

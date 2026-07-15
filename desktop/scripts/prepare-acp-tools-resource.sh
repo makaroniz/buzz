@@ -67,15 +67,11 @@ node_runtime_manifest="$resource_root/node-runtime.json"
 rm -f "$node_runtime_manifest"
 node_runtime_entries=()
 
-# Manifest of the native harness CLIs vendored inside the bundled bridges
-# (e.g. `claude` inside the claude-agent-sdk native package, `codex` inside
-# @openai/codex). The app resolves auth probes against these pinned binaries
-# instead of user installs. Kept OUT of resources/acp/bin on purpose: that
-# dir is the highest-priority segment of the agent-spawn PATH, and staging
-# `claude`/`codex` there would shadow the user's CLIs inside every session.
-harness_cli_manifest="$resource_root/harness-clis.json"
-rm -f "$harness_cli_manifest"
-harness_cli_entries=()
+# Stale artifact of the retired full-CLI bundling: the harness CLI manifest
+# pointed auth probes at CLIs vendored inside the bundles. Bridge-only
+# bundles carry no CLIs, so remove any leftover manifest from an earlier
+# stage — it is unread, but it would otherwise ride into the app bundle.
+rm -f "$resource_root/harness-clis.json"
 
 # Ad-hoc signing failure is a warning, not a hard stop: an unsignable Mach-O
 # fragment that never executes should not sink the stage, and release builds
@@ -93,7 +89,7 @@ codesign_if_darwin() {
   fi
 }
 
-while IFS=$'\t' read -r id binary package version node_engine native_package native_executable; do
+while IFS=$'\t' read -r id binary package version node_engine; do
   [[ -n "$id" ]] || continue
   install_dir="$cache_root/$target/$id/$version/npm"
   entrypoint="$install_dir/node_modules/$package/dist/index.js"
@@ -118,29 +114,10 @@ while IFS=$'\t' read -r id binary package version node_engine native_package nat
     write_node_wrapper "$resource_bin_dir/$binary" "../node/$id/node_modules/$package/dist/index.js" "$node_engine"
   fi
   node_runtime_entries+=("$id"$'\t'"$binary"$'\t'"$node_engine"$'\t'"$(acp_required_node_major "$node_engine")")
-  # Record the vendored native harness CLI (relative to the acp resource
-  # root) for the auth-probe manifest. Fail loudly if the lock names one
-  # that is not in the staged tree — a silent miss would quietly send auth
-  # probes back to unpinned user installs.
-  if [[ -n "$native_package" && -n "$native_executable" ]]; then
-    cli_relpath="node/$id/node_modules/$native_package/$native_executable"
-    cli_abspath="$resource_root/$cli_relpath"
-    if [[ ! -f "$cli_abspath" ]]; then
-      echo "Locked native harness CLI missing from staged tree: $cli_relpath" >&2
-      exit 1
-    fi
-    chmod +x "$cli_abspath"
-    # The manifest keys CLIs by the bare probe name the app resolves
-    # ("claude", "codex"), so the Windows vendored executables drop their
-    # .exe suffix here.
-    cli_name="$(basename "$native_executable")"
-    cli_name="${cli_name%.exe}"
-    harness_cli_entries+=("$id"$'\t'"$cli_name"$'\t'"$cli_relpath")
-  fi
-  # Ad-hoc sign every Mach-O in the staged package, not just the main CLIs:
-  # the codex native package also vendors executables like rg and zsh, and
-  # unsigned nested Mach-Os are killed by Gatekeeper. Darwin only, so Linux
-  # staging skips the file(1) scan.
+  # Ad-hoc sign every Mach-O in the staged package. Bridge-only trees are
+  # pure JS, so this scan normally finds nothing — kept because unsigned
+  # nested Mach-Os are killed by Gatekeeper, and a future dependency could
+  # reintroduce one. Darwin only, so Linux staging skips the file(1) scan.
   if [[ "$(uname -s)" == "Darwin" ]]; then
     while IFS= read -r -d '' candidate; do
       if file -b "$candidate" | grep -q "Mach-O"; then
@@ -157,15 +134,7 @@ for (const entry of data.tools ?? []) {
   if (entry.source !== "npm") {
     throw new Error(`Unsupported ACP tool source: ${entry.source}`);
   }
-  console.log([
-    entry.id,
-    entry.binary,
-    entry.package,
-    entry.version,
-    entry.nodeEngine ?? ">=22",
-    entry.nativePackage ?? "",
-    entry.nativeExecutable ?? "",
-  ].join("\t"));
+  console.log([entry.id, entry.binary, entry.package, entry.version, entry.nodeEngine ?? ">=22"].join("\t"));
 }
 NODE
 )
@@ -184,22 +153,6 @@ const tools = entries.map((line) => {
 fs.writeFileSync(manifestFile, `${JSON.stringify({ tools }, null, 2)}\n`);
 ' "$node_runtime_manifest" ${node_runtime_entries[@]+"${node_runtime_entries[@]}"}
   echo "Wrote ACP Node runtime manifest: $node_runtime_manifest"
-fi
-
-# One manifest entry per vendored native harness CLI, keyed by the bare CLI
-# name the app's auth probes use (`claude`, `codex`). Paths are relative to
-# the acp resource root (the bin dir's parent).
-if ((${#harness_cli_entries[@]} > 0)); then
-  node -e '
-const fs = require("node:fs");
-const [manifestFile, ...entries] = process.argv.slice(1);
-const clis = entries.map((line) => {
-  const [id, cli, path] = line.split("\t");
-  return { id, cli, path };
-});
-fs.writeFileSync(manifestFile, `${JSON.stringify({ clis }, null, 2)}\n`);
-' "$harness_cli_manifest" ${harness_cli_entries[@]+"${harness_cli_entries[@]}"}
-  echo "Wrote ACP harness CLI manifest: $harness_cli_manifest"
 fi
 
 echo "Staged ACP tools resource: $resource_bin_dir"

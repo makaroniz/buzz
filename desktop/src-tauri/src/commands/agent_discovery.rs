@@ -89,11 +89,13 @@ fn adapter_verification_step(
 }
 
 /// A runtime's adapter ships with the Buzz desktop app when its catalog entry
-/// carries no install commands at all — neither CLI nor adapter. Goose has a
+/// says so (`adapter_ships_with_app`). Inferring this from empty install
+/// commands broke once the bridge-only bundles brought back CLI install
+/// commands for claude/codex — their bridges are still bundled. Goose has a
 /// curl CLI installer (and its CLI *is* its adapter), so a failed goose verify
 /// must not claim the adapter is bundled and point at reinstalling Buzz.
 fn runtime_adapter_is_bundled(runtime: &crate::managed_agents::KnownAcpRuntime) -> bool {
-    runtime.cli_install_commands.is_empty() && runtime.adapter_install_commands.is_empty()
+    runtime.adapter_ships_with_app
 }
 
 #[tauri::command]
@@ -1166,7 +1168,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{id} must be in the catalog"));
             assert!(
                 runtime_adapter_is_bundled(runtime),
-                "{id} carries no install commands — its adapter ships with Buzz"
+                "{id}'s adapter ships with Buzz (bundled bridge or sidecar), \
+                 even though its user CLI may have install commands"
             );
         }
     }

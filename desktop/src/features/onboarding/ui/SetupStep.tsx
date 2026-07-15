@@ -353,6 +353,19 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
     );
   }
 
+  if (runtime.availability === "cli_missing") {
+    return (
+      <>
+        <p className="mt-2 text-sm leading-5 text-muted-foreground">
+          ACP adapter detected; CLI missing.
+        </p>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground/80">
+          {runtime.installHint}
+        </p>
+      </>
+    );
+  }
+
   return (
     <>
       <p className="mt-2 text-sm leading-5 text-muted-foreground">
