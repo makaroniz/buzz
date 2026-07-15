@@ -2,6 +2,10 @@
 // so the build-time validation below and the runtime parse cannot drift.
 include!("src/commands/reconnect_hook_config.rs");
 
+mod build_agent_env_policy {
+    include!("src/managed_agents/build_agent_env_policy.rs");
+}
+
 use base64::Engine as _;
 
 fn main() {
@@ -33,9 +37,8 @@ fn main() {
         println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_BUZZ_AGENT_MODEL={model}");
     }
 
-    // Generic KEY=VALUE pairs to inject into every spawned agent process.
-    // Newline-delimited; each line must be non-empty and contain exactly one
-    // `=` separator with a non-empty key.  OSS builds leave this unset.
+    // Explicitly allowlisted, non-secret KEY=VALUE settings to inject into
+    // every spawned agent process. OSS builds leave this unset.
     // The validated value is base64-encoded before emitting so the single-line
     // Cargo build-script output carries all pairs (Cargo output is line-oriented;
     // a raw multiline value would be silently truncated to the first line).
@@ -58,6 +61,14 @@ fn main() {
                     "BUZZ_BUILD_AGENT_ENV line {}: key must not be empty in {:?}",
                     line_no + 1,
                     line
+                );
+            }
+            if !build_agent_env_policy::is_allowed_build_agent_env_key(key) {
+                panic!(
+                    "BUZZ_BUILD_AGENT_ENV line {}: key {:?} is not approved non-secret build configuration; allowed keys: {:?}",
+                    line_no + 1,
+                    key,
+                    build_agent_env_policy::ALLOWED_BUILD_AGENT_ENV_KEYS
                 );
             }
         }

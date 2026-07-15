@@ -1,17 +1,20 @@
 //! Build-time agent env passthrough.
 //!
-//! Internal builds (buzz-releases) bake arbitrary `KEY=VALUE` pairs into the
-//! binary via `BUZZ_BUILD_AGENT_ENV` (base64-encoded, newline-delimited).
+//! Internal builds (buzz-releases) bake a small allowlist of non-secret
+//! `KEY=VALUE` settings into the binary via `BUZZ_BUILD_AGENT_ENV`
+//! (base64-encoded, newline-delimited).
 //! OSS builds leave the compile-time var unset — nothing is injected.
 
 use std::collections::BTreeMap;
 
 use base64::Engine as _;
 
+use super::build_agent_env_policy::is_allowed_build_agent_env_key;
+
 /// Return the baked-in build-time env pairs as a map.
 ///
-/// Internal builds (buzz-releases) bake provider/model defaults and arbitrary
-/// `KEY=VALUE` pairs into the binary at compile time. This function returns
+/// Internal builds (buzz-releases) bake provider/model defaults and allowlisted
+/// non-secret settings into the binary at compile time. This function returns
 /// those pairs as an owned map so callers can fold them into an in-process env
 /// at the **lowest** precedence layer — user/persona values layered on top
 /// override these baked defaults (last-write-wins, matching the existing
@@ -53,7 +56,9 @@ fn build_env_map(
         if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(raw.as_bytes()) {
             if let Ok(text) = std::str::from_utf8(&decoded) {
                 for (key, value) in parse_agent_env_lines(text) {
-                    map.insert(key.to_string(), value.to_string());
+                    if is_allowed_build_agent_env_key(key) {
+                        map.insert(key.to_string(), value.to_string());
+                    }
                 }
             }
         }
@@ -111,6 +116,7 @@ mod tests {
         baked_build_env, build_buzz_agent_provider_defaults, build_env_map,
         discovery_env_with_baked_floor, parse_agent_env_lines,
     };
+    use crate::managed_agents::build_agent_env_policy::is_allowed_build_agent_env_key;
 
     #[test]
     fn buzz_agent_provider_defaults_empty_in_oss_build() {
@@ -299,6 +305,25 @@ mod tests {
             map.get("DATABRICKS_MODEL").map(String::as_str),
             Some("goose-claude-opus-4-8")
         );
+    }
+
+    #[test]
+    fn build_agent_env_policy_rejects_credentials_at_build_and_runtime_boundaries() {
+        use base64::Engine as _;
+
+        assert!(is_allowed_build_agent_env_key("DATABRICKS_MODEL"));
+        for key in ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "DB_PASSWORD"] {
+            assert!(!is_allowed_build_agent_env_key(key), "{key}");
+        }
+
+        let raw = "DATABRICKS_MODEL=reviewed-model\nGITHUB_TOKEN=must-not-be-embedded";
+        let blob = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
+        let map = build_env_map(None, None, Some(&blob));
+        assert_eq!(
+            map.get("DATABRICKS_MODEL").map(String::as_str),
+            Some("reviewed-model")
+        );
+        assert!(!map.contains_key("GITHUB_TOKEN"));
     }
 
     #[test]

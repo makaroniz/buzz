@@ -234,8 +234,8 @@ pub async fn get_runtime_file_config(
 
 /// Return the key names of all non-empty baked build env vars.
 ///
-/// Internal (Block) builds bake provider credentials and other env pairs into
-/// the binary at compile time via `BUZZ_BUILD_AGENT_ENV`. The backend readiness
+/// Internal (Block) builds bake provider/model defaults and a small allowlist
+/// of non-secret settings into the binary at compile time. The backend readiness
 /// gate already treats these keys as satisfying their requirements (Layer 1 of
 /// `resolve_effective_agent_env`). This command exposes the *key names only* —
 /// never the values — so the frontend dialogs can apply the same logic and avoid
