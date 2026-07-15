@@ -195,8 +195,11 @@ async function expectWelcomePersonaMention(page: Page) {
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
   await expect(personaMention).toBeVisible();
-  await expect(personaMention).toHaveAttribute("data-persona-options", "Fizz");
-  await expect(personaMention).toHaveAttribute("data-active-persona", "Fizz");
+  await expect(personaMention).toHaveAttribute(
+    "data-persona-options",
+    "Brain,Brawn",
+  );
+  await expect(personaMention).toHaveAttribute("data-active-persona", "Brain");
   await expect(personaMention).toHaveAttribute(
     "data-animation-target",
     "per-character",
@@ -307,7 +310,7 @@ async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const channelIntro = page.getByTestId("message-channel-intro");
 
-  await page.getByTestId("message-input").fill("Thanks @Fizz");
+  await page.getByTestId("message-input").fill("Thanks @Brain");
   await page.getByTestId("send-message").click();
 
   await expect(banner).toHaveAttribute("data-state", "complete");
@@ -427,7 +430,7 @@ async function expectPrivateWelcomeChannel(page: Page) {
     .toEqual({
       channelType: "stream",
       isMember: true,
-      memberCount: 2,
+      memberCount: 3,
       ttlSeconds: null,
       visibility: "private",
     });
@@ -454,57 +457,69 @@ async function expectWelcomeGuideIntro(
         invokeMockCommand<{
           hits: Array<{ pubkey: string; content: string }>;
         }>(page, "search_messages", {
-          q: "Hi, I'm Fizz",
+          q: "Hi, I'm Brain",
           limit: 10,
         }),
       ]);
-      const fizz = agents.find(
-        (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
+      const brain = agents.find(
+        (agent) =>
+          agent.name === "Brain" && agent.persona_id === "builtin:brain",
       );
-      const fizzMember = fizz
-        ? members.members.find((member) => member.pubkey === fizz.pubkey)
+      const brawn = agents.find(
+        (agent) =>
+          agent.name === "Brawn" && agent.persona_id === "builtin:brawn",
+      );
+      const brainMember = brain
+        ? members.members.find((member) => member.pubkey === brain.pubkey)
         : null;
-      const intro = fizz
-        ? introSearch.hits.find((hit) => hit.pubkey === fizz.pubkey)
+      const brawnMember = brawn
+        ? members.members.find((member) => member.pubkey === brawn.pubkey)
         : null;
-      const fizzWelcomeHits = fizz
-        ? introSearch.hits.filter((hit) => hit.pubkey === fizz.pubkey)
+      const intro = brain
+        ? introSearch.hits.find((hit) => hit.pubkey === brain.pubkey)
+        : null;
+      const brainWelcomeHits = brain
+        ? introSearch.hits.filter((hit) => hit.pubkey === brain.pubkey)
         : [];
-      const profileAvatarUrl = fizz
+      const profileAvatarUrl = brain
         ? (
             await invokeMockCommand<{
               profiles: Record<string, { avatar_url: string | null }>;
             }>(page, "get_users_batch", {
-              pubkeys: [fizz.pubkey],
+              pubkeys: [brain.pubkey],
             })
-          ).profiles[fizz.pubkey]?.avatar_url
+          ).profiles[brain.pubkey]?.avatar_url
         : null;
 
       return {
-        fizzIsBot: fizzMember?.role === "bot" && fizzMember.is_agent,
-        fizzPersonaId: fizz?.persona_id ?? null,
+        brainIsBot: brainMember?.role === "bot" && brainMember.is_agent,
+        brainPersonaId: brain?.persona_id ?? null,
+        brawnIsBot: brawnMember?.role === "bot" && brawnMember.is_agent,
+        brawnPersonaId: brawn?.persona_id ?? null,
         introContent: intro?.content ?? null,
-        introMatchesFizz: Boolean(fizz && intro?.pubkey === fizz.pubkey),
-        fizzWelcomeHitCount: fizzWelcomeHits.length,
+        introMatchesBrain: Boolean(brain && intro?.pubkey === brain.pubkey),
+        brainWelcomeHitCount: brainWelcomeHits.length,
         profileAvatarUrl,
       };
     })
     .toEqual({
-      fizzIsBot: true,
-      fizzPersonaId: "builtin:fizz",
+      brainIsBot: true,
+      brainPersonaId: "builtin:brain",
+      brawnIsBot: true,
+      brawnPersonaId: "builtin:brawn",
       introContent:
-        "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.",
-      introMatchesFizz: true,
-      fizzWelcomeHitCount: 1,
+        "Hi, I'm Brain. Welcome to Buzz.\n\nI focus on research and planning, and Brawn focuses on implementation and validation. Ask either of us for help, or bring us a goal and we'll work through it together.",
+      introMatchesBrain: true,
+      brainWelcomeHitCount: 1,
       profileAvatarUrl: null,
     });
 
   if (expectVisible) {
     await expect(page.getByTestId("message-timeline")).toContainText(
-      "Hi, I'm Fizz. Welcome to Buzz.",
+      "Hi, I'm Brain. Welcome to Buzz.",
     );
     await expect(page.getByTestId("message-timeline")).toContainText(
-      "Feel free to ask me what else you can do in Buzz",
+      "Brawn focuses on implementation and validation",
     );
     await expect(
       page.getByTestId("message-timeline-day-divider"),

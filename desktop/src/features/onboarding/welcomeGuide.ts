@@ -9,14 +9,29 @@ import { listPersonas, setPersonaActive } from "@/shared/api/tauriPersonas";
 import type { ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
-export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
-export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
+export const WELCOME_GUIDE_AGENT_NAME = "Brain";
+export const WELCOME_GUIDE_PERSONA_ID = "builtin:brain";
+export const WELCOME_WORKER_AGENT_NAME = "Brawn";
+export const WELCOME_WORKER_PERSONA_ID = "builtin:brawn";
 export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
 const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the community, channels, messages, and agents. Keep introductions concise, practical, and warm.";
 export const WELCOME_GUIDE_INTRO_MESSAGE =
-  "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.";
+  "Hi, I'm Brain. Welcome to Buzz.\n\nI focus on research and planning, and Brawn focuses on implementation and validation. Ask either of us for help, or bring us a goal and we'll work through it together.";
+
+const WELCOME_AGENT_DEFINITIONS = [
+  {
+    name: WELCOME_GUIDE_AGENT_NAME,
+    personaId: WELCOME_GUIDE_PERSONA_ID,
+  },
+  {
+    name: WELCOME_WORKER_AGENT_NAME,
+    personaId: WELCOME_WORKER_PERSONA_ID,
+  },
+] as const;
+
+type WelcomeAgentDefinition = (typeof WELCOME_AGENT_DEFINITIONS)[number];
 
 function normalizeRelayUrl(relayUrl: string | null | undefined) {
   return relayUrl?.trim().replace(/\/+$/, "") ?? null;
@@ -30,17 +45,22 @@ function isAgentScopedToRelay(agent: ManagedAgent, relayUrl?: string | null) {
   return normalizeRelayUrl(agent.relayUrl) === targetRelayUrl;
 }
 
-function isNamedWelcomeGuideAgent(agent: ManagedAgent) {
+function isNamedAgent(agent: ManagedAgent, name: string) {
+  return agent.name.trim().toLowerCase() === name.toLowerCase();
+}
+
+function isBuiltInWelcomeAgent(
+  agent: ManagedAgent,
+  definition: WelcomeAgentDefinition,
+) {
   return (
-    agent.name.trim().toLowerCase() === WELCOME_GUIDE_AGENT_NAME.toLowerCase()
+    agent.personaId === definition.personaId &&
+    isNamedAgent(agent, definition.name)
   );
 }
 
 function isBuiltInWelcomeGuideAgent(agent: ManagedAgent) {
-  return (
-    agent.personaId === WELCOME_GUIDE_PERSONA_ID &&
-    isNamedWelcomeGuideAgent(agent)
-  );
+  return isBuiltInWelcomeAgent(agent, WELCOME_AGENT_DEFINITIONS[0]);
 }
 
 function isLegacyKitWelcomeGuideAgent(agent: ManagedAgent) {
@@ -54,6 +74,14 @@ function isLegacyKitWelcomeGuideAgent(agent: ManagedAgent) {
 function isWelcomeGuideAgent(agent: ManagedAgent) {
   return (
     isBuiltInWelcomeGuideAgent(agent) || isLegacyKitWelcomeGuideAgent(agent)
+  );
+}
+
+function isWelcomeAgent(agent: ManagedAgent) {
+  return (
+    WELCOME_AGENT_DEFINITIONS.some((definition) =>
+      isBuiltInWelcomeAgent(agent, definition),
+    ) || isLegacyKitWelcomeGuideAgent(agent)
   );
 }
 
@@ -82,39 +110,47 @@ export function pickWelcomeGuideAgentForRelay(
   );
 }
 
-export async function getWelcomeGuideAgentPubkeys(relayUrl?: string | null) {
+export async function getWelcomeAgentPubkeys(relayUrl?: string | null) {
   return (await listManagedAgents())
     .filter(
-      (agent) =>
-        isWelcomeGuideAgent(agent) && isAgentScopedToRelay(agent, relayUrl),
+      (agent) => isWelcomeAgent(agent) && isAgentScopedToRelay(agent, relayUrl),
     )
     .map((agent) => agent.pubkey);
 }
 
-async function ensureWelcomeGuidePersonaActive() {
-  const guidePersona = (await listPersonas()).find(
-    (persona) => persona.id === WELCOME_GUIDE_PERSONA_ID,
+async function ensureWelcomePersonaActive(definition: WelcomeAgentDefinition) {
+  const persona = (await listPersonas()).find(
+    (candidate) => candidate.id === definition.personaId,
   );
-  if (!guidePersona) {
-    throw new Error(`${WELCOME_GUIDE_AGENT_NAME} agent not found.`);
+  if (!persona) {
+    throw new Error(`${definition.name} agent not found.`);
   }
-  if (!guidePersona.isActive) {
-    await setPersonaActive(WELCOME_GUIDE_PERSONA_ID, true);
+  if (!persona.isActive) {
+    await setPersonaActive(definition.personaId, true);
   }
 }
 
-async function ensureWelcomeGuideAgent(relayUrl?: string | null) {
+async function ensureWelcomeAgent(
+  definition: WelcomeAgentDefinition,
+  relayUrl?: string | null,
+) {
   const agents = await listManagedAgents();
-  const existing = pickWelcomeGuideAgentForRelay(agents, relayUrl);
+  const existing = pickAgentByStatus(
+    agents.filter(
+      (agent) =>
+        isBuiltInWelcomeAgent(agent, definition) &&
+        isAgentScopedToRelay(agent, relayUrl),
+    ),
+  );
   if (existing) {
     return existing;
   }
 
-  await ensureWelcomeGuidePersonaActive();
+  await ensureWelcomePersonaActive(definition);
 
   const created = await createManagedAgent({
-    name: WELCOME_GUIDE_AGENT_NAME,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
+    name: definition.name,
+    personaId: definition.personaId,
     relayUrl: relayUrl ?? undefined,
     spawnAfterCreate: false,
     startOnAppLaunch: false,
@@ -153,14 +189,22 @@ export async function ensureWelcomeGuideIntro(
   channelId: string,
   relayUrl?: string | null,
 ) {
-  const agent = await ensureWelcomeGuideAgent(relayUrl);
-  await ensureWelcomeGuideMembership(channelId, agent);
+  const guide = await ensureWelcomeAgent(
+    WELCOME_AGENT_DEFINITIONS[0],
+    relayUrl,
+  );
+  const worker = await ensureWelcomeAgent(
+    WELCOME_AGENT_DEFINITIONS[1],
+    relayUrl,
+  );
+  await ensureWelcomeGuideMembership(channelId, guide);
+  await ensureWelcomeGuideMembership(channelId, worker);
   await sendManagedAgentChannelMessage({
-    agentPubkey: agent.pubkey,
+    agentPubkey: guide.pubkey,
     channelId,
     content: WELCOME_GUIDE_INTRO_MESSAGE,
     marker: WELCOME_GUIDE_INTRO_MARKER,
     markerScope: "channel",
   });
-  return agent;
+  return guide;
 }

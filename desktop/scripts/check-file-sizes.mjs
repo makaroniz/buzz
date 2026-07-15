@@ -483,7 +483,7 @@ const overrides = new Map([
   // hidden-key projection keeps the top-level secret out of Advanced rows.
   ["src/features/agents/ui/AgentInstanceEditDialog.tsx", 1195],
   // AgentDefinitionDialog grew past 1000 with the following load-bearing fixes:
-  // isRuntimeAutoSeededRef tracking for edit-mode seeding (Fizz shows models);
+  // isRuntimeAutoSeededRef tracking for edit-mode seeding (built-ins show models);
   // runtimeSupportsLlmProviderSelection guard on discovery provider (codex fix);
   // hideProviderIds computation for Databricks v1 gate. Queued to split.
   ["src/features/agents/ui/AgentDefinitionDialog.tsx", 1035],

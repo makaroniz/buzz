@@ -60,8 +60,8 @@ test("pickWelcomeGuideAgent reuses a legacy Kit guide", () => {
   assert.equal(pickWelcomeGuideAgent([legacyKit]), legacyKit);
 });
 
-test("pickWelcomeGuideAgent prefers a running legacy guide over stopped builtin Fizz", () => {
-  const stoppedBuiltinFizz = makeAgent({
+test("pickWelcomeGuideAgent prefers a running legacy guide over stopped builtin Brain", () => {
+  const stoppedBuiltinBrain = makeAgent({
     pubkey: PUB_A,
     personaId: WELCOME_GUIDE_PERSONA_ID,
     status: "stopped",
@@ -74,7 +74,7 @@ test("pickWelcomeGuideAgent prefers a running legacy guide over stopped builtin 
   });
 
   assert.equal(
-    pickWelcomeGuideAgent([stoppedBuiltinFizz, runningLegacyKit]),
+    pickWelcomeGuideAgent([stoppedBuiltinBrain, runningLegacyKit]),
     runningLegacyKit,
   );
 });
@@ -85,22 +85,22 @@ test("pickWelcomeGuideAgent ignores non-Kit agents with the legacy prompt", () =
     name: "Scout",
     systemPrompt: LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT,
   });
-  const fizz = makeAgent({
+  const brain = makeAgent({
     pubkey: PUB_C,
     personaId: WELCOME_GUIDE_PERSONA_ID,
   });
 
-  assert.equal(pickWelcomeGuideAgent([nonKit, fizz]), fizz);
+  assert.equal(pickWelcomeGuideAgent([nonKit, brain]), brain);
 });
 
-test("pickWelcomeGuideAgentForRelay ignores Fizz agents from other communities", () => {
-  const otherCommunityFizz = makeAgent({
+test("pickWelcomeGuideAgentForRelay ignores Brain agents from other communities", () => {
+  const otherCommunityBrain = makeAgent({
     pubkey: PUB_A,
     personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: RELAY_A,
     status: "running",
   });
-  const currentCommunityFizz = makeAgent({
+  const currentCommunityBrain = makeAgent({
     pubkey: PUB_B,
     personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: RELAY_B,
@@ -109,22 +109,22 @@ test("pickWelcomeGuideAgentForRelay ignores Fizz agents from other communities",
 
   assert.equal(
     pickWelcomeGuideAgentForRelay(
-      [otherCommunityFizz, currentCommunityFizz],
+      [otherCommunityBrain, currentCommunityBrain],
       RELAY_B,
     ),
-    currentCommunityFizz,
+    currentCommunityBrain,
   );
 });
 
-test("pickWelcomeGuideAgentForRelay returns null when Fizz only exists in another community", () => {
-  const otherCommunityFizz = makeAgent({
+test("pickWelcomeGuideAgentForRelay returns null when Brain only exists in another community", () => {
+  const otherCommunityBrain = makeAgent({
     pubkey: PUB_A,
     personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: RELAY_A,
   });
 
   assert.equal(
-    pickWelcomeGuideAgentForRelay([otherCommunityFizz], RELAY_B),
+    pickWelcomeGuideAgentForRelay([otherCommunityBrain], RELAY_B),
     null,
   );
 });

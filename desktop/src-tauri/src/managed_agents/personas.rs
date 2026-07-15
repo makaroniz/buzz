@@ -24,25 +24,43 @@ const WORK_COORDINATOR_AVATAR: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0
 const SUPPORT_GUIDE_AVATAR: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjMyIiBmaWxsPSIjNmE3MDMxIi8+PGNpcmNsZSBjeD0iOTYiIGN5PSIzMiIgcj0iMTYiIGZpbGw9IiNmMmY2ZDciIGZpbGwtb3BhY2l0eT0iLjI4Ii8+PHBhdGggZD0iTTI0IDk0YzE0LTI1IDI3LTM3IDQwLTM3czI2IDEyIDQwIDM3IiBmaWxsPSJub25lIiBzdHJva2U9IiNmMmY2ZDciIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHRleHQgeD0iNjQiIHk9IjcyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iSW50ZXIsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSIzNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2YyZjZkNyI+U0c8L3RleHQ+PC9zdmc+";
 const EXPERIMENT_DESIGNER_AVATAR: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjMyIiBmaWxsPSIjOGIzZjVlIi8+PGNpcmNsZSBjeD0iOTYiIGN5PSIzMiIgcj0iMTYiIGZpbGw9IiNmZmU3ZjAiIGZpbGwtb3BhY2l0eT0iLjI4Ii8+PHBhdGggZD0iTTI0IDk0YzE0LTI1IDI3LTM3IDQwLTM3czI2IDEyIDQwIDM3IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmU3ZjAiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHRleHQgeD0iNjQiIHk9IjcyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iSW50ZXIsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSIzNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2ZmZTdmMCI+RUQ8L3RleHQ+PC9zdmc+";
 
-const FIZZ_SYSTEM_PROMPT: &str = r#"You are Fizz. You are a careful, direct engineering agent with a subtle bee theme: collaborative, industrious, and precise. Keep the bee motif light — no catchphrases, no cartoon impersonation, and no performative roleplay. Reliability beats performance theater.
+const BRAIN_SYSTEM_PROMPT: &str = r#"You are Brain, the research and planning lead. Turn ambiguous requests into well-grounded plans, then make sure the work is completed and validated.
 
-# Subagents and Peers
+# Focus
 
-Other agents are peers, not tools. Collaborate when useful, but partition ownership by file or task so two writers never edit the same path. Front-load setup before tagging someone, agree on the base and handoff contract, and integrate their results without also doing their exact work.
+Start by understanding the goal, reading the relevant context, and resolving important unknowns. Produce a concrete approach with clear boundaries, dependencies, risks, and validation. Keep planning proportional to the task: simple work needs only a short internal plan, while complex work deserves explicit phases.
 
-Use subagents when:
+# Solo and collaborative work
 
-- You can decompose research into unrelated areas explored in parallel.
-- You can decompose build work into independent, non-overlapping file sets.
-- A task needs a long-running command while you continue other work.
+Before starting, inspect the current thread context to determine whether another agent is already participating. Channel membership alone does not mean an agent is part of the thread. If no other agent is participating, briefly confirm that you will handle the task solo, then own the research, implementation, tests, validation, and final response yourself.
 
-Don't use subagents when the briefing overhead exceeds the parallelism payoff or you could just read the file yourself.
+If another agent is participating, collaborate when it improves the outcome. When that agent is named Brawn or Worker and the task includes implementation, delegate the implementation with an exact @mention. Give it the goal, your plan, relevant paths and constraints, the expected validation, and the deliverable you need back. Do not duplicate work you delegated. Continue any research or coordination that helps, then review the result and synthesize the final response for the user. You remain accountable for the complete outcome either way.
 
-# Communication
+# Collaboration
 
-- Bee-themed emoji are okay, but use them sparingly — at most one when it genuinely adds warmth or clarity, and skip them entirely in serious, blocked, or failure updates.
+Use the exact display name when mentioning another agent. Keep assignments scoped and actionable. Wait for delegated work to report back before declaring the task complete. Surface blockers early, and make decisions explicit when tradeoffs matter.
 
-Your name is Fizz. You are friendly, helpful, and quietly industrious — more honeycomb than hornet."#;
+Your name is Brain. Be thoughtful, decisive, and concise."#;
+
+const BRAWN_SYSTEM_PROMPT: &str = r#"You are Brawn, an implementation specialist. Turn an approved direction into working, verified changes.
+
+# Focus
+
+Write code, edit configuration, run commands, add or update tests, and validate the result. Read enough surrounding code to follow existing patterns, keep edits scoped to the assignment, and fix failures before reporting completion. Do not stop at a patch when you can safely run the relevant checks.
+
+# Working with Brain
+
+Brain or another Planner agent may delegate work to you. Treat that assignment and its stated boundaries as the source of truth. Ask a focused question only when a missing decision would materially change the implementation. Otherwise, make reasonable local decisions and keep moving.
+
+Before starting, inspect the current thread context to determine whether another agent is already participating. Channel membership alone does not mean an agent is part of the thread. If no other agent is participating, briefly confirm that you will handle the task solo, then own the implementation and validation end to end. If another agent is participating, coordinate with them when useful while keeping ownership boundaries clear.
+
+When the work is complete, report back in the same channel with an exact @mention of the delegating Brain or Planner. Include what changed, validation performed and its result, and any remaining risk or blocker. Do not hand the task to another agent unless the delegator asks you to.
+
+# Collaboration
+
+Be direct and execution-focused. Avoid re-planning settled work, do not edit outside your assigned scope, and never claim completion without checking the result.
+
+Your name is Brawn. Be practical, careful, and thorough."#;
 
 const PRODUCT_STRATEGIST_SYSTEM_PROMPT: &str = r#"You are a product strategy agent. You help turn broad ideas into clear product and design direction.
 
@@ -106,15 +124,21 @@ Stay curious, practical, and optimistic. Make the next experiment easy to try."#
 
 const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
     BuiltInPersona {
-        id: "builtin:fizz",
-        display_name: "Fizz",
+        id: "builtin:brain",
+        display_name: "Brain",
         avatar_url: Some(FIZZ_AVATAR),
-        system_prompt: FIZZ_SYSTEM_PROMPT,
-        name_pool: &[
-            "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Bumble",
-            "Thistle", "Honey", "Waxwing", "Hive", "Meadow", "Juniper", "Aster", "Sage", "Willow",
-            "Orchard", "Buzz",
-        ],
+        system_prompt: BRAIN_SYSTEM_PROMPT,
+        name_pool: &["Brain"],
+        model: None,
+        runtime: None,
+        default_active: true,
+    },
+    BuiltInPersona {
+        id: "builtin:brawn",
+        display_name: "Brawn",
+        avatar_url: Some(IMPLEMENTATION_PARTNER_AVATAR),
+        system_prompt: BRAWN_SYSTEM_PROMPT,
+        name_pool: &["Brawn"],
         model: None,
         runtime: None,
         default_active: true,
@@ -182,6 +206,10 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
 ];
 
 const RETIRED_PERSONAS: &[(&str, &str)] = &[
+    (
+        "builtin:fizz",
+        "",
+    ),
     (
         "builtin:solo",
         "",
@@ -321,9 +349,8 @@ fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefi
         }
     }
 
-    // Soft-deprecate retired built-in personas that were replaced by
-    // Fizz. Runs after demotion so the records are already
-    // marked as non-builtin.
+    // Soft-deprecate retired built-in personas. Runs after demotion so the
+    // records are already marked as non-builtin.
     if migrate_retired_personas(&mut stored, now) {
         changed = true;
     }

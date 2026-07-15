@@ -161,7 +161,7 @@ test("built-in personas are used from the catalog dialog", async ({ page }) => {
   await expect(page.getByTestId("agents-library-personas")).toBeVisible();
   await openPersonaCatalog(page);
   await expect(page.getByTestId("persona-catalog-dialog")).toContainText(
-    "Fizz",
+    "Brain",
   );
   const previewPersonas = [
     ["builtin:product-strategist", "Product Strategist"],
@@ -207,22 +207,22 @@ test("built-in personas are used from the catalog dialog", async ({ page }) => {
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   const initialCatalogOrder = await getCatalogOrder(page);
 
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:brain");
+  await useCatalogPersona(page, "builtin:brain");
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Selected Fizz for My Agents." }),
+      .filter({ hasText: "Selected Brain for My Agents." }),
   ).toBeVisible();
 
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Fizz",
+    "Brain",
   );
   await expect(
-    page.getByTestId("persona-catalog-use-agent-target-builtin:fizz"),
+    page.getByTestId("persona-catalog-use-agent-target-builtin:brain"),
   ).toHaveText("Added to My Agents");
   await expect(
-    page.getByTestId("persona-catalog-use-agent-target-builtin:fizz"),
+    page.getByTestId("persona-catalog-use-agent-target-builtin:brain"),
   ).toBeDisabled();
   await expect(page.getByTestId("persona-catalog-dialog")).not.toContainText(
     "Remove from My Agents",
@@ -280,19 +280,19 @@ test("agent catalog can reopen from the populated library header", async ({
   await page.getByTestId("open-agents-view").click();
   await openPersonaCatalog(page);
 
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:brain");
+  await useCatalogPersona(page, "builtin:brain");
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Fizz",
+    "Brain",
   );
 
   await page.keyboard.press("Escape");
   await openPersonaCatalog(page);
 
   await expect(page.getByTestId("persona-catalog-dialog")).toBeVisible();
-  await selectCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:brain");
   await expect(
-    page.getByTestId("persona-catalog-use-agent-target-builtin:fizz"),
+    page.getByTestId("persona-catalog-use-agent-target-builtin:brain"),
   ).toBeDisabled();
 });
 
@@ -305,12 +305,12 @@ test("agent catalog chooser order stays stable when selection changes", async ({
 
   const before = await getCatalogOrder(page);
 
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:brain");
+  await useCatalogPersona(page, "builtin:brain");
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Selected Fizz for My Agents." }),
+      .filter({ hasText: "Selected Brain for My Agents." }),
   ).toBeVisible();
 
   expect(await getCatalogOrder(page)).toEqual(before);
@@ -321,19 +321,19 @@ test("catalog detail pane shows the full persona details", async ({ page }) => {
   await page.getByTestId("open-agents-view").click();
   await openPersonaCatalog(page);
 
-  await selectCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:brain");
   const useAgentTarget = page.getByTestId(
-    "persona-catalog-use-agent-target-builtin:fizz",
+    "persona-catalog-use-agent-target-builtin:brain",
   );
 
   await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Fizz",
+    "Brain",
   );
   await expect(
     page.getByTestId("persona-catalog-detail-pane"),
   ).not.toContainText("Added by You");
   await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "You are Fizz.",
+    "You are Brain.",
   );
   await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
     "Built-in agent",
@@ -349,13 +349,13 @@ test("catalog detail pane shows the full persona details", async ({ page }) => {
   );
   await expect(useAgentTarget).toHaveAttribute(
     "aria-label",
-    "Add Fizz from Agent Catalog",
+    "Add Brain from Agent Catalog",
   );
   await expect(useAgentTarget).toHaveText("Add agent");
 
   await useAgentTarget.click();
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Fizz",
+    "Brain",
   );
 });
 
@@ -451,13 +451,13 @@ test("inactive built-ins cannot be used to create teams", async ({ page }) => {
 
   const error = await invokeTauriExpectError(page, "create_team", {
     input: {
-      name: "Fizzes",
-      personaIds: ["builtin:fizz"],
+      name: "Brain Team",
+      personaIds: ["builtin:brain"],
     },
   });
 
   expect(error).toBe(
-    "Fizz is not in My Agents. Choose it from Agent Catalog first.",
+    "Brain is not in My Agents. Choose it from Agent Catalog first.",
   );
 });
 
@@ -466,24 +466,24 @@ test("built-in removal failures show up from My Agents", async ({ page }) => {
 
   await page.getByTestId("open-agents-view").click();
   await openPersonaCatalog(page);
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:brain");
+  await useCatalogPersona(page, "builtin:brain");
 
   await invokeTauri(page, "create_team", {
     input: {
-      name: "Fizzes",
-      personaIds: ["builtin:fizz"],
+      name: "Brain Team",
+      personaIds: ["builtin:brain"],
     },
   });
 
   await page.keyboard.press("Escape");
-  await page.getByLabel("Open actions for Fizz").click();
+  await page.getByLabel("Open actions for Brain").click();
   await page.getByRole("menuitem", { name: "Remove from My Agents" }).click();
 
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Fizz is still referenced by a team." }),
+      .filter({ hasText: "Brain is still referenced by a team." }),
   ).toBeVisible();
 });
 

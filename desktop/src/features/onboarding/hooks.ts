@@ -16,7 +16,7 @@ import {
 } from "@/features/onboarding/welcome";
 import {
   ensureWelcomeGuideIntro,
-  getWelcomeGuideAgentPubkeys,
+  getWelcomeAgentPubkeys,
 } from "@/features/onboarding/welcomeGuide";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
@@ -72,7 +72,7 @@ async function initializeWelcomeChannel(
   },
 ): Promise<ChannelInitResult> {
   try {
-    const allowedMemberPubkeys = await getWelcomeGuideAgentPubkeys(
+    const allowedMemberPubkeys = await getWelcomeAgentPubkeys(
       communityScope,
     ).catch(() => []);
     const welcomeChannel = await ensureWelcomeChannel(

@@ -1871,6 +1871,20 @@ function resetMockPersonas(config?: E2eConfig) {
   const activePersonaIds = new Set(config?.mock?.activePersonaIds ?? []);
   const builtInPersonas = [
     {
+      id: "builtin:brain",
+      display_name: "Brain",
+      avatar_url: null,
+      system_prompt:
+        "You are Brain, the research and planning lead. Turn ambiguous requests into well-grounded plans, then make sure the work is completed and validated.",
+    },
+    {
+      id: "builtin:brawn",
+      display_name: "Brawn",
+      avatar_url: BUILT_IN_PERSONA_AVATAR_URLS.implementationPartner,
+      system_prompt:
+        "You are Brawn, an implementation specialist. Turn an approved direction into working, verified changes.",
+    },
+    {
       id: "builtin:product-strategist",
       display_name: "Product Strategist",
       avatar_url: BUILT_IN_PERSONA_AVATAR_URLS.productStrategist,
@@ -1890,12 +1904,6 @@ function resetMockPersonas(config?: E2eConfig) {
       avatar_url: BUILT_IN_PERSONA_AVATAR_URLS.qaReviewer,
       system_prompt:
         "You are a QA reviewer agent. You look for the ways a change might break.\n\n# Focus\n\nInspect state transitions, empty states, permissions, accessibility, and failure paths.",
-    },
-    {
-      id: "builtin:fizz",
-      display_name: "Fizz",
-      avatar_url: null,
-      system_prompt: "You are Fizz.",
     },
     {
       id: "builtin:work-coordinator",
