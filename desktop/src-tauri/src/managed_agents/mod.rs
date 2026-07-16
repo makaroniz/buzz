@@ -63,8 +63,9 @@ pub(crate) use readiness::{
 pub use relay_mesh::*;
 pub(crate) use relay_pinning::{rebind_agent_relay_urls, stamp_blank_agent_relay_urls};
 pub use repos::{
-    effective_repos_dir, ensure_repos_symlink, resolve_repos_at_boot, validate_repos_dir,
-    write_persisted_repos_dir,
+    effective_repos_dir, ensure_repos_symlink, persist_workspace_repos_dir,
+    rebind_workspace_repos_dir, resolve_agent_repos_dir, resolve_repos_at_boot, validate_repos_dir,
+    workspace_repos_dir_for_relay, write_persisted_repos_dir,
 };
 pub use restore::*;
 pub use runtime::*;

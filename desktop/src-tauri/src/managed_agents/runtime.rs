@@ -1330,16 +1330,28 @@ pub fn build_managed_agent_summary(
     let needs_restart = runtimes.get(&record.pubkey).is_some_and(|runtime| {
         use tauri::Manager;
         let state = app.state::<crate::app_state::AppState>();
+        let workspace_relay = crate::relay::relay_ws_url_with_override(&state);
         let global_for_hash =
             crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
         let teams_for_hash = crate::managed_agents::load_teams(app).unwrap_or_default();
+        // Repos-dir hash input mirrors spawn: the raw per-relay map value for
+        // the agent's EFFECTIVE relay. Keyed by the agent's own pin, so a
+        // workspace switch cannot move it; an edit to the agent's own
+        // community repos dir can — and should badge.
+        let repos_dir_for_hash = crate::managed_agents::nest_dir().and_then(|nest| {
+            crate::managed_agents::workspace_repos_dir_for_relay(
+                &nest,
+                &crate::relay::effective_agent_relay_url(&record.relay_url, &workspace_relay),
+            )
+        });
         let hash_drift = runtime.spawn_config_hash
             != crate::managed_agents::spawn_hash::spawn_config_hash(
                 record,
                 personas,
                 &teams_for_hash,
-                &crate::relay::relay_ws_url_with_override(&state),
+                &workspace_relay,
                 &global_for_hash,
+                repos_dir_for_hash.as_deref(),
             );
         let availability_drift = super::availability_drift(
             runtime.adapter_availability.as_ref(),
@@ -1541,6 +1553,25 @@ pub fn spawn_agent_child(
         )
     };
 
+    // The agent's workspace repos directory, resolved to a REAL path from the
+    // per-relay map keyed by the agent's effective relay. The nest's REPOS
+    // symlink follows the ACTIVE workspace (a human/tooling convention) and
+    // can re-point mid-task on a workspace switch; handing the resolved path
+    // as BUZZ_REPOS_DIR makes this agent immune (the nest AGENTS.md instructs
+    // agents to prefer it over the relative REPOS/ path). Fails CLOSED when
+    // this workspace has a configured repos dir that cannot be resolved right
+    // now (e.g. unmounted volume) — same rationale as resolve_repos_at_boot:
+    // a refused start is recoverable, work landing in another workspace's
+    // checkouts is not. No map entry falls back to the nest REPOS path,
+    // preserving pre-map behavior.
+    let resolved_repos_dir = super::nest_dir()
+        .map(|nest| super::resolve_agent_repos_dir(&nest, &effective_relay_url))
+        .transpose()?;
+    // Hash input: the RAW map value (stable against filesystem state), read
+    // once here so the stamp below and this spawn's env agree by construction.
+    let repos_dir_for_hash = super::nest_dir()
+        .and_then(|nest| super::workspace_repos_dir_for_relay(&nest, &effective_relay_url));
+
     // Augment PATH for DMG launches so child processes can find:
     //   - bundled CLI via ~/.local/bin symlink
     //   - nvm-managed node/npm (nvm initializes only in interactive shells)
@@ -1571,6 +1602,9 @@ pub fn spawn_agent_child(
     command.env("RUST_LOG", child_rust_log_filter());
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
+    if let Some(repos_dir) = &resolved_repos_dir {
+        command.env("BUZZ_REPOS_DIR", repos_dir);
+    }
     command.env("BUZZ_ACP_AGENT_COMMAND", &resolved_agent_command);
     command.env("BUZZ_ACP_AGENT_ARGS", agent_args.join(","));
     match &resolved_mcp_command {
@@ -1899,6 +1933,7 @@ pub fn spawn_agent_child(
         &teams,
         &effective_relay_url,
         &global,
+        repos_dir_for_hash.as_deref(),
     );
 
     // Stamp the adapter availability for runtimes with a version gate (codex

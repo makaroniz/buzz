@@ -6,8 +6,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::app_state::AppState;
 use crate::managed_agents::{
     activate_workspace_agents, effective_repos_dir, ensure_repos_symlink, load_managed_agents,
-    nest_dir, rebind_agent_relay_urls, save_managed_agents, stamp_blank_agent_relay_urls,
-    try_regenerate_nest, write_persisted_repos_dir,
+    nest_dir, persist_workspace_repos_dir, rebind_agent_relay_urls, rebind_workspace_repos_dir,
+    save_managed_agents, stamp_blank_agent_relay_urls, try_regenerate_nest,
+    write_persisted_repos_dir,
 };
 use crate::relay;
 
@@ -180,6 +181,18 @@ pub async fn apply_workspace(
             if let Err(error) = write_persisted_repos_dir(nest, effective_repos_dir.as_deref()) {
                 eprintln!("buzz-desktop: persist repos dir failed: {error}");
             }
+            // Per-relay map entry for THIS workspace (Phase 4 — REPOS
+            // isolation): spawn resolves an agent's repos dir from this map
+            // by the agent's pinned relay, so agents stay immune to the REPOS
+            // symlink re-point below when a later switch moves it. Must land
+            // before the activation task spawned after this closure starts
+            // this workspace's agents. A bad candidate clears the entry, same
+            // as the dotfile above.
+            if let Err(error) =
+                persist_workspace_repos_dir(nest, &relay_url, effective_repos_dir.as_deref())
+            {
+                eprintln!("buzz-desktop: persist per-relay repos dir failed: {error}");
+            }
             if let Err(error) = ensure_repos_symlink(nest, effective_repos_dir.as_deref()) {
                 eprintln!("buzz-desktop: repos dir setup failed: {error}");
                 let _ = app.emit("repos-dir-error", error);
@@ -271,6 +284,16 @@ pub async fn rebind_agent_relay(
         let changed = rebind_agent_relay_urls(&mut records, &old_relay_url, &new_relay_url);
         if changed > 0 {
             save_managed_agents(&app, &records)?;
+        }
+        // Carry the workspace's per-relay repos_dir along with its agents —
+        // spawn resolves BUZZ_REPOS_DIR from the map by pinned relay, so
+        // leaving the entry on the old URL would silently drop repos-dir
+        // isolation for every rebound agent. Non-fatal: the next
+        // apply_workspace of the edited community re-stamps the entry.
+        if let Some(nest) = nest_dir() {
+            if let Err(error) = rebind_workspace_repos_dir(&nest, &old_relay_url, &new_relay_url) {
+                eprintln!("buzz-desktop: rebind per-relay repos dir failed: {error}");
+            }
         }
         Ok(changed)
     })

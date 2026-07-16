@@ -11,7 +11,7 @@ Your persistent workspace. Created once by the Buzz desktop app. The static cont
 | `RESEARCH/` | Findings, notes, and reference material |
 | `WORK_LOGS/` | Session logs — what was tried, learned, decided |
 | `OUTBOX/` | Shareable docs for external readers (no frontmatter) |
-| `REPOS/` | Source checkouts. Work in an existing local checkout when one exists; clone here only when none does |
+| `REPOS/` | Source checkouts. Work in an existing local checkout when one exists; clone here only when none does. If `BUZZ_REPOS_DIR` is set in your environment, use that absolute path instead of `REPOS/` — see Core Guidelines |
 | `.scratch/` | Temporary working files — treat as disposable between sessions |
 
 Filenames: `ALL_CAPS_WITH_UNDERSCORES.md` (e.g., `OAUTH_FLOW_NOTES.md`).
@@ -37,6 +37,7 @@ created: 2026-01-15
 
 ## Core Guidelines
 
+- **Reach source checkouts via `$BUZZ_REPOS_DIR`** — when set, this env var is the absolute path to *your* workspace's repos directory. Always address checkouts through it (e.g. `"$BUZZ_REPOS_DIR"/project`), never the relative `REPOS/` link: the `REPOS` symlink follows whichever workspace is active in the desktop app and can re-point mid-task. Only fall back to `REPOS/` when the env var is unset
 - **Local first** — check `RESEARCH/`, `GUIDES/`, `PLANS/` before external searches
 - **Write findings down** — if you research something, save it to `RESEARCH/`
 - **Cite sources** — no claim without a path, link, or reference

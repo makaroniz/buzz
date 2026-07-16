@@ -22,6 +22,11 @@
 //!   URL difference (trailing slash, scheme/host case) does not.
 //! - Channel membership is not an input: agents pick up channel changes live
 //!   (#1468), never via restart.
+//! - The workspace repos dir is hashed as the raw per-relay map value for the
+//!   agent's effective relay (the source of the spawned `BUZZ_REPOS_DIR`):
+//!   keyed by the agent's own pin, a workspace switch cannot move it, but an
+//!   edit to the agent's community repos dir means a restart would change
+//!   where the agent works.
 //!
 //! The hash never crosses a process or persistence boundary, so
 //! `DefaultHasher` (not stable across Rust releases) is sufficient.
@@ -64,6 +69,9 @@ pub(crate) fn effective_team_instructions(
 
 /// Digest the effective spawn configuration of `record` under the current
 /// `personas`, resolving a blank record relay against `workspace_relay`.
+/// `workspace_repos_dir` is the raw per-relay repos-dir map value for the
+/// agent's effective relay (callers look it up via
+/// `workspace_repos_dir_for_relay`); it feeds the spawned `BUZZ_REPOS_DIR`.
 /// Pure — no `AppHandle`, no disk, no keyring.
 pub(crate) fn spawn_config_hash(
     record: &ManagedAgentRecord,
@@ -71,6 +79,7 @@ pub(crate) fn spawn_config_hash(
     teams: &[TeamRecord],
     workspace_relay: &str,
     global: &GlobalAgentConfig,
+    workspace_repos_dir: Option<&str>,
 ) -> u64 {
     // Prospective re-snapshot: apply the same `apply_persona_snapshot` the
     // start/restore paths run right before spawning, so the hash covers what a
@@ -116,6 +125,10 @@ pub(crate) fn spawn_config_hash(
         workspace_relay,
     ))
     .hash(&mut hasher);
+    // The source value of the spawned BUZZ_REPOS_DIR. Hashed raw (not
+    // canonicalized), so filesystem state changes alone cannot flip the badge
+    // — only an actual config edit (or a relay rebind moving the entry) can.
+    workspace_repos_dir.hash(&mut hasher);
     // Prompt and runtime-layered team instructions use the same resolver as spawn.
     effective_spawn_prompt(record).hash(&mut hasher);
     effective_team_instructions(record, teams).hash(&mut hasher);

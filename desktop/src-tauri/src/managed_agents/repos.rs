@@ -4,7 +4,15 @@
 //! symlink to a user-configured `repos_dir`, letting agents work in existing
 //! local checkouts instead of re-cloning. [`ensure_repos_symlink`] reconciles
 //! `REPOS` with the configured path; [`validate_repos_dir`] guards the input.
+//!
+//! The symlink follows the *active* workspace — a human/tooling convention.
+//! Agents are made immune to it: every applied workspace's `repos_dir` is
+//! also persisted per relay URL ([`persist_workspace_repos_dir`]), and spawn
+//! resolves the agent's own workspace entry to a real path
+//! ([`resolve_agent_repos_dir`]) so a later workspace switch re-pointing
+//! `REPOS` cannot move a running agent into another workspace's checkouts.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -229,6 +237,155 @@ pub fn write_persisted_repos_dir(nest_root: &Path, repos_dir: Option<&str>) -> R
     }
 }
 
+// ── Per-relay repos_dir map ───────────────────────────────────────────────
+
+/// Filename of the dotfile persisting every workspace's `repos_dir`, keyed by
+/// normalized relay URL. Distinct from [`REPOS_DIR_FILE`], which holds only
+/// the *active* workspace's value for the boot-time symlink resolve.
+const REPOS_DIR_MAP_FILE: &str = ".repos-dirs.json";
+
+/// Read the per-relay `repos_dir` map from `nest_root/.repos-dirs.json`.
+///
+/// Keys are normalized relay URLs ([`crate::relay::normalize_relay_url`]);
+/// values are raw trimmed `repos_dir` strings, exactly as persisted by
+/// [`persist_workspace_repos_dir`]. An absent, unreadable, or malformed file
+/// yields an empty map — the map is an isolation layer over spawn, not a boot
+/// dependency, so it degrades to the pre-map default rather than failing.
+/// Keys are re-normalized and empty entries dropped on read, as defense
+/// against a hand-edited file.
+fn read_repos_dir_map(nest_root: &Path) -> BTreeMap<String, String> {
+    let Ok(raw) = fs::read_to_string(nest_root.join(REPOS_DIR_MAP_FILE)) else {
+        return BTreeMap::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<BTreeMap<String, String>>(&raw) else {
+        eprintln!("buzz-desktop: {REPOS_DIR_MAP_FILE} is malformed; ignoring");
+        return BTreeMap::new();
+    };
+    parsed
+        .into_iter()
+        .filter_map(|(relay, dir)| {
+            let key = crate::relay::normalize_relay_url(&relay);
+            let value = dir.trim().to_string();
+            (!key.is_empty() && !value.is_empty()).then_some((key, value))
+        })
+        .collect()
+}
+
+/// Persist the per-relay `repos_dir` map, removing the file when empty
+/// (mirrors [`write_persisted_repos_dir`]'s clear-by-removal).
+fn write_repos_dir_map(nest_root: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
+    let path = nest_root.join(REPOS_DIR_MAP_FILE);
+    if map.is_empty() {
+        return match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("remove {}: {e}", path.display())),
+        };
+    }
+    let json = serde_json::to_string_pretty(map)
+        .map_err(|e| format!("serialize {REPOS_DIR_MAP_FILE}: {e}"))?;
+    fs::write(&path, format!("{json}\n")).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// Upsert (or clear, on `None`/empty) the applied workspace's `repos_dir` in
+/// the per-relay map.
+///
+/// Written on every `apply_workspace`, alongside the single-value
+/// [`REPOS_DIR_FILE`]: that dotfile drives the active-workspace `REPOS`
+/// symlink at boot, while this map is what makes agents immune to the symlink
+/// — spawn resolves the agent's own workspace entry via
+/// [`resolve_agent_repos_dir`], keyed by the agent's pinned relay. Values are
+/// stored raw (trimmed, not canonicalized) for the same reason
+/// [`effective_repos_dir`] persists raw.
+pub fn persist_workspace_repos_dir(
+    nest_root: &Path,
+    relay_url: &str,
+    repos_dir: Option<&str>,
+) -> Result<(), String> {
+    let key = crate::relay::normalize_relay_url(relay_url);
+    if key.is_empty() {
+        return Err("cannot persist a repos dir for an empty relay URL".to_string());
+    }
+    let mut map = read_repos_dir_map(nest_root);
+    match repos_dir.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => {
+            if map.get(&key).map(String::as_str) == Some(value) {
+                return Ok(());
+            }
+            map.insert(key, value.to_string());
+        }
+        None => {
+            if map.remove(&key).is_none() {
+                return Ok(());
+            }
+        }
+    }
+    write_repos_dir_map(nest_root, &map)
+}
+
+/// Move a workspace's per-relay `repos_dir` entry when the community's relay
+/// URL is edited — the map analogue of `rebind_agent_relay_urls` for agent
+/// records. Without this, agents rebound to the new URL would resolve no map
+/// entry and silently fall back to the shared `REPOS` default. Returns
+/// whether an entry moved; moving onto an existing entry overwrites it (the
+/// edit just happened, so the edited community's value is freshest).
+pub fn rebind_workspace_repos_dir(
+    nest_root: &Path,
+    old_relay_url: &str,
+    new_relay_url: &str,
+) -> Result<bool, String> {
+    let old_key = crate::relay::normalize_relay_url(old_relay_url);
+    let new_key = crate::relay::normalize_relay_url(new_relay_url);
+    if new_key.is_empty() || old_key == new_key {
+        return Ok(false);
+    }
+    let mut map = read_repos_dir_map(nest_root);
+    let Some(value) = map.remove(&old_key) else {
+        return Ok(false);
+    };
+    map.insert(new_key, value);
+    write_repos_dir_map(nest_root, &map)?;
+    Ok(true)
+}
+
+/// The raw persisted `repos_dir` for the workspace identified by `relay_url`,
+/// or `None` when that workspace has no override (or has not been applied
+/// since the per-relay map was introduced). Raw and un-canonicalized so it is
+/// a stable spawn-config-hash input — filesystem state changes alone must not
+/// flip the restart badge; [`resolve_agent_repos_dir`] does the real-path
+/// resolution separately at spawn.
+pub fn workspace_repos_dir_for_relay(nest_root: &Path, relay_url: &str) -> Option<String> {
+    read_repos_dir_map(nest_root).remove(&crate::relay::normalize_relay_url(relay_url))
+}
+
+/// Resolve the repos directory a spawning agent should be handed
+/// (`BUZZ_REPOS_DIR`), from the per-relay map entry for the agent's effective
+/// relay.
+///
+/// - **Entry present** → the validated, canonical **real path** of that
+///   workspace's `repos_dir`. Real, so the agent stays in its own workspace's
+///   checkouts even while the `REPOS` symlink follows a different active
+///   workspace. An unresolvable entry (unmounted volume, deleted dir) is an
+///   `Err` — the spawn must fail CLOSED, mirroring [`resolve_repos_at_boot`]:
+///   a refused start is recoverable, work landing in another workspace's
+///   checkout is not.
+/// - **No entry** → the nest's `REPOS` path (the shared in-nest default).
+///   Deliberately NOT canonicalized: workspaces without an override share the
+///   in-nest `REPOS` by design, and baking in a symlink target that happens
+///   to be active now would be worse than the convention path.
+pub fn resolve_agent_repos_dir(nest_root: &Path, relay_url: &str) -> Result<PathBuf, String> {
+    match workspace_repos_dir_for_relay(nest_root, relay_url) {
+        Some(dir) => validate_repos_dir(nest_root, &dir).map_err(|reason| {
+            format!(
+                "repos dir `{dir}` configured for this agent's workspace ({relay_url}) cannot be \
+                 resolved: {reason}; refusing to start the agent so it cannot work in another \
+                 workspace's repos directory"
+            )
+        }),
+        None => Ok(nest_root.join("REPOS")),
+    }
+}
+
 /// Decide whether launch-time agent restore is safe given the boot symlink
 /// outcome. Fails CLOSED: when a `repos_dir` was configured but its symlink
 /// could not be resolved, restoring agents would let one clone into the empty
@@ -279,512 +436,4 @@ pub fn resolve_repos_at_boot(nest_root: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── ensure_repos_symlink ──────────────────────────────────────────────
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_none_creates_real_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-
-        ensure_repos_symlink(&root, None).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(repos.is_dir(), "REPOS should be a real directory");
-        assert!(
-            !repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "REPOS should not be a symlink when repos_dir is None"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_none_reverts_existing_symlink_to_real_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-        let payload = external.join("KEEP.md");
-        fs::write(&payload, "data").unwrap();
-
-        // First point REPOS at the external dir, then clear the field.
-        ensure_repos_symlink(&root, Some(external.to_str().unwrap())).unwrap();
-        ensure_repos_symlink(&root, None).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(
-            repos.is_dir(),
-            "REPOS should be a real directory after clear"
-        );
-        assert!(
-            !repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "REPOS should no longer be a symlink after clearing repos_dir"
-        );
-        assert!(
-            payload.exists(),
-            "clearing repos_dir must not touch the external target's contents"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_absent_creates_symlink() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-
-        ensure_repos_symlink(&root, Some(external.to_str().unwrap())).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(repos.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(repos.read_link().unwrap(), external.canonicalize().unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_repoints_existing_wrong_symlink() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let old = tmp.path().join("old");
-        let new = tmp.path().join("new");
-        fs::create_dir_all(&old).unwrap();
-        fs::create_dir_all(&new).unwrap();
-        let payload = old.join("KEEP.md");
-        fs::write(&payload, "data").unwrap();
-
-        ensure_repos_symlink(&root, Some(old.to_str().unwrap())).unwrap();
-        ensure_repos_symlink(&root, Some(new.to_str().unwrap())).unwrap();
-
-        let repos = root.join("REPOS");
-        assert_eq!(repos.read_link().unwrap(), new.canonicalize().unwrap());
-        assert!(
-            payload.exists(),
-            "re-pointing a symlink must not touch the old target's contents"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_correct_symlink_is_noop() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let external = tmp.path().join("Development").canonicalize_or_make();
-
-        ensure_repos_symlink(&root, Some(external.to_str().unwrap())).unwrap();
-        ensure_repos_symlink(&root, Some(external.to_str().unwrap())).unwrap();
-
-        let repos = root.join("REPOS");
-        assert_eq!(repos.read_link().unwrap(), external);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_empty_real_dir_converts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(root.join("REPOS")).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-
-        ensure_repos_symlink(&root, Some(external.to_str().unwrap())).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(
-            repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "an empty real REPOS should convert to a symlink"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_repos_symlink_nonempty_real_dir_refuses_and_preserves() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        let repos = root.join("REPOS");
-        fs::create_dir_all(&repos).unwrap();
-        let checkout = repos.join("buzz");
-        fs::create_dir_all(&checkout).unwrap();
-        fs::write(checkout.join("code.rs"), "fn main() {}").unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-
-        let result = ensure_repos_symlink(&root, Some(external.to_str().unwrap()));
-
-        assert!(result.is_err(), "non-empty real REPOS must refuse");
-        assert!(
-            !repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "refused REPOS must stay a real directory"
-        );
-        assert!(
-            checkout.join("code.rs").exists(),
-            "refusal must never delete existing repositories"
-        );
-    }
-
-    // ensure_nest_at must NOT clobber an existing REPOS symlink on startup.
-    // Regression guard for Finding 1: the startup `ensure_repos_symlink(_, None)`
-    // call used to remove a configured symlink and mint an empty real REPOS,
-    // which async-restored agents could write into — the FE re-point then
-    // refused the now-non-empty dir, silently breaking a configured repos_dir.
-    #[cfg(unix)]
-    #[test]
-    fn ensure_nest_startup_preserves_existing_repos_symlink() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-
-        // First launch creates the real nest with a real REPOS dir.
-        crate::managed_agents::ensure_nest_at(&root).unwrap();
-
-        // Simulate a configured repos_dir: REPOS points at an external dir
-        // holding agent checkouts.
-        let external = tmp.path().join("Development");
-        fs::create_dir(&external).unwrap();
-        fs::write(external.join("KEEP.md"), "data").unwrap();
-        fs::remove_dir(root.join("REPOS")).unwrap();
-        std::os::unix::fs::symlink(&external, root.join("REPOS")).unwrap();
-
-        // Next launch must leave the configured symlink intact.
-        crate::managed_agents::ensure_nest_at(&root).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(
-            repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "an existing REPOS symlink must survive startup"
-        );
-        assert_eq!(repos.read_link().unwrap(), external);
-        assert!(
-            external.join("KEEP.md").exists(),
-            "the symlink's target contents must be untouched"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validate_repos_dir_rejects_tilde_relative_and_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-
-        assert!(validate_repos_dir(&root, "~/Development").is_err());
-        assert!(validate_repos_dir(&root, "relative/path").is_err());
-        assert!(validate_repos_dir(&root, "/no/such/dir/here").is_err());
-
-        let file = tmp.path().join("afile");
-        fs::write(&file, "x").unwrap();
-        assert!(validate_repos_dir(&root, file.to_str().unwrap()).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validate_repos_dir_rejects_nest_ancestor() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("home").join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let parent = root.parent().unwrap();
-
-        assert!(
-            validate_repos_dir(&root, parent.to_str().unwrap()).is_err(),
-            "a parent of the nest would nest REPOS inside its own target"
-        );
-    }
-
-    // ── persisted repos_dir dotfile ───────────────────────────────────────
-
-    #[test]
-    fn persisted_repos_dir_roundtrips_write_read_clear() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-
-        assert_eq!(read_persisted_repos_dir(&root), None, "absent → None");
-
-        write_persisted_repos_dir(&root, Some("  /Users/me/Development  ")).unwrap();
-        assert_eq!(
-            read_persisted_repos_dir(&root).as_deref(),
-            Some("/Users/me/Development"),
-            "value is trimmed on write/read"
-        );
-
-        write_persisted_repos_dir(&root, None).unwrap();
-        assert_eq!(read_persisted_repos_dir(&root), None, "cleared → None");
-        assert!(
-            !root.join(".repos-dir").exists(),
-            "clearing removes the dotfile"
-        );
-    }
-
-    #[test]
-    fn persisted_repos_dir_empty_value_clears() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        write_persisted_repos_dir(&root, Some("/Users/me/Development")).unwrap();
-
-        write_persisted_repos_dir(&root, Some("   ")).unwrap();
-        assert_eq!(
-            read_persisted_repos_dir(&root),
-            None,
-            "a whitespace-only value clears the override"
-        );
-    }
-
-    #[test]
-    fn persisted_repos_dir_clear_when_absent_is_ok() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-
-        write_persisted_repos_dir(&root, None).expect("clearing an absent dotfile is not an error");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn boot_resolves_symlink_from_persisted_value_into_empty_repos() {
-        // Mirrors the boot sequence: ensure_nest leaves REPOS an empty real
-        // dir, then the setup hook reads the persisted value and symlinks.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(root.join("REPOS")).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-
-        write_persisted_repos_dir(&root, Some(external.to_str().unwrap())).unwrap();
-        let persisted = read_persisted_repos_dir(&root);
-        ensure_repos_symlink(&root, persisted.as_deref()).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(
-            repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "boot must convert the empty real REPOS into a symlink"
-        );
-        assert_eq!(repos.read_link().unwrap(), external.canonicalize().unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn boot_leaves_already_correct_symlink_untouched() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-
-        write_persisted_repos_dir(&root, Some(external.to_str().unwrap())).unwrap();
-        // First boot converts; second boot must be a noop.
-        let persisted = read_persisted_repos_dir(&root);
-        ensure_repos_symlink(&root, persisted.as_deref()).unwrap();
-        ensure_repos_symlink(&root, persisted.as_deref()).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(repos.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(repos.read_link().unwrap(), external.canonicalize().unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn boot_with_cleared_value_reverts_symlink_to_real_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-        fs::write(external.join("KEEP.md"), "data").unwrap();
-
-        // Configure, then clear the field.
-        write_persisted_repos_dir(&root, Some(external.to_str().unwrap())).unwrap();
-        ensure_repos_symlink(&root, read_persisted_repos_dir(&root).as_deref()).unwrap();
-        write_persisted_repos_dir(&root, None).unwrap();
-
-        // Next boot reads None and reverts REPOS to a real in-nest dir.
-        ensure_repos_symlink(&root, read_persisted_repos_dir(&root).as_deref()).unwrap();
-
-        let repos = root.join("REPOS");
-        assert!(
-            !repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "clearing the persisted value reverts REPOS to a real dir"
-        );
-        assert!(
-            external.join("KEEP.md").exists(),
-            "reverting must not touch the external target's contents"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn effective_repos_dir_drives_persisted_dotfile_for_all_three_cases() {
-        // Pins the CRITICAL persist decision on `.repos-dir` CONTENTS, not just
-        // a return value: a bad path must clear the dotfile so the next boot's
-        // `should_restore_agents(false, _)` restores agents (the regression
-        // this hardening fixes). Drives each case through the same
-        // effective→persist path `apply_workspace` uses.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let good = tmp.path().join("Development");
-        fs::create_dir_all(&good).unwrap();
-        let good_str = good.to_str().unwrap();
-
-        // Pre-seed a value so each case proves it overwrites/clears, not just
-        // that an absent dotfile stays absent.
-        let seed = |root: &Path| write_persisted_repos_dir(root, Some(good_str)).unwrap();
-        let persist = |root: &Path, candidate: Option<&str>| {
-            let effective = effective_repos_dir(root, candidate);
-            // Mirror apply_workspace: Err clears the override (persist None).
-            let to_persist = effective.unwrap_or(None);
-            write_persisted_repos_dir(root, to_persist.as_deref()).unwrap();
-        };
-
-        // Bad path → Err → dotfile cleared (the CRITICAL).
-        seed(&root);
-        persist(&root, Some("/no/such/dir/here"));
-        assert_eq!(
-            read_persisted_repos_dir(&root),
-            None,
-            "a bad repos_dir must clear `.repos-dir` so the next boot restores agents"
-        );
-
-        // Good path → Ok(Some(raw)) → dotfile holds the raw trimmed value.
-        persist(&root, Some(&format!("  {good_str}  ")));
-        assert_eq!(
-            read_persisted_repos_dir(&root).as_deref(),
-            Some(good_str),
-            "a valid repos_dir must persist the raw trimmed path (not the canonical path)"
-        );
-
-        // Empty/whitespace → Ok(None) → dotfile cleared.
-        seed(&root);
-        persist(&root, Some("   "));
-        assert_eq!(
-            read_persisted_repos_dir(&root),
-            None,
-            "an empty repos_dir clears the override"
-        );
-
-        // None candidate → Ok(None) → dotfile cleared.
-        seed(&root);
-        persist(&root, None);
-        assert_eq!(
-            read_persisted_repos_dir(&root),
-            None,
-            "no repos_dir clears the override"
-        );
-    }
-
-    // ── resolve_repos_at_boot (boot sequence + fail-closed gate) ──────────
-
-    #[cfg(unix)]
-    #[test]
-    fn resolve_repos_at_boot_converts_empty_real_repos_and_allows_restore() {
-        // Drives the real boot sequence: ensure_repos_setup_default (called by
-        // ensure_nest) provisions REPOS as an empty real dir, then the setup
-        // hook calls resolve_repos_at_boot. Asserts the convert happens at that
-        // position and restore is allowed.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let external = tmp.path().join("Development");
-        fs::create_dir_all(&external).unwrap();
-        write_persisted_repos_dir(&root, Some(external.to_str().unwrap())).unwrap();
-
-        ensure_repos_setup_default(&root).unwrap();
-        let repos = root.join("REPOS");
-        assert!(
-            repos.is_dir() && !repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "ensure_nest provisions REPOS as an empty real dir before the boot resolve"
-        );
-
-        let restore = resolve_repos_at_boot(&root);
-
-        assert!(restore, "restore proceeds when the symlink resolves");
-        assert!(
-            repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "boot resolve converts the empty real REPOS into the configured symlink"
-        );
-        assert_eq!(repos.read_link().unwrap(), external.canonicalize().unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn resolve_repos_at_boot_fails_closed_when_target_unresolvable() {
-        // Persisted repos_dir whose target does not exist at boot (transiently
-        // unavailable external volume) → ensure_repos_symlink Errs. Restore must
-        // be skipped and REPOS left as the empty real dir, never the symlink, so
-        // no agent clones into the wrong place.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        let missing = tmp.path().join("not-mounted-yet");
-        write_persisted_repos_dir(&root, Some(missing.to_str().unwrap())).unwrap();
-        ensure_repos_setup_default(&root).unwrap();
-
-        let restore = resolve_repos_at_boot(&root);
-
-        assert!(
-            !restore,
-            "restore must be skipped when a configured repos_dir cannot resolve at boot"
-        );
-        let repos = root.join("REPOS");
-        assert!(
-            !repos.symlink_metadata().unwrap().file_type().is_symlink(),
-            "REPOS must not become a symlink to an unresolved target"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn resolve_repos_at_boot_allows_restore_with_no_repos_dir() {
-        // No configured repos_dir → the real in-nest REPOS default is correct,
-        // restore proceeds normally (the fail-closed gate must not fire here).
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".buzz");
-        fs::create_dir_all(&root).unwrap();
-        ensure_repos_setup_default(&root).unwrap();
-
-        assert!(
-            resolve_repos_at_boot(&root),
-            "restore proceeds when no repos_dir is configured"
-        );
-    }
-
-    #[test]
-    fn should_restore_agents_only_blocks_configured_unresolved_boot() {
-        assert!(
-            should_restore_agents(false, &Ok(())),
-            "no repos_dir, symlink ok → restore"
-        );
-        assert!(
-            should_restore_agents(false, &Err("boom".into())),
-            "no repos_dir → real-dir default is correct even on Err → restore"
-        );
-        assert!(
-            should_restore_agents(true, &Ok(())),
-            "configured repos_dir resolved → restore"
-        );
-        assert!(
-            !should_restore_agents(true, &Err("boom".into())),
-            "configured repos_dir unresolved → fail closed, skip restore"
-        );
-    }
-
-    /// Test helper: canonicalize a path, creating it as a directory first.
-    #[cfg(unix)]
-    trait CanonicalizeOrMake {
-        fn canonicalize_or_make(&self) -> PathBuf;
-    }
-    #[cfg(unix)]
-    impl CanonicalizeOrMake for PathBuf {
-        fn canonicalize_or_make(&self) -> PathBuf {
-            fs::create_dir_all(self).unwrap();
-            self.canonicalize().unwrap()
-        }
-    }
-}
+mod tests;
