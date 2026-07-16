@@ -44,7 +44,7 @@ unacceptable behavior to **conduct@buzz-relay.org**.
 | pnpm | 10+ | Required for desktop app commands and `just ci` |
 | Flutter | 3.41+ | Required for mobile app — install via [flutter.dev](https://docs.flutter.dev/get-started/install) |
 | Docker | 24+ | For Postgres, Redis, MinIO |
-| FFmpeg + ffprobe | 6+ | Media sanitization; pinned by Hermit |
+| FFmpeg + ffprobe | 6+ | Media sanitization; install with your OS package manager |
 | ExifTool | 12.70+ | Image metadata removal and verification; install with your OS package manager |
 | `just` | latest | Task runner — `cargo install just` |
 | `lefthook` | latest | Optional; run `lefthook install` for local Git hooks |
@@ -92,11 +92,15 @@ Adminer on `:8082`, Keycloak on `:8180` for local OAuth/OIDC testing, MinIO on
 pending database migrations.
 
 The relay validates its privacy toolchain during startup and fails closed when
-FFmpeg, ffprobe, ExifTool, or a required codec is unavailable. Hermit supplies
-FFmpeg and ffprobe. Install ExifTool separately (for example,
-`brew install exiftool` on macOS or `apt install libimage-exiftool-perl` on
-Debian/Ubuntu). Override binary locations with `BUZZ_EXIFTOOL_PATH`,
-`BUZZ_FFMPEG_PATH`, and `BUZZ_FFPROBE_PATH` when needed.
+FFmpeg, ffprobe, ExifTool, or a required codec is unavailable. Install the
+media tools separately for local development (for example,
+`brew install ffmpeg exiftool` on macOS or
+`apt install ffmpeg libimage-exiftool-perl` on Debian/Ubuntu). Buzz rejects
+FFmpeg builds configured with `--enable-nonfree`. The published relay image
+instead builds an LGPL FFmpeg/ffprobe toolchain with BSD-licensed OpenH264 from
+source and includes the corresponding source archive and build configuration.
+Override binary locations with `BUZZ_EXIFTOOL_PATH`, `BUZZ_FFMPEG_PATH`, and
+`BUZZ_FFPROBE_PATH` when needed.
 
 ### Running the Relay and Desktop App
 

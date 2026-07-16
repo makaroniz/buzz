@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use base64::Engine;
@@ -7,15 +7,6 @@ use buzz_media::MediaConfig;
 use sha2::{Digest, Sha256};
 
 fn config() -> MediaConfig {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let hermit = |name: &str| {
-        let path = root.join("bin").join(name);
-        if path.exists() {
-            path.to_string_lossy().into_owned()
-        } else {
-            name.to_string()
-        }
-    };
     MediaConfig {
         s3_endpoint: String::new(),
         s3_access_key: String::new(),
@@ -30,8 +21,8 @@ fn config() -> MediaConfig {
         public_base_url: "http://localhost:3000/media".to_string(),
         exiftool_path: std::env::var("BUZZ_EXIFTOOL_PATH")
             .unwrap_or_else(|_| "exiftool".to_string()),
-        ffmpeg_path: std::env::var("BUZZ_FFMPEG_PATH").unwrap_or_else(|_| hermit("ffmpeg")),
-        ffprobe_path: std::env::var("BUZZ_FFPROBE_PATH").unwrap_or_else(|_| hermit("ffprobe")),
+        ffmpeg_path: std::env::var("BUZZ_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string()),
+        ffprobe_path: std::env::var("BUZZ_FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string()),
         image_process_timeout_secs: 120,
         av_process_timeout_secs: 600,
         upload_records_enabled: false,
@@ -59,7 +50,9 @@ fn path(path: &Path) -> &str {
 fn ffmpeg(config: &MediaConfig, args: &[&str]) {
     let mut full = vec!["-nostdin", "-v", "error", "-y"];
     full.extend_from_slice(args);
-    run(&config.ffmpeg_path, &full);
+    let generator =
+        std::env::var("BUZZ_FIXTURE_FFMPEG_PATH").unwrap_or_else(|_| config.ffmpeg_path.clone());
+    run(&generator, &full);
 }
 
 fn add_private_metadata(config: &MediaConfig, fixture: &Path) {

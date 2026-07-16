@@ -36,6 +36,9 @@ pub struct ToolVersions {
     pub ffmpeg: String,
     /// Full first version line reported by ffprobe.
     pub ffprobe: String,
+    /// H.264 encoder selected from the verified FFmpeg capabilities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_encoder: Option<String>,
 }
 
 /// Return the startup-verified sanitizer versions for private audit records.
@@ -89,6 +92,8 @@ pub async fn validate_toolchain(config: &MediaConfig) -> Result<(), MediaError> 
     let exiftool = successful_version(&config.exiftool_path, "-ver").await?;
     let ffmpeg = successful_version(&config.ffmpeg_path, "-version").await?;
     let ffprobe = successful_version(&config.ffprobe_path, "-version").await?;
+    reject_nonredistributable_build(&config.ffmpeg_path).await?;
+    reject_nonredistributable_build(&config.ffprobe_path).await?;
     let encoders = run_tool(
         &config.ffmpeg_path,
         &["-hide_banner", "-encoders"],
@@ -96,14 +101,8 @@ pub async fn validate_toolchain(config: &MediaConfig) -> Result<(), MediaError> 
     )
     .await?;
     let encoders = String::from_utf8_lossy(&encoders.stdout);
-    for required in [
-        "libx264",
-        "aac",
-        "libaom-av1",
-        "libvpx-vp9",
-        "libopus",
-        "libvorbis",
-    ] {
+    let video_encoder = select_video_encoder(&encoders).ok_or(MediaError::ToolUnavailable)?;
+    for required in ["aac"] {
         if !encoders.contains(required) {
             return Err(MediaError::ToolUnavailable);
         }
@@ -136,8 +135,48 @@ pub async fn validate_toolchain(config: &MediaConfig) -> Result<(), MediaError> 
         exiftool,
         ffmpeg,
         ffprobe,
+        video_encoder: Some(video_encoder.to_string()),
     });
     Ok(())
+}
+
+async fn reject_nonredistributable_build(program: &str) -> Result<(), MediaError> {
+    let output = run_tool(
+        program,
+        &["-hide_banner", "-buildconf"],
+        Duration::from_secs(15),
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(MediaError::ToolUnavailable);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if build_is_nonredistributable(&stdout) || build_is_nonredistributable(&stderr) {
+        return Err(MediaError::ToolUnavailable);
+    }
+    Ok(())
+}
+
+fn build_is_nonredistributable(configuration: &str) -> bool {
+    configuration
+        .split_ascii_whitespace()
+        .any(|argument| argument == "--enable-nonfree")
+}
+
+fn select_video_encoder(encoders: &str) -> Option<&'static str> {
+    ["libopenh264", "libx264"].into_iter().find(|encoder| {
+        encoders
+            .split_ascii_whitespace()
+            .any(|word| word == *encoder)
+    })
+}
+
+fn video_encoder() -> Result<&'static str, MediaError> {
+    TOOL_VERSIONS
+        .get()
+        .and_then(|versions| versions.video_encoder.as_deref())
+        .ok_or(MediaError::ToolUnavailable)
 }
 
 async fn successful_version(program: &str, arg: &str) -> Result<String, MediaError> {
@@ -467,9 +506,25 @@ async fn sanitize_video(
     if can_copy {
         args.extend(strings(&["-c:v", "copy", "-c:a", "copy"]));
     } else {
-        args.extend(strings(&[
-            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k",
-        ]));
+        match video_encoder()? {
+            "libopenh264" => args.extend(strings(&[
+                "-c:v",
+                "libopenh264",
+                "-b:v",
+                "4M",
+                "-maxrate",
+                "4M",
+                "-bufsize",
+                "8M",
+                "-pix_fmt",
+                "yuv420p",
+            ])),
+            "libx264" => args.extend(strings(&[
+                "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+            ])),
+            _ => return Err(MediaError::ToolUnavailable),
+        }
+        args.extend(strings(&["-c:a", "aac", "-b:a", "192k"]));
     }
     args.extend(strings(&[
         "-movflags",
@@ -1034,6 +1089,27 @@ mod tests {
         assert!(is_structural_tag("language"));
         assert!(!is_structural_tag("location"));
         assert!(!is_structural_tag("title"));
+    }
+
+    #[test]
+    fn nonredistributable_ffmpeg_builds_are_rejected() {
+        assert!(build_is_nonredistributable(
+            "configuration: --enable-gpl --enable-nonfree --enable-libx264"
+        ));
+        assert!(!build_is_nonredistributable(
+            "configuration: --disable-autodetect --enable-libopenh264 --enable-shared"
+        ));
+    }
+
+    #[test]
+    fn openh264_is_preferred_without_requiring_it_from_operators() {
+        let both = " V....D libx264 H.264 / AVC\n V....D libopenh264 OpenH264 H.264";
+        assert_eq!(select_video_encoder(both), Some("libopenh264"));
+        assert_eq!(
+            select_video_encoder(" V....D libx264 H.264 / AVC"),
+            Some("libx264")
+        );
+        assert_eq!(select_video_encoder(" A..... aac AAC"), None);
     }
 
     #[test]

@@ -1,9 +1,11 @@
 # Media compliance fixtures
 
 The compliance test builds deterministic, synthetic fixtures at runtime so
-codec/container coverage follows the exact FFmpeg and ExifTool binaries shipped
-with the relay. Coordinates are fictional test data (`41.8781, -87.6298`) and
-no fixture contains a real person or device identifier.
+codec/container coverage follows the configured FFmpeg and ExifTool binaries.
+The published relay image builds its FFmpeg/ffprobe executables from the pinned
+source and configuration in `scripts/build-ffmpeg-lgpl.sh`. Coordinates are
+fictional test data (`41.8781, -87.6298`) and no fixture contains a real person
+or device identifier.
 
 `tiny.heic.b64` is the sole prebuilt input because FFmpeg does not provide a
 portable HEIC muxer. It is a 64×64 synthetic application icon converted by

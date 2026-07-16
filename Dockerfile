@@ -109,7 +109,31 @@ RUN pnpm install --frozen-lockfile --filter buzz-web
 COPY web/ web/
 RUN pnpm -C web build
 
-# ─── Stage 5: runtime ───────────────────────────────────────────────────────
+# ─── Stage 5: LGPL media toolchain ─────────────────────────────────────────
+# Debian's ffmpeg package enables GPL components such as libx264. Build the two
+# standalone tools used by the relay from upstream source instead, with GPL and
+# non-redistributable components disabled. OpenH264 is BSD-licensed and keeps
+# the relay's canonical H.264/AAC MP4 output without pulling libx264 into the
+# published image. The exact corresponding source and build configuration are
+# retained under /opt/ffmpeg/share/source in the runtime image.
+FROM debian:${DEBIAN_VERSION}-slim AS media-tools-builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libopenh264-dev \
+        nasm \
+        pkg-config \
+        xz-utils \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/build-ffmpeg-lgpl.sh /usr/local/bin/build-ffmpeg-lgpl
+RUN /usr/local/bin/build-ffmpeg-lgpl
+
+# ─── Stage 6: runtime ───────────────────────────────────────────────────────
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
 # OCI annotations: required for GHCR to auto-link the image to this repo and
@@ -126,9 +150,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        ffmpeg \
         git \
         libimage-exiftool-perl \
+        libopenh264-7 \
         openssl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 buzz \
@@ -139,6 +163,9 @@ COPY --from=builder    /build/target/release/buzz-relay /usr/local/bin/buzz-rela
 COPY --from=builder    /build/target/release/buzz-admin /usr/local/bin/buzz-admin
 COPY --from=builder    /build/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
 COPY --from=web-builder /build/web/dist                 /srv/buzz/web
+COPY --from=media-tools-builder /opt/ffmpeg              /opt/ffmpeg
+
+ENV PATH="/opt/ffmpeg/bin:${PATH}"
 
 # The invite landing page is always served from the bundled web UI. Repository
 # browser routes require the separate BUZZ_SERVE_GIT_WEB_GUI=true opt-in.

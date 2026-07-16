@@ -99,7 +99,13 @@ jobs:
       - name: Install media privacy tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg libimage-exiftool-perl
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ffmpeg libimage-exiftool-perl libopenh264-dev \
+            nasm pkg-config xz-utils zlib1g-dev
+          FFMPEG_PREFIX="$RUNNER_TEMP/buzz-ffmpeg" ./scripts/build-ffmpeg-lgpl.sh
+          echo "BUZZ_FFMPEG_PATH=$RUNNER_TEMP/buzz-ffmpeg/bin/ffmpeg" >> "$GITHUB_ENV"
+          echo "BUZZ_FFPROBE_PATH=$RUNNER_TEMP/buzz-ffmpeg/bin/ffprobe" >> "$GITHUB_ENV"
+          echo "BUZZ_FIXTURE_FFMPEG_PATH=/usr/bin/ffmpeg" >> "$GITHUB_ENV"
       - name: Unit tests
         run: just test-unit
       - name: Media compliance tests
