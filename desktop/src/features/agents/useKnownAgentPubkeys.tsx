@@ -5,6 +5,7 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { mergeKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
+import { useActiveRelayUrl } from "@/features/communities/useCommunities";
 import { useStableSet } from "@/shared/hooks/useStableReference";
 
 const EMPTY_KNOWN_AGENT_PUBKEYS: ReadonlySet<string> = new Set();
@@ -41,10 +42,13 @@ export function KnownAgentPubkeysProvider({
 }) {
   const managedAgents = useManagedAgentsQuery().data;
   const relayAgents = useRelayAgentsQuery().data;
+  // Scope managed agents to the active community's relay: another
+  // community's still-running agents are not agents "in" this community.
+  const activeRelayUrl = useActiveRelayUrl();
 
   const merged = React.useMemo(
-    () => mergeKnownAgentPubkeys(managedAgents, relayAgents),
-    [managedAgents, relayAgents],
+    () => mergeKnownAgentPubkeys(managedAgents, relayAgents, activeRelayUrl),
+    [managedAgents, relayAgents, activeRelayUrl],
   );
   const stable = useStableSet(merged);
 

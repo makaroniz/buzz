@@ -112,6 +112,19 @@ export function useCommunities(): UseCommunitiesReturn {
   return ctx;
 }
 
+/**
+ * Lenient read of the active community's relay URL — the key that scopes
+ * managed agents to a community (records are pinned to their home relay).
+ * Unlike `useCommunities`, this returns `null` instead of throwing outside
+ * `CommunitiesProvider`, so relay-scoping consumers (agent lists, polling
+ * gates, the auto-restart policy) degrade to unscoped in provider-less
+ * mounts rather than crashing.
+ */
+export function useActiveRelayUrl(): string | null {
+  const ctx = useContext(CommunitiesContext);
+  return ctx?.activeCommunity?.relayUrl ?? null;
+}
+
 function useCommunitiesInternal(): UseCommunitiesReturn {
   const [communities, setCommunitiesState] =
     useState<Community[]>(loadCommunities);

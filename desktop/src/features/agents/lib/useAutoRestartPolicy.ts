@@ -5,12 +5,14 @@ import {
   managedAgentsQueryKey,
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
+import { useActiveRelayUrl } from "@/features/communities/useCommunities";
 import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
 import { listManagedAgents } from "@/shared/api/tauri";
 import type { ManagedAgent } from "@/shared/api/types";
+import { agentBelongsToRelay } from "../agentRelayScope";
 import { getAgentObserverSnapshot } from "../observerRelayStore";
 import { getAgentWorkingState } from "../agentWorkingSignal";
 import {
@@ -36,6 +38,7 @@ const POLICY_TICK_MS = 15_000;
 export function useAutoRestartPolicy() {
   const queryClient = useQueryClient();
   const agents: ManagedAgent[] | undefined = useManagedAgentsQuery().data;
+  const activeRelayUrl = useActiveRelayUrl();
   const edgesRef = React.useRef(new Map<string, AutoRestartEdgeState>());
   const inFlightRef = React.useRef(new Set<string>());
   const [, setTick] = React.useState(0);
@@ -71,6 +74,7 @@ export function useAutoRestartPolicy() {
         workingSource: working.source,
         connected: observer.connectionState === "open",
         isLocalBackend: agent.backend.type === "local",
+        inActiveCommunity: agentBelongsToRelay(agent.relayUrl, activeRelayUrl),
         isRunning,
         edgeConsumed: edge.consumed,
         quiescentForMs: edge.armedAt === null ? 0 : now - edge.armedAt,
@@ -97,13 +101,16 @@ export function useAutoRestartPolicy() {
 
       void (async () => {
         try {
-          // Pre-fire re-fetch: shrink the stale-decision window to ~0.
+          // Pre-fire re-fetch: shrink the stale-decision window to ~0. The
+          // relay pin is re-checked too — a rebind (community relay edit)
+          // between decision and fire must not restart a foreign agent.
           const fresh = await listManagedAgents();
           const current = fresh.find((a) => a.pubkey === agent.pubkey);
           if (
             !current?.needsRestart ||
             !current.autoRestartOnConfigChange ||
             current.status !== "running" ||
+            !agentBelongsToRelay(current.relayUrl, activeRelayUrl) ||
             getAgentWorkingState(agent.pubkey).source !== "none"
           ) {
             return;

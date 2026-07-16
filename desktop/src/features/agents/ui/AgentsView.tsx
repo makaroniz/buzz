@@ -133,7 +133,21 @@ export function AgentsView() {
                 ) : null}
               </div>
             }
-            description="Set up and manage your agents."
+            description={
+              <>
+                <span>Set up and manage your agents.</span>
+                {agents.otherCommunityRunningCount > 0 ? (
+                  <span
+                    className="mt-1 block text-xs"
+                    data-testid="other-community-running-count"
+                  >
+                    {agents.otherCommunityRunningCount === 1
+                      ? "1 agent running in other communities."
+                      : `${agents.otherCommunityRunningCount} agents running in other communities.`}
+                  </span>
+                ) : null}
+              </>
+            }
             title="Agents"
           />
           <div className="flex flex-col gap-8">
@@ -320,7 +334,10 @@ export function AgentsView() {
       {personas.personaToDelete ? (
         <PersonaDeleteDialog
           instanceCount={
-            (agents.managedAgents ?? []).filter(
+            // Deleting a persona removes its instances in EVERY community,
+            // so count against the unscoped record set — the community-scoped
+            // list would understate what the delete is about to do.
+            (agents.allManagedAgents ?? []).filter(
               (a) => a.personaId === personas.personaToDelete?.id,
             ).length
           }

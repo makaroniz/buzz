@@ -23,6 +23,7 @@ function greenInputs(overrides = {}) {
     workingSource: "none",
     connected: true,
     isLocalBackend: true,
+    inActiveCommunity: true,
     isRunning: true,
     edgeConsumed: false,
     quiescentForMs: AUTO_RESTART_QUIESCENCE_MS,
@@ -55,6 +56,7 @@ const NEVER_FIRE_ROWS = [
   ["typing source alone defers", { workingSource: "typing" }],
   ["observer relay not connected", { connected: false }],
   ["remote backend", { isLocalBackend: false }],
+  ["agent pinned to another community's relay", { inActiveCommunity: false }],
   ["agent not running", { isRunning: false }],
   [
     "edge already consumed (one attempt per rising edge)",
@@ -71,6 +73,30 @@ for (const [label, overrides] of NEVER_FIRE_ROWS) {
     );
   });
 }
+
+// ── workspace switch ─────────────────────────────────────────────────────────
+
+test("a pure workspace switch never fires a restart", () => {
+  // Switching communities leaves the previous community's agents running,
+  // and their working/observer signals are read from the ACTIVE relay only —
+  // so from the new community they read as idle even mid-turn. Even with a
+  // fully elapsed quiescence window and every other gate green, an agent
+  // pinned to another community's relay must hold, whatever the (blind)
+  // connected/working signals claim.
+  for (const overrides of [
+    {},
+    { connected: true, working: false, workingSource: "none" },
+    { quiescentForMs: AUTO_RESTART_QUIESCENCE_MS * 10 },
+  ]) {
+    assert.equal(
+      decideAutoRestart(
+        greenInputs({ ...overrides, inActiveCommunity: false }),
+      ),
+      "hold",
+      "an out-of-community fire is a kill decided on blind data",
+    );
+  }
+});
 
 // ── the quiescence window ───────────────────────────────────────────────────
 

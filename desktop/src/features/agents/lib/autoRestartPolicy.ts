@@ -33,6 +33,13 @@ export type AutoRestartInputs = {
   connected: boolean;
   /** Only local agents can be restarted by this loop. */
   isLocalBackend: boolean;
+  /** Whether the agent is pinned to the active community's relay. Agents
+   * from other communities keep running after a workspace switch, but their
+   * working/observer signals are read from the ACTIVE relay only — they
+   * look idle and disconnected here regardless of what they're actually
+   * doing, so any decision about them would be made on blind data. A pure
+   * workspace switch must never fire a restart. */
+  inActiveCommunity: boolean;
   /** Agent process status from the summary ("running" required). */
   isRunning: boolean;
   /** Edge-trigger state: true when this needsRestart rising edge has
@@ -58,6 +65,7 @@ export function decideAutoRestart(
     workingSource,
     connected,
     isLocalBackend,
+    inActiveCommunity,
     isRunning,
     edgeConsumed,
     quiescentForMs,
@@ -67,6 +75,7 @@ export function decideAutoRestart(
   if (!autoRestartEnabled) return "hold";
   if (!needsRestart) return "hold";
   if (!isLocalBackend) return "hold";
+  if (!inActiveCommunity) return "hold";
   if (!isRunning) return "hold";
   if (!connected) return "hold";
   // Any working signal — observer OR typing — defers. `working` and
