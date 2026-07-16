@@ -118,6 +118,7 @@ RUN pnpm -C web build
 # retained under /opt/ffmpeg/share/source in the runtime image.
 FROM debian:${DEBIAN_VERSION}-slim AS media-tools-builder
 
+ARG EXTRA_CA_CERTS
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -129,6 +130,12 @@ RUN apt-get update \
         xz-utils \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0644 ${EXTRA_CA_CERTS:-Dockerfile} /tmp/extra-ca/src
+RUN if [ -n "${EXTRA_CA_CERTS}" ]; then \
+        cp /tmp/extra-ca/src /usr/local/share/ca-certificates/extra-proxy-ca.crt \
+        && update-ca-certificates; \
+    fi
 
 COPY scripts/build-ffmpeg-lgpl.sh /usr/local/bin/build-ffmpeg-lgpl
 RUN /usr/local/bin/build-ffmpeg-lgpl
