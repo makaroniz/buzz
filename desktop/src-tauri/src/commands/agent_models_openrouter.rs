@@ -9,15 +9,17 @@ use super::env_value;
 use super::{env_or_process_value, redaction_env_with_value};
 
 #[derive(Debug, Deserialize)]
-struct OpenRouterModelListResponse {
-    data: Vec<OpenRouterModelListItem>,
+#[cfg_attr(test, derive(Clone))]
+pub(super) struct OpenRouterModelListResponse {
+    pub data: Vec<OpenRouterModelListItem>,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenRouterModelListItem {
-    id: String,
+#[cfg_attr(test, derive(Clone))]
+pub(super) struct OpenRouterModelListItem {
+    pub id: String,
     #[serde(default)]
-    supported_parameters: Vec<String>,
+    pub supported_parameters: Vec<String>,
 }
 
 pub(super) fn is_openrouter_provider(provider: Option<&str>) -> bool {
@@ -75,6 +77,13 @@ pub(super) async fn discover_openrouter_models(
         .await
         .map_err(|error| format!("OpenRouter model discovery response parse failed: {error}"))?;
 
+    filter_openrouter_models(response, selected_model)
+}
+
+pub(super) fn filter_openrouter_models(
+    response: OpenRouterModelListResponse,
+    selected_model: Option<String>,
+) -> Result<Option<AgentModelsResponse>, String> {
     let models: Vec<AgentModelInfo> = response
         .data
         .into_iter()

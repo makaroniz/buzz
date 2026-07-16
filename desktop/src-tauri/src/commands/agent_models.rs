@@ -339,7 +339,10 @@ struct OpenAiModelListItem {
 mod openrouter;
 use openrouter::discover_openrouter_models;
 #[cfg(test)]
-use openrouter::{is_openrouter_provider, openrouter_models_url};
+use openrouter::{
+    filter_openrouter_models, is_openrouter_provider, openrouter_models_url,
+    OpenRouterModelListItem, OpenRouterModelListResponse,
+};
 
 fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
     matches!(

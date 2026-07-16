@@ -1251,12 +1251,23 @@ fn strip_model(body: &Value) -> Value {
     }
 }
 
+#[derive(Debug)]
 enum OpenRouterErrorClass {
     Retryable(Option<std::time::Duration>),
     Unknown,
 }
 
-fn classify_openrouter_error(status: u16, body: &str) -> OpenRouterErrorClass {
+fn parse_retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    let val = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let secs: u64 = val.trim().parse().ok()?;
+    (secs > 0 && secs <= 3600).then(|| std::time::Duration::from_secs(secs))
+}
+
+fn classify_openrouter_error(
+    status: u16,
+    body: &str,
+    header_retry_after: Option<std::time::Duration>,
+) -> OpenRouterErrorClass {
     let parsed: Option<Value> = serde_json::from_str(body).ok();
     let error_type = parsed
         .as_ref()
@@ -1264,7 +1275,7 @@ fn classify_openrouter_error(status: u16, body: &str) -> OpenRouterErrorClass {
         .and_then(|e| e.get("metadata"))
         .and_then(|m| m.get("error_type"))
         .and_then(Value::as_str);
-    let retry_after = parsed
+    let body_retry_after = parsed
         .as_ref()
         .and_then(|v| v.get("error"))
         .and_then(|e| e.get("metadata"))
@@ -1272,6 +1283,7 @@ fn classify_openrouter_error(status: u16, body: &str) -> OpenRouterErrorClass {
         .and_then(Value::as_f64)
         .filter(|&s| s > 0.0 && s <= 3600.0)
         .map(std::time::Duration::from_secs_f64);
+    let retry_after = header_retry_after.or(body_retry_after);
 
     match (status, error_type) {
         (429, Some("rate_limit_exceeded")) => OpenRouterErrorClass::Retryable(retry_after),
@@ -1279,7 +1291,6 @@ fn classify_openrouter_error(status: u16, body: &str) -> OpenRouterErrorClass {
         (502, Some("provider_unavailable")) => OpenRouterErrorClass::Retryable(None),
         (502, _) => OpenRouterErrorClass::Retryable(None),
         (503, Some("provider_overloaded")) => OpenRouterErrorClass::Retryable(retry_after),
-        // Untyped 503 = no provider matches; bounded retries then actionable message
         (503, None) => OpenRouterErrorClass::Unknown,
         (503, _) => OpenRouterErrorClass::Unknown,
         _ => OpenRouterErrorClass::Unknown,
@@ -1337,9 +1348,10 @@ async fn openrouter_post(
         }
         // A6: status+error_type retry matrix
         if status.is_server_error() || status == 429 {
+            let header_retry_after = parse_retry_after_header(resp.headers());
             let error_body = read_error_body(resp).await;
             let should_retry = if attempt + 1 < MAX_RETRIES {
-                match classify_openrouter_error(status.as_u16(), &error_body) {
+                match classify_openrouter_error(status.as_u16(), &error_body, header_retry_after) {
                     OpenRouterErrorClass::Retryable(delay) => {
                         if let Some(d) = delay {
                             tokio::time::sleep(d).await;
@@ -1364,20 +1376,14 @@ async fn openrouter_post(
                 Err(AgentError::Llm(format!("rate limited: {error_body}")))
             } else {
                 let parsed: Option<Value> = serde_json::from_str(&error_body).ok();
-                let error_type = parsed
+                let has_error_type = parsed
                     .as_ref()
                     .and_then(|v| v.get("error"))
-                    .and_then(|e| e.get("code"))
+                    .and_then(|e| e.get("metadata"))
+                    .and_then(|m| m.get("error_type"))
                     .and_then(Value::as_str)
-                    .or_else(|| {
-                        parsed
-                            .as_ref()
-                            .and_then(|v| v.get("error"))
-                            .and_then(|e| e.get("metadata"))
-                            .and_then(|m| m.get("error_type"))
-                            .and_then(Value::as_str)
-                    });
-                if error_type.is_none() || status.as_u16() == 503 {
+                    .is_some();
+                if !has_error_type && status.as_u16() == 503 {
                     Err(AgentError::Llm(format!(
                         "no OpenRouter endpoint supports the requested parameters — \
                          check model, effort, and tool requirements: {error_body}"
@@ -1498,8 +1504,8 @@ fn apply_anthropic_cache_control(body: &mut serde_json::Map<String, Value>) {
                         }]),
                     );
                 }
+                user_count += 1;
             }
-            user_count += 1;
             if user_count >= 2 {
                 break;
             }
@@ -2932,5 +2938,713 @@ mod tests {
             }]
         });
         assert_eq!(parse_responses(v).unwrap().output_tokens, None);
+    }
+
+    // ---- A3: OpenRouter body-shape tests ----
+
+    fn tools_vec() -> Vec<ToolDef> {
+        vec![ToolDef {
+            name: "dev__shell".into(),
+            description: "run a shell command".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+            }),
+        }]
+    }
+
+    #[test]
+    fn openrouter_body_tools_with_effort() {
+        let mut c = cfg(Provider::OpenRouter);
+        c.thinking_effort = Some(ThinkingEffort::High);
+        let mut body = openai_body(
+            &c,
+            "system",
+            &[HistoryItem::User("hi".into())],
+            &tools_vec(),
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        apply_openrouter_mutations(&mut body, c.thinking_effort, "anthropic/claude-opus-4-7");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(
+            body.get("reasoning_effort").is_none(),
+            "OpenAI-style reasoning_effort must be removed"
+        );
+        assert_eq!(body["provider"]["require_parameters"], true);
+        assert!(!body["tools"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn openrouter_body_tools_no_effort() {
+        let c = cfg(Provider::OpenRouter);
+        let mut body = openai_body(
+            &c,
+            "system",
+            &[HistoryItem::User("hi".into())],
+            &tools_vec(),
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7");
+        assert!(
+            body.get("reasoning").is_none(),
+            "reasoning must be absent when effort is None"
+        );
+        assert_eq!(
+            body["provider"]["require_parameters"], true,
+            "require_parameters set because tools are non-empty"
+        );
+    }
+
+    #[test]
+    fn openrouter_body_empty_tools_with_effort() {
+        let mut c = cfg(Provider::OpenRouter);
+        c.thinking_effort = Some(ThinkingEffort::Medium);
+        let mut body = openai_body(
+            &c,
+            "system",
+            &[HistoryItem::User("hi".into())],
+            &[],
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        apply_openrouter_mutations(&mut body, c.thinking_effort, "anthropic/claude-opus-4-7");
+        assert_eq!(body["reasoning"]["effort"], "medium");
+        assert_eq!(
+            body["provider"]["require_parameters"], true,
+            "require_parameters set because reasoning is present"
+        );
+    }
+
+    #[test]
+    fn openrouter_body_empty_tools_no_effort() {
+        let c = cfg(Provider::OpenRouter);
+        let mut body = openai_body(
+            &c,
+            "system",
+            &[HistoryItem::User("hi".into())],
+            &[],
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7");
+        assert!(body.get("reasoning").is_none());
+        assert!(
+            body.get("provider").is_none(),
+            "provider object must be absent when neither tools nor reasoning"
+        );
+    }
+
+    #[test]
+    fn openrouter_summary_carries_neither_reasoning_nor_provider() {
+        let body = json!({
+            "model": "anthropic/claude-opus-4-7",
+            "stream": false,
+            "max_completion_tokens": 1024,
+            "messages": [
+                { "role": "system", "content": "summarize" },
+                { "role": "user", "content": "text to summarize" },
+            ],
+        });
+        assert!(
+            body.get("reasoning").is_none(),
+            "summary body must not carry reasoning"
+        );
+        assert!(
+            body.get("provider").is_none(),
+            "summary body must not carry provider"
+        );
+    }
+
+    // ---- A5: error-inside-200 ----
+
+    #[test]
+    fn parse_openai_error_inside_200_returns_error() {
+        let v = serde_json::json!({
+            "choices": [{
+                "finish_reason": "error",
+                "error": {
+                    "code": 503,
+                    "message": "No endpoints found that support tool use"
+                }
+            }]
+        });
+        let err = parse_openai(v).unwrap_err();
+        match &err {
+            AgentError::Llm(s) => {
+                assert!(s.contains("provider error"), "got: {s}");
+                assert!(s.contains("No endpoints found"), "got: {s}");
+            }
+            _ => panic!("expected AgentError::Llm, got: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_openai_normal_stop_not_affected_by_error_check() {
+        let v = serde_json::json!({
+            "choices": [{"finish_reason": "stop", "message": {"content": "hello"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+        let r = parse_openai(v).unwrap();
+        assert_eq!(r.text, "hello");
+        assert_eq!(r.stop, ProviderStop::EndTurn);
+    }
+
+    #[test]
+    fn parse_openai_tool_calls_not_affected_by_error_check() {
+        let v = serde_json::json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "test", "arguments": "{}"}
+                    }]
+                }
+            }]
+        });
+        let r = parse_openai(v).unwrap();
+        assert_eq!(r.stop, ProviderStop::ToolUse);
+        assert_eq!(r.tool_calls.len(), 1);
+    }
+
+    // ---- A6: OpenRouter retry classification ----
+
+    #[test]
+    fn classify_402_payment_required() {
+        // 402 is handled directly in openrouter_post before classify;
+        // classify never sees it — but verify the Unknown fallback.
+        match classify_openrouter_error(402, r#"{"error":{"message":"payment required"}}"#, None) {
+            OpenRouterErrorClass::Unknown => {}
+            _ => panic!("402 must classify as Unknown"),
+        }
+    }
+
+    #[test]
+    fn classify_429_rate_limit_with_body_retry_after() {
+        let body =
+            r#"{"error":{"metadata":{"error_type":"rate_limit_exceeded","retry_after":2.5}}}"#;
+        match classify_openrouter_error(429, body, None) {
+            OpenRouterErrorClass::Retryable(Some(d)) => {
+                assert!(
+                    (d.as_secs_f64() - 2.5).abs() < 0.01,
+                    "expected ~2.5s, got {:?}",
+                    d
+                );
+            }
+            other => panic!("expected Retryable with delay, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_429_rate_limit_without_retry_after() {
+        let body = r#"{"error":{"metadata":{"error_type":"rate_limit_exceeded"}}}"#;
+        match classify_openrouter_error(429, body, None) {
+            OpenRouterErrorClass::Retryable(None) => {}
+            other => panic!("expected Retryable(None), got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_429_prefers_http_header_over_body() {
+        let body =
+            r#"{"error":{"metadata":{"error_type":"rate_limit_exceeded","retry_after":10.0}}}"#;
+        let header = Some(Duration::from_secs(3));
+        match classify_openrouter_error(429, body, header) {
+            OpenRouterErrorClass::Retryable(Some(d)) => {
+                assert_eq!(
+                    d,
+                    Duration::from_secs(3),
+                    "HTTP header must take precedence"
+                );
+            }
+            other => panic!("expected Retryable with header delay, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_502_provider_unavailable() {
+        let body = r#"{"error":{"metadata":{"error_type":"provider_unavailable"}}}"#;
+        match classify_openrouter_error(502, body, None) {
+            OpenRouterErrorClass::Retryable(None) => {}
+            other => panic!("expected Retryable(None) for 502, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_503_provider_overloaded_with_retry_after() {
+        let body =
+            r#"{"error":{"metadata":{"error_type":"provider_overloaded","retry_after":5.0}}}"#;
+        match classify_openrouter_error(503, body, None) {
+            OpenRouterErrorClass::Retryable(Some(d)) => {
+                assert!(
+                    (d.as_secs_f64() - 5.0).abs() < 0.01,
+                    "expected ~5s, got {:?}",
+                    d
+                );
+            }
+            other => panic!("expected Retryable with delay, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_503_untyped_is_unknown() {
+        let body = r#"{"error":{"message":"No endpoints found"}}"#;
+        match classify_openrouter_error(503, body, None) {
+            OpenRouterErrorClass::Unknown => {}
+            other => panic!("expected Unknown for untyped 503, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_500_untyped_is_unknown() {
+        match classify_openrouter_error(500, r#"{"error":{"message":"internal"}}"#, None) {
+            OpenRouterErrorClass::Unknown => {}
+            other => panic!("expected Unknown for 500, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_retry_after_header_valid() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "5".parse().unwrap());
+        assert_eq!(
+            parse_retry_after_header(&headers),
+            Some(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_header_zero_rejected() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "0".parse().unwrap());
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    #[test]
+    fn parse_retry_after_header_over_cap_rejected() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "3601".parse().unwrap());
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    #[test]
+    fn parse_retry_after_header_missing() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    #[test]
+    fn parse_retry_after_header_non_numeric_ignored() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "Wed, 21 Oct 2026 07:28:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    // ---- A7: Anthropic cache_control with mixed content ----
+
+    #[test]
+    fn anthropic_cache_control_mixed_text_tool_image_history() {
+        let history = vec![
+            HistoryItem::User("first question".into()),
+            HistoryItem::Assistant {
+                text: String::new(),
+                tool_calls: vec![ToolCall {
+                    provider_id: "toolu_1".into(),
+                    name: "dev__view_image".into(),
+                    arguments: serde_json::json!({"source": "x.png"}),
+                }],
+                reasoning_details: None,
+            },
+            HistoryItem::ToolResult(ToolResult {
+                provider_id: "toolu_1".into(),
+                content: vec![
+                    ToolResultContent::Text("10×10 image".into()),
+                    ToolResultContent::Image {
+                        data: "aW1n".into(),
+                        mime_type: "image/png".into(),
+                    },
+                ],
+                is_error: false,
+            }),
+            HistoryItem::User("second question about the image".into()),
+            HistoryItem::User("third question".into()),
+        ];
+        let mut body = openai_body(
+            &cfg(Provider::OpenRouter),
+            "system",
+            &history,
+            &tools_vec(),
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7");
+        let messages = body["messages"].as_array().unwrap();
+
+        // System message should have cache_control
+        let system = &messages[0];
+        assert_eq!(system["content"][0]["cache_control"]["type"], "ephemeral");
+
+        // Image-batch user messages (containing image_url blocks) must NOT have cache_control
+        let image_user_msgs: Vec<_> = messages
+            .iter()
+            .filter(|m| {
+                m.get("role").and_then(Value::as_str) == Some("user")
+                    && m.get("content")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .any(|b| b.get("type").and_then(Value::as_str) == Some("image_url"))
+                        })
+                        .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            !image_user_msgs.is_empty(),
+            "should have image user messages"
+        );
+        for img_msg in &image_user_msgs {
+            let content = img_msg["content"].as_array().unwrap();
+            for block in content {
+                assert!(
+                    block.get("cache_control").is_none(),
+                    "image-only user message must not receive cache_control"
+                );
+            }
+        }
+
+        // Exactly 2 text user messages should have cache_control (skipping image-only ones)
+        let cached_text_count = messages
+            .iter()
+            .filter(|m| {
+                m.get("role").and_then(Value::as_str) == Some("user")
+                    && m.get("content")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter().any(|b| {
+                                b.get("type").and_then(Value::as_str) == Some("text")
+                                    && b.get("cache_control").is_some()
+                            })
+                        })
+                        .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            cached_text_count, 2,
+            "exactly 2 text user messages should have cache_control"
+        );
+
+        // Last tool def should have cache_control
+        let tools = body["tools"].as_array().unwrap();
+        let last_tool = tools.last().unwrap();
+        assert_eq!(last_tool["function"]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn anthropic_cache_control_image_only_user_does_not_consume_slot() {
+        // An image-only user message between two text user messages must not
+        // consume a cache breakpoint slot — both text messages should get cached.
+        let history = vec![
+            HistoryItem::User("text message one".into()),
+            HistoryItem::Assistant {
+                text: String::new(),
+                tool_calls: vec![ToolCall {
+                    provider_id: "toolu_1".into(),
+                    name: "dev__view_image".into(),
+                    arguments: serde_json::json!({"source": "x.png"}),
+                }],
+                reasoning_details: None,
+            },
+            HistoryItem::ToolResult(ToolResult {
+                provider_id: "toolu_1".into(),
+                content: vec![ToolResultContent::Image {
+                    data: "aW1n".into(),
+                    mime_type: "image/png".into(),
+                }],
+                is_error: false,
+            }),
+            HistoryItem::User("text message two".into()),
+            HistoryItem::User("text message three".into()),
+        ];
+        let mut body = openai_body(
+            &cfg(Provider::OpenRouter),
+            "system",
+            &history,
+            &[],
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7");
+        let messages = body["messages"].as_array().unwrap();
+
+        // Count text user messages that got cache_control
+        let cached_text_count = messages
+            .iter()
+            .filter(|m| {
+                m.get("role").and_then(Value::as_str) == Some("user")
+                    && m.get("content")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().any(|b| b.get("cache_control").is_some()))
+                        .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            cached_text_count, 2,
+            "image-only user messages must not consume a cache breakpoint slot"
+        );
+    }
+
+    // ---- A9: reasoning_details round-trip ----
+
+    #[test]
+    fn parse_openai_with_reasoning_details_captures_array() {
+        let details = serde_json::json!([
+            {"type": "thinking", "content": "Let me consider..."},
+            {"type": "thinking", "content": "The answer is 42."}
+        ]);
+        let v = serde_json::json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "",
+                    "reasoning_details": details,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "test", "arguments": "{}"}
+                    }]
+                }
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+        let r = parse_openai_with_reasoning_details(v).unwrap();
+        assert_eq!(r.reasoning_details, Some(details));
+    }
+
+    #[test]
+    fn parse_openai_with_reasoning_details_none_when_absent() {
+        let v = serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "hello"}
+            }]
+        });
+        let r = parse_openai_with_reasoning_details(v).unwrap();
+        assert!(
+            r.reasoning_details.is_none(),
+            "reasoning_details must be None when not in response"
+        );
+    }
+
+    #[test]
+    fn parse_openai_plain_never_captures_reasoning_details() {
+        let v = serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": "hello",
+                    "reasoning_details": [{"type": "thinking", "content": "hmm"}]
+                }
+            }]
+        });
+        let r = parse_openai(v).unwrap();
+        assert!(
+            r.reasoning_details.is_none(),
+            "plain parse_openai must never capture reasoning_details (OpenAI/Databricks regression)"
+        );
+    }
+
+    #[test]
+    fn reasoning_details_two_request_round_trip() {
+        let details = serde_json::json!([
+            {"type": "thinking", "content": "Step 1: analyze the request."},
+            {"type": "thinking", "content": "Step 2: call the tool."}
+        ]);
+        // Request 1: model returns a tool call with reasoning_details
+        let response1 = serde_json::json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "",
+                    "reasoning_details": details,
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "dev__shell", "arguments": "{\"command\":\"ls\"}"}
+                    }]
+                }
+            }],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 20}
+        });
+        let r1 = parse_openai_with_reasoning_details(response1).unwrap();
+        assert_eq!(r1.reasoning_details, Some(details.clone()));
+
+        // Build history as the agent would: assistant turn with reasoning_details,
+        // followed by a tool result.
+        let history = vec![
+            HistoryItem::User("run ls".into()),
+            HistoryItem::Assistant {
+                text: String::new(),
+                tool_calls: r1.tool_calls,
+                reasoning_details: r1.reasoning_details,
+            },
+            HistoryItem::ToolResult(ToolResult {
+                provider_id: "call_abc".into(),
+                content: vec![ToolResultContent::Text("file.txt".into())],
+                is_error: false,
+            }),
+        ];
+
+        // Request 2: build the body for the continuation
+        let body = openai_body(
+            &cfg(Provider::OpenRouter),
+            "system",
+            &history,
+            &[],
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        let messages = body["messages"].as_array().unwrap();
+
+        // The assistant message must carry the identical reasoning_details array
+        let assistant_msg = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))
+            .expect("assistant message must exist");
+        assert_eq!(
+            assistant_msg["reasoning_details"], details,
+            "reasoning_details must be replayed byte-for-byte on the assistant message"
+        );
+
+        // The assistant message must appear BEFORE the tool result
+        let assistant_idx = messages
+            .iter()
+            .position(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))
+            .unwrap();
+        let tool_idx = messages
+            .iter()
+            .position(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .unwrap();
+        assert!(
+            assistant_idx < tool_idx,
+            "assistant with reasoning_details must precede tool result"
+        );
+    }
+
+    #[test]
+    fn reasoning_details_none_emits_no_field_in_body() {
+        let history = vec![
+            HistoryItem::User("hello".into()),
+            HistoryItem::Assistant {
+                text: "hi back".into(),
+                tool_calls: Vec::new(),
+                reasoning_details: None,
+            },
+        ];
+        let body = openai_body(
+            &cfg(Provider::OpenRouter),
+            "system",
+            &history,
+            &[],
+            "anthropic/claude-opus-4-7",
+            None,
+        );
+        let messages = body["messages"].as_array().unwrap();
+        let assistant_msg = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))
+            .expect("assistant message must exist");
+        assert!(
+            assistant_msg.get("reasoning_details").is_none(),
+            "assistant with None reasoning_details must not emit the field"
+        );
+    }
+
+    #[test]
+    fn reasoning_details_charged_to_estimated_bytes() {
+        let details = serde_json::json!([
+            {"type": "thinking", "content": "A long chain of reasoning tokens here."}
+        ]);
+        let with = HistoryItem::Assistant {
+            text: "text".into(),
+            tool_calls: Vec::new(),
+            reasoning_details: Some(details.clone()),
+        };
+        let without = HistoryItem::Assistant {
+            text: "text".into(),
+            tool_calls: Vec::new(),
+            reasoning_details: None,
+        };
+        assert!(
+            with.estimated_bytes() > without.estimated_bytes(),
+            "reasoning_details must contribute to estimated_bytes"
+        );
+        assert!(
+            with.context_pressure_bytes() > without.context_pressure_bytes(),
+            "reasoning_details must contribute to context_pressure_bytes"
+        );
+        let details_size = serde_json::to_vec(&details).unwrap().len();
+        assert_eq!(
+            with.estimated_bytes() - without.estimated_bytes(),
+            details_size,
+            "reasoning_details contribution must equal its serialized size"
+        );
+    }
+
+    #[test]
+    fn reasoning_details_not_replayed_in_anthropic_body() {
+        let history = vec![
+            HistoryItem::User("hi".into()),
+            HistoryItem::Assistant {
+                text: "ok".into(),
+                tool_calls: Vec::new(),
+                reasoning_details: Some(
+                    serde_json::json!([{"type": "thinking", "content": "hmm"}]),
+                ),
+            },
+        ];
+        let body = anthropic_body(
+            &cfg(Provider::Anthropic),
+            "system",
+            &history,
+            &[],
+            "claude-opus-4-7",
+            None,
+        );
+        let messages = body["messages"].as_array().unwrap();
+        let assistant = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))
+            .unwrap();
+        assert!(
+            assistant.get("reasoning_details").is_none(),
+            "anthropic_body must not replay reasoning_details"
+        );
+    }
+
+    #[test]
+    fn reasoning_details_not_replayed_in_responses_body() {
+        let history = vec![
+            HistoryItem::User("hi".into()),
+            HistoryItem::Assistant {
+                text: "ok".into(),
+                tool_calls: Vec::new(),
+                reasoning_details: Some(
+                    serde_json::json!([{"type": "thinking", "content": "hmm"}]),
+                ),
+            },
+        ];
+        let body = responses_body(&cfg_responses(), "system", &history, &[], "model", None);
+        let body_str = serde_json::to_string(&body).unwrap();
+        assert!(
+            !body_str.contains("reasoning_details"),
+            "responses_body must not replay reasoning_details"
+        );
     }
 }
