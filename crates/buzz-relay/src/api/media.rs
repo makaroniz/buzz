@@ -320,6 +320,7 @@ pub async fn upload_blob(
             config: &state.config.media,
             ctx: &auth.tenant,
             auth_event: &auth.auth_event,
+            claimed_source_hash: &auth.claimed_hash,
             content_length,
             attribution,
             mode: auth.mode,
@@ -350,7 +351,8 @@ pub async fn upload_blob(
 
     // Audit via bounded channel — same pattern as event audit.
     let desc = descriptor.clone();
-    let sanitized = desc.sha256 != auth.claimed_hash;
+    let sanitization_applied = route_applies_sanitization(auth.mode);
+    let transformed = desc.sha256 != auth.claimed_hash;
     if let Err(e) = state
         .audit_tx
         .send(NewAuditEntry {
@@ -361,12 +363,15 @@ pub async fn upload_blob(
             detail: serde_json::json!({
                 "sha256": desc.sha256,
                 "source_sha256": auth.claimed_hash,
-                "sanitized": sanitized,
-                "sanitization_policy": sanitized.then_some(1),
+                "sanitized": sanitization_applied,
+                "transformed": transformed,
+                "sanitization_policy": sanitization_applied.then_some(1),
                 "outcome": "accepted",
                 "output_size": desc.size,
                 "output_mime": desc.mime_type,
-                "tool_versions": buzz_media::sanitize::tool_versions(),
+                "tool_versions": sanitization_applied
+                    .then(buzz_media::sanitize::tool_versions)
+                    .flatten(),
             }),
         })
         .await
@@ -376,6 +381,13 @@ pub async fn upload_blob(
     }
 
     Ok(Json(descriptor))
+}
+
+fn route_applies_sanitization(mode: buzz_media::UploadRouteMode) -> bool {
+    matches!(
+        mode,
+        buzz_media::UploadRouteMode::Media | buzz_media::UploadRouteMode::Legacy
+    )
 }
 
 pub(crate) fn media_base_url_for_tenant(config_relay_url: &str, tenant_host: &str) -> String {
@@ -1181,6 +1193,19 @@ mod tests {
             media_base_url_for_tenant("ws://config.example", "localhost:3100"),
             "http://localhost:3100/media"
         );
+    }
+
+    #[test]
+    fn audit_records_sanitizer_application_from_route_policy() {
+        assert!(route_applies_sanitization(
+            buzz_media::UploadRouteMode::Media
+        ));
+        assert!(route_applies_sanitization(
+            buzz_media::UploadRouteMode::Legacy
+        ));
+        assert!(!route_applies_sanitization(
+            buzz_media::UploadRouteMode::Upload
+        ));
     }
 
     #[test]

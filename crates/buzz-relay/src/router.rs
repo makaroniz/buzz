@@ -34,7 +34,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .config
         .media
         .max_image_bytes
-        .max(state.config.media.max_video_bytes) as usize;
+        .max(state.config.media.max_video_bytes)
+        .max(state.config.media.max_audio_bytes)
+        .max(state.config.media.max_file_bytes) as usize;
     let media_router = Router::new()
         .route("/media", put(api::media::upload_blob))
         .route("/upload", put(api::media::upload_blob))

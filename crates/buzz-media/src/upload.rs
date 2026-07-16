@@ -37,6 +37,8 @@ pub struct StreamingIngestInput<'a> {
     pub ctx: &'a TenantContext,
     /// Verified Blossom authorization event for the source bytes.
     pub auth_event: &'a nostr::Event,
+    /// Source hash claimed by the `X-SHA-256` request header.
+    pub claimed_source_hash: &'a str,
     /// Optional request content length for an early size rejection.
     pub content_length: Option<u64>,
     /// Optional moderation attribution recorded after durable publication.
@@ -58,6 +60,7 @@ pub async fn process_streaming_ingest(
         config,
         ctx,
         auth_event,
+        claimed_source_hash,
         content_length,
         attribution,
         mode,
@@ -81,24 +84,22 @@ pub async fn process_streaming_ingest(
     let source_path = source.path().to_path_buf();
     let (source_hash, source_size, sniff) =
         stream_source(body_stream, &source_path, max_bytes).await?;
+    if source_hash != claimed_source_hash {
+        return Err(MediaError::HashMismatch);
+    }
 
-    let auth = auth_event.clone();
-    let auth_hash = source_hash.clone();
-    let bound_host = ctx.host().to_string();
-    tokio::task::spawn_blocking(move || match mode {
-        UploadRouteMode::Media => {
-            verify_blossom_media_auth(&auth, &auth_hash, Some(&bound_host), 3600)
-        }
-        UploadRouteMode::Upload | UploadRouteMode::Legacy => {
-            verify_blossom_upload_auth(&auth, &auth_hash, Some(&bound_host), 3600)
-        }
-    })
-    .await
-    .map_err(|_| MediaError::Internal)??;
+    // Authenticate the computed source hash before invoking any media parser.
+    // The permissive bound is narrowed below once content probing identifies
+    // whether this is a long-running video upload or a short-lived token class.
+    verify_source_auth(mode, auth_event, &source_hash, ctx.host(), 3_600).await?;
 
     let source_probe = crate::sanitize::probe_media(&source_path, &sniff, config).await?;
     let is_media = source_probe.is_some();
     enforce_route_policy(mode, source_probe.as_ref())?;
+    let max_auth_age = auth_max_age_secs(source_probe.as_ref());
+    if max_auth_age < 3_600 {
+        verify_source_auth(mode, auth_event, &source_hash, ctx.host(), max_auth_age).await?;
+    }
 
     enforce_source_size(source_probe.as_ref(), source_size, config)?;
 
@@ -170,6 +171,8 @@ pub async fn process_streaming_ingest(
     if sidecar_exists && blob_exists {
         let meta = storage.get_sidecar(ctx, &output_hash).await?;
         if let Some(attribution) = &attribution {
+            let (record_source_hash, record_source_size, record_source_mime) =
+                source_record_fields(source_probe.as_ref(), &source_hash, source_size);
             record_upload_event(
                 storage,
                 ctx,
@@ -180,13 +183,9 @@ pub async fn process_streaming_ingest(
                     ext: &ext,
                     mime: &mime,
                     size: output_size,
-                    source_sha256: Some(source_hash.as_str()),
-                    source_size: Some(source_size),
-                    source_mime: Some(
-                        source_probe
-                            .as_ref()
-                            .map_or(mime.as_str(), |probe| probe.mime.as_str()),
-                    ),
+                    source_sha256: record_source_hash,
+                    source_size: record_source_size,
+                    source_mime: record_source_mime,
                     sanitization_policy: is_media.then_some(1),
                     tool_versions: is_media.then(crate::sanitize::tool_versions).flatten(),
                     uploaded_at: chrono::Utc::now().timestamp(),
@@ -244,6 +243,8 @@ pub async fn process_streaming_ingest(
     };
 
     if let Some(attribution) = &attribution {
+        let (record_source_hash, record_source_size, record_source_mime) =
+            source_record_fields(source_probe.as_ref(), &source_hash, source_size);
         record_upload_event(
             storage,
             ctx,
@@ -254,13 +255,9 @@ pub async fn process_streaming_ingest(
                 ext: &ext,
                 mime: &mime,
                 size: output_size,
-                source_sha256: Some(source_hash.as_str()),
-                source_size: Some(source_size),
-                source_mime: Some(
-                    source_probe
-                        .as_ref()
-                        .map_or(mime.as_str(), |probe| probe.mime.as_str()),
-                ),
+                source_sha256: record_source_hash,
+                source_size: record_source_size,
+                source_mime: record_source_mime,
                 sanitization_policy: is_media.then_some(1),
                 tool_versions: is_media.then(crate::sanitize::tool_versions).flatten(),
                 uploaded_at,
@@ -291,6 +288,46 @@ pub async fn process_streaming_ingest(
         Some(&meta),
         uploaded_at,
     ))
+}
+
+async fn verify_source_auth(
+    mode: UploadRouteMode,
+    auth_event: &nostr::Event,
+    source_hash: &str,
+    bound_host: &str,
+    max_age_secs: u64,
+) -> Result<(), MediaError> {
+    let auth = auth_event.clone();
+    let auth_hash = source_hash.to_string();
+    let bound_host = bound_host.to_string();
+    tokio::task::spawn_blocking(move || match mode {
+        UploadRouteMode::Media => {
+            verify_blossom_media_auth(&auth, &auth_hash, Some(&bound_host), max_age_secs)
+        }
+        UploadRouteMode::Upload | UploadRouteMode::Legacy => {
+            verify_blossom_upload_auth(&auth, &auth_hash, Some(&bound_host), max_age_secs)
+        }
+    })
+    .await
+    .map_err(|_| MediaError::Internal)?
+}
+
+fn auth_max_age_secs(source_probe: Option<&crate::sanitize::MediaProbe>) -> u64 {
+    match source_probe.map(|probe| probe.class) {
+        Some(crate::sanitize::MediaClass::Video) => 3_600,
+        Some(crate::sanitize::MediaClass::Image | crate::sanitize::MediaClass::Audio) | None => 600,
+    }
+}
+
+fn source_record_fields<'a>(
+    source_probe: Option<&'a crate::sanitize::MediaProbe>,
+    source_hash: &'a str,
+    source_size: u64,
+) -> (Option<&'a str>, Option<u64>, Option<&'a str>) {
+    match source_probe {
+        Some(probe) => (Some(source_hash), Some(source_size), Some(&probe.mime)),
+        None => (None, None, None),
+    }
 }
 
 fn enforce_route_policy(
@@ -1158,6 +1195,31 @@ mod tests {
             enforce_route_policy(UploadRouteMode::Upload, Some(&probe)),
             Err(MediaError::UnsupportedMedia(mime)) if mime == "image/jpeg"
         ));
+    }
+
+    #[test]
+    fn authorization_freshness_is_class_specific() {
+        let image = image_probe();
+        let mut video = image.clone();
+        video.class = crate::sanitize::MediaClass::Video;
+        let mut audio = image.clone();
+        audio.class = crate::sanitize::MediaClass::Audio;
+
+        assert_eq!(auth_max_age_secs(Some(&image)), 600);
+        assert_eq!(auth_max_age_secs(Some(&audio)), 600);
+        assert_eq!(auth_max_age_secs(None), 600);
+        assert_eq!(auth_max_age_secs(Some(&video)), 3_600);
+    }
+
+    #[test]
+    fn exact_upload_records_omit_transformation_fields() {
+        assert_eq!(source_record_fields(None, "source", 42), (None, None, None));
+
+        let image = image_probe();
+        assert_eq!(
+            source_record_fields(Some(&image), "source", 42),
+            (Some("source"), Some(42), Some("image/jpeg"))
+        );
     }
 
     #[test]
