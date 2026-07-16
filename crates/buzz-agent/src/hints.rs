@@ -14,7 +14,6 @@ fn home_dir() -> Option<PathBuf> {
 #[derive(Clone)]
 pub struct SkillEntry {
     pub name: String,
-    pub description: String,
     /// Absolute path to the SKILL.md file; used by `load_skill` to read on demand.
     pub path: PathBuf,
     /// Absolute paths to every non-SKILL.md file in the skill directory tree.
@@ -130,7 +129,7 @@ fn scan_skill_dir(dir: &Path, seen: &mut HashSet<String>, skills: &mut Vec<Skill
         let Ok(content) = std::fs::read_to_string(&skill_md) else {
             continue;
         };
-        let Some((name, description)) = parse_skill_frontmatter(&content) else {
+        let Some((name, _description)) = parse_skill_frontmatter(&content) else {
             continue;
         };
         if seen.contains(&name) {
@@ -145,7 +144,6 @@ fn scan_skill_dir(dir: &Path, seen: &mut HashSet<String>, skills: &mut Vec<Skill
 
         skills.push(SkillEntry {
             name,
-            description,
             path: skill_md,
             supporting_files,
         });
@@ -239,10 +237,10 @@ fn build_hints_section_impl(cwd: &Path, home: Option<&Path>) -> (String, Vec<Ski
     if !skills.is_empty() {
         out.push_str("\n## Available Skills\n");
         for skill in &skills {
-            out.push_str(&format!("- {}: {}\n", skill.name, skill.description));
+            out.push_str(&format!("- {}\n", skill.name));
         }
         out.push_str(
-            "\nUse the `load_skill` tool to read the full content of a skill before using it.\n",
+            "\nUse the `load_skill` tool to read a skill's instructions before using it.\n",
         );
     }
 
@@ -404,8 +402,12 @@ mod tests {
 
         let skills = discover_skills_impl(cwd, None);
         assert_eq!(skills.len(), 1, "duplicate name should be deduplicated");
-        assert_eq!(
-            skills[0].description, "from agents",
+        assert!(
+            skills[0]
+                .path
+                .to_str()
+                .unwrap()
+                .contains(".agents/skills/shared"),
             "first wins (.agents/)"
         );
         // Path should point to the .agents/ version (first wins).
@@ -471,9 +473,10 @@ mod tests {
             result.contains("## Available Skills"),
             "missing Available Skills"
         );
+        assert!(result.contains("- buzz-cli\n"), "missing skill name");
         assert!(
-            result.contains("buzz-cli: CLI reference for Buzz managed agents"),
-            "missing skill bullet"
+            !result.contains("CLI reference for Buzz managed agents"),
+            "skill description must not be inlined in system prompt"
         );
         // Body must NOT be inlined — lazy loading only.
         assert!(
@@ -595,8 +598,12 @@ mod tests {
 
         let skills = discover_skills_impl(cwd.path(), Some(home.path()));
         assert_eq!(skills.len(), 1, "duplicate name should be deduplicated");
-        assert_eq!(
-            skills[0].description, "from project",
+        assert!(
+            skills[0]
+                .path
+                .to_str()
+                .unwrap()
+                .contains(".agents/skills/shared"),
             "project-level should win over global"
         );
     }

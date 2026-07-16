@@ -17,8 +17,8 @@ pub fn load_skill_def() -> ToolDef {
     ToolDef {
         name: LOAD_SKILL_TOOL.to_owned(),
         description: "Load the full content of a skill by name. \
-            Call this before using a skill — the system prompt lists skill names \
-            and descriptions only; the full instructions are loaded on demand. \
+            Call this before using a skill — the system prompt lists skill names only; \
+            full instructions are loaded on demand. \
             To load a supporting file within a skill, use the form \
             \"skill-name/relative/path\" (e.g. \"my-skill/references/foo.md\")."
             .to_owned(),
@@ -76,8 +76,7 @@ pub async fn call_load_skill(arguments: &Value, skills: &[SkillEntry]) -> ToolRe
         }
     };
 
-    // Strip the YAML frontmatter — the agent already knows name/description
-    // from the system prompt; return only the body.
+    // Strip the YAML frontmatter; return the skill instructions only on demand.
     let body = strip_frontmatter(&raw);
 
     let mut output = body.to_owned();
@@ -250,10 +249,9 @@ mod tests {
         }
     }
 
-    fn make_skill(name: &str, description: &str, path: PathBuf) -> SkillEntry {
+    fn make_skill(name: &str, path: PathBuf) -> SkillEntry {
         SkillEntry {
             name: name.to_owned(),
-            description: description.to_owned(),
             path,
             supporting_files: Vec::new(),
         }
@@ -261,13 +259,11 @@ mod tests {
 
     fn make_skill_with_files(
         name: &str,
-        description: &str,
         path: PathBuf,
         supporting_files: Vec<PathBuf>,
     ) -> SkillEntry {
         SkillEntry {
             name: name.to_owned(),
-            description: description.to_owned(),
             path,
             supporting_files,
         }
@@ -298,7 +294,7 @@ mod tests {
             "---\nname: test\ndescription: A test\n---\nSkill body here.\n",
         )
         .unwrap();
-        let skills = vec![make_skill("test", "A test", skill_md)];
+        let skills = vec![make_skill("test", skill_md)];
         let result = call_load_skill(&serde_json::json!({"name": "test"}), &skills).await;
         assert!(!result.is_error);
         let text = text_content(&result);
@@ -324,12 +320,7 @@ mod tests {
         let ref_file = refs_dir.join("foo.md");
         std::fs::write(&ref_file, "Reference content.").unwrap();
 
-        let skills = vec![make_skill_with_files(
-            "my-skill",
-            "desc",
-            skill_md,
-            vec![ref_file],
-        )];
+        let skills = vec![make_skill_with_files("my-skill", skill_md, vec![ref_file])];
         let result = call_load_skill(&serde_json::json!({"name": "my-skill"}), &skills).await;
         assert!(!result.is_error);
         let text = text_content(&result);
@@ -357,7 +348,7 @@ mod tests {
             "---\nname: bare\ndescription: desc\n---\nBody.\n",
         )
         .unwrap();
-        let skills = vec![make_skill("bare", "desc", skill_md)];
+        let skills = vec![make_skill("bare", skill_md)];
         let result = call_load_skill(&serde_json::json!({"name": "bare"}), &skills).await;
         assert!(!result.is_error);
         let text = text_content(&result);
@@ -382,12 +373,7 @@ mod tests {
         let ref_file = refs_dir.join("foo.md");
         std::fs::write(&ref_file, "Reference content here.").unwrap();
 
-        let skills = vec![make_skill_with_files(
-            "my-skill",
-            "desc",
-            skill_md,
-            vec![ref_file],
-        )];
+        let skills = vec![make_skill_with_files("my-skill", skill_md, vec![ref_file])];
         let result = call_load_skill(
             &serde_json::json!({"name": "my-skill/references/foo.md"}),
             &skills,
@@ -420,12 +406,7 @@ mod tests {
         let ref_file = refs_dir.join("foo.md");
         std::fs::write(&ref_file, "content").unwrap();
 
-        let skills = vec![make_skill_with_files(
-            "my-skill",
-            "desc",
-            skill_md,
-            vec![ref_file],
-        )];
+        let skills = vec![make_skill_with_files("my-skill", skill_md, vec![ref_file])];
         let result = call_load_skill(
             &serde_json::json!({"name": "my-skill/references/missing.md"}),
             &skills,
@@ -449,7 +430,7 @@ mod tests {
             "---\nname: bare\ndescription: desc\n---\nBody.\n",
         )
         .unwrap();
-        let skills = vec![make_skill("bare", "desc", skill_md)];
+        let skills = vec![make_skill("bare", skill_md)];
         let result =
             call_load_skill(&serde_json::json!({"name": "bare/anything.md"}), &skills).await;
         assert!(result.is_error);
@@ -478,7 +459,6 @@ mod tests {
         // The traversal guard should catch this.
         let skills = vec![make_skill_with_files(
             "my-skill",
-            "desc",
             skill_md.clone(),
             vec![outside_file.clone()],
         )];
@@ -519,12 +499,7 @@ mod tests {
         let ref_file = refs_dir.join("extra.md");
         std::fs::write(&ref_file, "extra content").unwrap();
 
-        let skills = vec![make_skill_with_files(
-            "big",
-            "desc",
-            skill_md,
-            vec![ref_file],
-        )];
+        let skills = vec![make_skill_with_files("big", skill_md, vec![ref_file])];
         let result = call_load_skill(&serde_json::json!({"name": "big"}), &skills).await;
         assert!(!result.is_error);
         let text = text_content(&result);
@@ -548,12 +523,7 @@ mod tests {
         let ref_file = refs_dir.join("huge.md");
         std::fs::write(&ref_file, "x".repeat(MAX_SKILL_BODY_BYTES * 2)).unwrap();
 
-        let skills = vec![make_skill_with_files(
-            "big",
-            "desc",
-            skill_md,
-            vec![ref_file],
-        )];
+        let skills = vec![make_skill_with_files("big", skill_md, vec![ref_file])];
         let result = call_load_skill(
             &serde_json::json!({"name": "big/references/huge.md"}),
             &skills,

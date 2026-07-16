@@ -248,8 +248,8 @@ async fn hints_suppressed_with_env_var() {
     h.shutdown().await;
 }
 
-/// SKILL.md files in .agents/skills/ are loaded into the system prompt as metadata only.
-/// The body is NOT inlined; the agent uses `load_skill` to fetch it on demand.
+/// SKILL.md files in .agents/skills/ are loaded into the system prompt as names only.
+/// The description and body are NOT inlined; the agent uses `load_skill` to fetch them on demand.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skills_loaded_from_agents_skills_dir() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -277,12 +277,16 @@ async fn skills_loaded_from_agents_skills_dir() {
     let captured = llm.captured.lock().await;
     assert!(!captured.is_empty(), "no LLM request captured");
     let system = captured[0]["messages"][0]["content"].as_str().unwrap_or("");
-    // Skill name must appear in the metadata listing.
+    // Skill name must appear in the listing.
     assert!(
         system.contains("test-skill"),
         "system prompt missing skill name: {system}"
     );
-    // Body must NOT be inlined — lazy loading only.
+    // Description and body must NOT be inlined — lazy loading only.
+    assert!(
+        !system.contains("A test skill"),
+        "skill description must not be inlined in system prompt: {system}"
+    );
     assert!(
         !system.contains("SKILL_BODY_MARKER_77"),
         "skill body must not be inlined in system prompt: {system}"
@@ -380,7 +384,7 @@ async fn global_agents_md_loaded() {
 }
 
 /// Global skills from ~/.agents/skills/ are loaded; project-level wins on name conflict.
-/// Bodies are NOT inlined — only metadata (name + description) appears in the system prompt.
+/// Descriptions and bodies are NOT inlined — only names appear in the system prompt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_skills_loaded_and_project_wins() {
     let home_tmp = tempfile::TempDir::new().unwrap();
@@ -426,7 +430,7 @@ async fn global_skills_loaded_and_project_wins() {
     let captured = llm.captured.lock().await;
     assert!(!captured.is_empty(), "no LLM request captured");
     let system = captured[0]["messages"][0]["content"].as_str().unwrap_or("");
-    // Both skill names must appear in the metadata listing.
+    // Both skill names must appear in the listing.
     assert!(
         system.contains("global-only"),
         "system prompt missing global-only skill name: {system}"
@@ -435,10 +439,14 @@ async fn global_skills_loaded_and_project_wins() {
         system.contains("shared-name"),
         "system prompt missing shared-name skill: {system}"
     );
-    // Project description wins over global for the shared name.
+    // Descriptions must NOT be inlined.
     assert!(
-        system.contains("Project version"),
-        "system prompt should show project description for shared-name: {system}"
+        !system.contains("A global skill"),
+        "system prompt should NOT show global description: {system}"
+    );
+    assert!(
+        !system.contains("Project version"),
+        "system prompt should NOT show project description for shared-name: {system}"
     );
     assert!(
         !system.contains("Global version"),
@@ -499,7 +507,7 @@ async fn symlinked_skill_dir_is_discovered() {
     let captured = llm.captured.lock().await;
     assert!(!captured.is_empty(), "no LLM request captured");
     let system = captured[0]["messages"][0]["content"].as_str().unwrap_or("");
-    // The symlinked skill name must appear in the metadata listing.
+    // The symlinked skill name must appear in the listing.
     assert!(
         system.contains("symlinked-skill"),
         "system prompt missing symlinked skill name: {system}"
