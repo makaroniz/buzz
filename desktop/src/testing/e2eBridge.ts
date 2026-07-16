@@ -49,6 +49,15 @@ import type {
   RawInstallRuntimeResult,
 } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import {
+  ANNOUNCEMENT_DEMO_CHANNELS,
+  ANNOUNCEMENT_DEMO_DMS,
+  ANNOUNCEMENT_DEMO_MESSAGES,
+  ANNOUNCEMENT_DEMO_PEOPLE,
+  ANNOUNCEMENT_DEMO_PROJECT_SUBJECTS,
+  ANNOUNCEMENT_DEMO_PROJECTS,
+  type AnnouncementDemoPersonKey,
+} from "@/testing/announcementDemoFixtures";
 
 type TestIdentity = {
   privateKey: string;
@@ -67,6 +76,7 @@ type MockManagedAgentSeed = {
   name: string;
   avatarUrl?: string | null;
   personaId?: string | null;
+  systemPrompt?: string | null;
   status?: RawManagedAgent["status"];
   channelNames?: string[];
   channelIds?: string[];
@@ -121,6 +131,7 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    announcementDemo?: boolean;
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
     acpAuthMethods?: Record<string, RawAcpAuthMethodsResult>;
     connectAcpRuntimeResult?: RawConnectAcpRuntimeResult;
@@ -322,6 +333,10 @@ type E2eConfig = {
   relayWsUrl?: string;
   identity?: TestIdentity;
 };
+
+type MockGlobalAgentConfig = NonNullable<
+  NonNullable<E2eConfig["mock"]>["globalAgentConfig"]
+>;
 
 type RawBlobDescriptor = {
   url: string;
@@ -1016,6 +1031,12 @@ const BOB_PUBKEY =
   "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260";
 const CHARLIE_PUBKEY =
   "554cef57437abac34522ac2c9f0490d685b72c80478cf9f7ed6f9570ee8624ea";
+const SOFIA_PUBKEY = "10".repeat(32);
+const MARCUS_PUBKEY = "20".repeat(32);
+const ELENA_PUBKEY = "30".repeat(32);
+const THEO_PUBKEY = "40".repeat(32);
+const CAMILLE_PUBKEY = "50".repeat(32);
+const NOAH_PUBKEY = "60".repeat(32);
 const OUTSIDER_PUBKEY =
   "df8e91b86fda13a9a67896df77232f7bdab2ba9c3e165378e1ba3d24c13a328e";
 const PROFILE_ONLY_AGENT_PUBKEY =
@@ -1031,6 +1052,25 @@ const STARTER_GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 const STARTER_WELCOME_CHANNEL_ID = "5f0b1b3c-2a37-5366-9b8c-31a4b21d8e77";
 const STARTER_GENERAL_CHANNEL_NAME = "general";
 const STARTER_WELCOME_CHANNEL_NAME = "welcome-everyone";
+const ANNOUNCEMENT_DEMO_PERSON_PUBKEYS: Record<
+  AnnouncementDemoPersonKey,
+  string
+> = {
+  viewer: MOCK_IDENTITY_PUBKEY,
+  engineer: ALICE_PUBKEY,
+  designer: BOB_PUBKEY,
+  marketing: CHARLIE_PUBKEY,
+  researcher: SOFIA_PUBKEY,
+  qa: MARCUS_PUBKEY,
+  data: ELENA_PUBKEY,
+  support: THEO_PUBKEY,
+  producer: CAMILLE_PUBKEY,
+  community: NOAH_PUBKEY,
+};
+
+function getAnnouncementDemoPersonPubkey(key: AnnouncementDemoPersonKey) {
+  return ANNOUNCEMENT_DEMO_PERSON_PUBKEYS[key];
+}
 
 // Tracks whether `persist_current_identity` or `import_identity` has cleared
 // the lost flag set by `mock.identityLost`. Reset to false on each fresh page
@@ -1059,6 +1099,12 @@ const mockDisplayNames = new Map<string, string>([
   [ALICE_PUBKEY, "alice"],
   [BOB_PUBKEY, "bob"],
   [CHARLIE_PUBKEY, "charlie"],
+  [SOFIA_PUBKEY, "sofia"],
+  [MARCUS_PUBKEY, "marcus"],
+  [ELENA_PUBKEY, "elena"],
+  [THEO_PUBKEY, "theo"],
+  [CAMILLE_PUBKEY, "camille"],
+  [NOAH_PUBKEY, "noah"],
   [PROFILE_ONLY_AGENT_PUBKEY, "mira"],
   [OWNED_RELAY_AGENT_PUBKEY, "nadia"],
   [OUTSIDER_PUBKEY, "outsider"],
@@ -1305,6 +1351,72 @@ function cloneAgentMemoryListing(
 
 function resetMockRelayMembers(config: E2eConfig | undefined) {
   const pubkey = getMockMemberPubkey(config);
+  if (config?.mock?.announcementDemo) {
+    mockRelayMembers = [
+      {
+        pubkey,
+        role: "owner",
+        added_by: null,
+        created_at: isoMinutesAgo(1_440),
+      },
+      {
+        pubkey: ALICE_PUBKEY,
+        role: "admin",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(1_200),
+      },
+      {
+        pubkey: BOB_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(1_100),
+      },
+      {
+        pubkey: CHARLIE_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(1_000),
+      },
+      {
+        pubkey: SOFIA_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(940),
+      },
+      {
+        pubkey: MARCUS_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(880),
+      },
+      {
+        pubkey: ELENA_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(820),
+      },
+      {
+        pubkey: THEO_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(760),
+      },
+      {
+        pubkey: CAMILLE_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(700),
+      },
+      {
+        pubkey: NOAH_PUBKEY,
+        role: "member",
+        added_by: pubkey,
+        created_at: isoMinutesAgo(640),
+      },
+    ];
+    return;
+  }
+
   // Drive the active identity's role from `mock.relayRole` so the e2e harness
   // can exercise the NIP-IA admin gate (owner/admin → true, member/null →
   // false). Default stays `owner` to preserve existing test behavior.
@@ -1791,7 +1903,7 @@ function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
     idle_timeout_seconds: null,
     max_turn_duration_seconds: null,
     parallelism: 1,
-    system_prompt: null,
+    system_prompt: seed.systemPrompt?.trim() || null,
     avatar_url: seed.avatarUrl ?? null,
     model: null,
     env_vars: {},
@@ -1821,6 +1933,11 @@ function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
 }
 
 function resetMockRelayAgents(config?: E2eConfig) {
+  if (config?.mock?.announcementDemo) {
+    mockRelayAgents = [];
+    return;
+  }
+
   mockRelayAgents = defaultMockRelayAgents.map((agent) => ({
     ...agent,
     channels: [...agent.channels],
@@ -1853,37 +1970,54 @@ function resetMockRelayAgents(config?: E2eConfig) {
 function resetMockManagedAgents(config?: E2eConfig) {
   mockManagedAgents = [];
 
-  for (const seed of config?.mock?.managedAgents ?? []) {
-    mockManagedAgents.push(buildSeededManagedAgent(seed));
-    applyMockDisplayName(seed.pubkey, seed.name);
-    mockAgentPubkeys.add(seed.pubkey);
-    mockProfiles.set(seed.pubkey, {
-      pubkey: seed.pubkey,
-      display_name: seed.name,
-      avatar_url: null,
-      about: null,
+  const savedState = config?.mock?.announcementDemo
+    ? readAnnouncementDemoAgentState()
+    : null;
+  const entries = savedState
+    ? savedState.agents.map((saved) => ({
+        agent: cloneSavedManagedAgent(saved.agent),
+        channelIds: saved.channelIds,
+      }))
+    : (config?.mock?.managedAgents ?? []).map((seed) => ({
+        agent: buildSeededManagedAgent(seed),
+        channelIds: mockChannels
+          .filter(
+            (channel) =>
+              seed.channelIds?.includes(channel.id) ||
+              seed.channelNames?.includes(channel.name),
+          )
+          .map((channel) => channel.id),
+      }));
+
+  for (const { agent, channelIds } of entries) {
+    mockManagedAgents.push(agent);
+    applyMockDisplayName(agent.pubkey, agent.name);
+    mockAgentPubkeys.add(agent.pubkey);
+    mockProfiles.set(agent.pubkey, {
+      pubkey: agent.pubkey,
+      display_name: agent.name,
+      avatar_url: agent.avatar_url,
+      about: agent.system_prompt,
       nip05_handle: null,
       owner_pubkey: MOCK_IDENTITY_PUBKEY,
       is_agent: true,
       has_profile_event: true,
     });
     for (const channel of mockChannels) {
-      const isSeedChannel =
-        seed.channelIds?.includes(channel.id) ||
-        seed.channelNames?.includes(channel.name);
+      const isSeedChannel = channelIds.includes(channel.id);
       if (
         !isSeedChannel ||
-        channel.members.some((member) => member.pubkey === seed.pubkey)
+        channel.members.some((member) => member.pubkey === agent.pubkey)
       ) {
         continue;
       }
 
       channel.members.push({
-        pubkey: seed.pubkey,
+        pubkey: agent.pubkey,
         role: "bot",
         is_agent: true,
         joined_at: new Date().toISOString(),
-        display_name: seed.name,
+        display_name: agent.name,
       });
       syncMockChannel(channel);
       touchMockChannel(channel);
@@ -1891,9 +2025,15 @@ function resetMockManagedAgents(config?: E2eConfig) {
   }
 
   syncMockRelayAgentsFromManagedAgents();
+  persistAnnouncementDemoAgentState();
 }
 
 function resetMockPersonas(config?: E2eConfig) {
+  if (config?.mock?.announcementDemo) {
+    mockPersonas = [];
+    return;
+  }
+
   const now = new Date().toISOString();
   const activePersonaIds = new Set(config?.mock?.activePersonaIds ?? []);
   const builtInPersonas = [
@@ -2543,6 +2683,120 @@ const mockSockets = new Map<number, MockSocket>();
 let mockWebsocketSendMutexWedged = false;
 const realSockets = new Map<number, WebSocket>();
 let mockManagedAgents: MockManagedAgent[] = [];
+const pendingAnnouncementDemoAgentResponses = new Set<string>();
+let mockGlobalAgentConfig: MockGlobalAgentConfig = {
+  env_vars: {},
+  provider: null,
+  model: null,
+};
+
+const ANNOUNCEMENT_DEMO_AGENT_STATE_KEY =
+  "buzz-announcement-demo-agent-state.v1";
+
+type AnnouncementDemoAgentState = {
+  globalConfig: MockGlobalAgentConfig;
+  agents: Array<{
+    agent: MockManagedAgent;
+    channelIds: string[];
+  }>;
+};
+
+function cloneMockGlobalAgentConfig(
+  config: MockGlobalAgentConfig,
+): MockGlobalAgentConfig {
+  return {
+    env_vars: { ...config.env_vars },
+    provider: config.provider,
+    model: config.model,
+  };
+}
+
+function cloneSavedManagedAgent(agent: MockManagedAgent): MockManagedAgent {
+  return {
+    ...agent,
+    agent_args: [...agent.agent_args],
+    env_vars: { ...(agent.env_vars ?? {}) },
+    backend:
+      agent.backend.type === "provider"
+        ? {
+            type: "provider",
+            id: agent.backend.id,
+            config: { ...agent.backend.config },
+          }
+        : { type: "local" },
+    respond_to_allowlist: [...agent.respond_to_allowlist],
+    log_lines: [...agent.log_lines],
+  };
+}
+
+function readAnnouncementDemoAgentState(): AnnouncementDemoAgentState | null {
+  try {
+    const stored = window.sessionStorage.getItem(
+      ANNOUNCEMENT_DEMO_AGENT_STATE_KEY,
+    );
+    if (!stored) {
+      return null;
+    }
+
+    const parsed = JSON.parse(stored) as Partial<AnnouncementDemoAgentState>;
+    if (!parsed.globalConfig || !Array.isArray(parsed.agents)) {
+      return null;
+    }
+    return {
+      globalConfig: cloneMockGlobalAgentConfig(parsed.globalConfig),
+      agents: parsed.agents.map((entry) => ({
+        agent: cloneSavedManagedAgent(entry.agent),
+        channelIds: [...entry.channelIds],
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistAnnouncementDemoAgentState() {
+  if (!getConfig()?.mock?.announcementDemo) {
+    return;
+  }
+
+  const state: AnnouncementDemoAgentState = {
+    globalConfig: cloneMockGlobalAgentConfig(mockGlobalAgentConfig),
+    agents: mockManagedAgents.map((agent) => ({
+      agent: cloneSavedManagedAgent(agent),
+      channelIds: mockChannels
+        .filter((channel) =>
+          channel.members.some(
+            (member) =>
+              normalizePubkey(member.pubkey) === normalizePubkey(agent.pubkey),
+          ),
+        )
+        .map((channel) => channel.id),
+    })),
+  };
+
+  try {
+    window.sessionStorage.setItem(
+      ANNOUNCEMENT_DEMO_AGENT_STATE_KEY,
+      JSON.stringify(state),
+    );
+  } catch {
+    // Keep the live demo working even when web storage is unavailable.
+  }
+}
+
+function resetMockGlobalAgentConfig(config?: E2eConfig) {
+  const savedState = config?.mock?.announcementDemo
+    ? readAnnouncementDemoAgentState()
+    : null;
+  mockGlobalAgentConfig = cloneMockGlobalAgentConfig(
+    savedState?.globalConfig ??
+      config?.mock?.globalAgentConfig ?? {
+        env_vars: {},
+        provider: null,
+        model: null,
+      },
+  );
+}
 
 // Mesh-compute mock state — TEST-ONLY.
 //
@@ -2900,6 +3154,114 @@ const mockPresence = new Map<string, PresenceStatus>([
   [OWNED_RELAY_AGENT_PUBKEY, "online"],
   [OUTSIDER_PUBKEY, "offline"],
 ]);
+
+function applyAnnouncementDemoFixtures(config: E2eConfig | undefined) {
+  if (!config?.mock?.announcementDemo) {
+    return;
+  }
+
+  DEFAULT_MOCK_IDENTITY.display_name =
+    ANNOUNCEMENT_DEMO_PEOPLE.viewer.displayName;
+
+  mockAgentPubkeys.delete(ALICE_PUBKEY);
+  mockAgentPubkeys.delete(CHARLIE_PUBKEY);
+  mockAgentPubkeys.delete(PROFILE_ONLY_AGENT_PUBKEY);
+  mockAgentPubkeys.delete(OWNED_RELAY_AGENT_PUBKEY);
+  mockProfiles.delete(PROFILE_ONLY_AGENT_PUBKEY);
+  mockProfiles.delete(OWNED_RELAY_AGENT_PUBKEY);
+
+  for (const key of Object.keys(
+    ANNOUNCEMENT_DEMO_PEOPLE,
+  ) as AnnouncementDemoPersonKey[]) {
+    const person = ANNOUNCEMENT_DEMO_PEOPLE[key];
+    const pubkey = getAnnouncementDemoPersonPubkey(key);
+    mockDisplayNames.set(pubkey, person.displayName);
+    mockKind0Names.set(pubkey, person.displayName.split(" ")[0].toLowerCase());
+    mockProfiles.set(pubkey, {
+      pubkey,
+      display_name: person.displayName,
+      avatar_url: person.avatarUrl,
+      about: person.role,
+      nip05_handle: person.nip05Handle,
+      owner_pubkey: null,
+      is_agent: false,
+      has_profile_event: true,
+    });
+    mockPresence.set(pubkey, person.presence);
+  }
+
+  const channelsById = new Map(
+    mockChannels.map((channel) => [channel.id, channel]),
+  );
+  const demoChannels = ANNOUNCEMENT_DEMO_CHANNELS.map((seed, seedIndex) => {
+    const channel = channelsById.get(seed.id);
+    if (!channel) {
+      throw new Error(`Missing announcement demo channel seed ${seed.id}`);
+    }
+
+    channel.name = seed.name;
+    channel.channel_type = seed.channelType;
+    channel.visibility = seed.visibility;
+    channel.description = seed.description;
+    channel.topic = seed.topic;
+    channel.purpose = seed.purpose;
+    channel.last_message_at = isoMinutesAgo(seed.lastMessageMinutesAgo);
+    channel.archived_at = null;
+    channel.created_by = getAnnouncementDemoPersonPubkey(seed.createdBy);
+    channel.topic_set_by = channel.created_by;
+    channel.topic_set_at = isoMinutesAgo(60 + seedIndex * 5);
+    channel.purpose_set_by = channel.created_by;
+    channel.purpose_set_at = isoMinutesAgo(70 + seedIndex * 5);
+    channel.topic_required = false;
+    channel.max_members = null;
+    channel.members = seed.memberRoles.map(([personKey, role], index) =>
+      createMockMember(
+        getAnnouncementDemoPersonPubkey(personKey),
+        role,
+        1_300 - seedIndex * 20 - index * 10,
+      ),
+    );
+    channel.participants = [];
+    channel.participant_pubkeys = [];
+    syncMockChannel(channel);
+    return channel;
+  });
+
+  const demoDms = ANNOUNCEMENT_DEMO_DMS.map((seed, seedIndex) => {
+    const channel = channelsById.get(seed.id);
+    if (!channel) {
+      throw new Error(`Missing announcement demo DM seed ${seed.id}`);
+    }
+
+    const otherPubkey = getAnnouncementDemoPersonPubkey(seed.person);
+    channel.name = "DM";
+    channel.channel_type = "dm";
+    channel.visibility = "private";
+    channel.description = `Direct message with ${ANNOUNCEMENT_DEMO_PEOPLE[seed.person].displayName}`;
+    channel.topic = null;
+    channel.purpose = null;
+    channel.last_message_at = isoMinutesAgo(seed.lastMessageMinutesAgo);
+    channel.archived_at = null;
+    channel.created_by = otherPubkey;
+    channel.topic_set_by = null;
+    channel.topic_set_at = null;
+    channel.purpose_set_by = null;
+    channel.purpose_set_at = null;
+    channel.topic_required = false;
+    channel.max_members = 2;
+    channel.members = [
+      createMockMember(otherPubkey, "member", 700 - seedIndex * 20),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 700 - seedIndex * 20),
+    ];
+    syncMockChannel(channel);
+    return channel;
+  });
+
+  mockChannels.splice(0, mockChannels.length, ...demoChannels, ...demoDms);
+  mockMessages.clear();
+  mockProjectEventStore = null;
+}
+
 const mockFeedOverrides: RawHomeFeedResponse["feed"] = {
   mentions: [],
   needs_action: [],
@@ -3240,10 +3602,75 @@ function buildReplyMessageTags(
   return tags;
 }
 
+function announcementDemoEventId(channelId: string, slot: number): string {
+  const channelPrefix = channelId
+    .toLowerCase()
+    .replace(/[^0-9a-f]/g, "")
+    .padEnd(56, "0")
+    .slice(0, 56);
+  return `${channelPrefix}${slot.toString(16).padStart(8, "0")}`;
+}
+
+function buildAnnouncementDemoMessages(channelId: string): RelayEvent[] | null {
+  if (!getConfig()?.mock?.announcementDemo) {
+    return null;
+  }
+
+  const now = Math.floor(Date.now() / 1_000);
+  return (ANNOUNCEMENT_DEMO_MESSAGES[channelId] ?? []).flatMap(
+    (seed, messageIndex) => {
+      const messageId = announcementDemoEventId(channelId, messageIndex + 1);
+      const message: RelayEvent = {
+        id: messageId,
+        pubkey: getAnnouncementDemoPersonPubkey(seed.author),
+        created_at: now - seed.minutesAgo * 60,
+        kind: seed.kind ?? 9,
+        tags: [
+          ["h", channelId],
+          ...(seed.extraTags?.map((tag) => [...tag]) ?? []),
+        ],
+        content: seed.content,
+        sig: "mocksig".repeat(20).slice(0, 128),
+      };
+      const reactions = (seed.reactions ?? []).flatMap(
+        (reaction, reactionIndex) =>
+          reaction.authors.map(
+            (author, authorIndex): RelayEvent => ({
+              id: announcementDemoEventId(
+                channelId,
+                10_000 + messageIndex * 100 + reactionIndex * 10 + authorIndex,
+              ),
+              pubkey: getAnnouncementDemoPersonPubkey(author),
+              created_at:
+                now -
+                (reaction.minutesAgo ?? Math.max(0, seed.minutesAgo - 1)) * 60 -
+                authorIndex,
+              kind: KIND_REACTION,
+              tags: [
+                ["h", channelId],
+                ["e", messageId],
+              ],
+              content: reaction.emoji,
+              sig: "mocksig".repeat(20).slice(0, 128),
+            }),
+          ),
+      );
+
+      return [message, ...reactions];
+    },
+  );
+}
+
 function getMockMessageStore(channelId: string): RelayEvent[] {
   const existing = mockMessages.get(channelId);
   if (existing) {
     return existing;
+  }
+
+  const announcementDemoMessages = buildAnnouncementDemoMessages(channelId);
+  if (announcementDemoMessages) {
+    mockMessages.set(channelId, announcementDemoMessages);
+    return announcementDemoMessages;
   }
 
   const seeded: RelayEvent[] =
@@ -3585,6 +4012,7 @@ function recordMockMessage(channelId: string, event: RelayEvent) {
 
   channel.last_message_at = new Date(event.created_at * 1_000).toISOString();
   touchMockChannel(channel);
+  queueAnnouncementDemoAgentResponses(channelId, event);
 }
 
 function resetMockUserStatuses() {
@@ -3723,6 +4151,253 @@ function emitMockTypingIndicator(channelId: string, pubkey: string) {
 
   emitMockLiveEvent(channelId, event);
   return event;
+}
+
+type AnnouncementDemoProviderConfig = {
+  provider: "anthropic" | "openai";
+  apiKey: string;
+  model: string;
+};
+
+type AnnouncementDemoAgentReply = {
+  text?: string;
+  error?: string;
+};
+
+function getAnnouncementDemoProviderConfig(
+  agent: MockManagedAgent,
+): AnnouncementDemoProviderConfig {
+  const persona = agent.persona_id
+    ? mockPersonas.find((candidate) => candidate.id === agent.persona_id)
+    : null;
+  const env = {
+    ...mockGlobalAgentConfig.env_vars,
+    ...(persona?.env_vars ?? {}),
+    ...(agent.env_vars ?? {}),
+  };
+  const configuredProvider = (
+    env.BUZZ_AGENT_PROVIDER ??
+    env.GOOSE_PROVIDER ??
+    mockGlobalAgentConfig.provider ??
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  const provider =
+    configuredProvider === "openai" || configuredProvider === "anthropic"
+      ? configuredProvider
+      : env.OPENAI_COMPAT_API_KEY?.trim() || env.OPENAI_API_KEY?.trim()
+        ? "openai"
+        : env.ANTHROPIC_API_KEY?.trim()
+          ? "anthropic"
+          : null;
+  if (!provider) {
+    throw new Error(
+      "Choose Anthropic or OpenAI and add its API key in agent settings.",
+    );
+  }
+
+  const model = (
+    agent.model ??
+    env.BUZZ_AGENT_MODEL ??
+    env.GOOSE_MODEL ??
+    env.OPENAI_COMPAT_MODEL ??
+    mockGlobalAgentConfig.model ??
+    ""
+  ).trim();
+  if (!model) {
+    throw new Error("Choose a model in agent settings.");
+  }
+
+  const apiKey =
+    provider === "openai"
+      ? env.OPENAI_COMPAT_API_KEY?.trim() || env.OPENAI_API_KEY?.trim()
+      : env.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error(
+      `Add an ${provider === "openai" ? "OpenAI" : "Anthropic"} API key in agent settings.`,
+    );
+  }
+
+  return { provider, apiKey, model };
+}
+
+function getAnnouncementDemoAgentTargets(channelId: string, event: RelayEvent) {
+  if (event.kind !== 9 || mockAgentPubkeys.has(normalizePubkey(event.pubkey))) {
+    return [];
+  }
+
+  const channel = mockChannels.find((candidate) => candidate.id === channelId);
+  if (!channel) {
+    return [];
+  }
+  const mentionedPubkeys = new Set(
+    event.tags
+      .filter((tag) => tag[0] === "p" && tag[1])
+      .map((tag) => normalizePubkey(tag[1])),
+  );
+  const dmMemberPubkeys =
+    channel.channel_type === "dm"
+      ? new Set(channel.members.map((member) => normalizePubkey(member.pubkey)))
+      : new Set<string>();
+
+  return mockManagedAgents.filter((agent) => {
+    const pubkey = normalizePubkey(agent.pubkey);
+    const isActive = agent.status === "running" || agent.status === "deployed";
+    return (
+      isActive && (mentionedPubkeys.has(pubkey) || dmMemberPubkeys.has(pubkey))
+    );
+  });
+}
+
+function getAnnouncementDemoConversation(
+  channelId: string,
+  agent: MockManagedAgent,
+) {
+  return getMockMessageStore(channelId)
+    .filter((event) => event.kind === 9 && event.content.trim())
+    .sort((left, right) => left.created_at - right.created_at)
+    .slice(-14)
+    .map((event) => {
+      const isAgent =
+        normalizePubkey(event.pubkey) === normalizePubkey(agent.pubkey);
+      const displayName =
+        mockDisplayNames.get(event.pubkey) ??
+        mockProfiles.get(event.pubkey)?.display_name ??
+        "Teammate";
+      return {
+        role: isAgent ? ("assistant" as const) : ("user" as const),
+        content: isAgent
+          ? event.content.trim()
+          : `${displayName}: ${event.content.trim()}`,
+      };
+    });
+}
+
+function getAnnouncementDemoSystemPrompt(
+  channelId: string,
+  agent: MockManagedAgent,
+) {
+  const channel = mockChannels.find((candidate) => candidate.id === channelId);
+  const basePrompt =
+    agent.system_prompt?.trim() ||
+    "You are a helpful AI teammate at Honeycomb Studios.";
+  const location =
+    channel?.channel_type === "dm"
+      ? "a direct message"
+      : `#${channel?.name ?? "a team channel"}`;
+  return `${basePrompt}\n\nYou are replying in ${location}. Use the conversation context, sound like a real colleague, and do not prefix the reply with your name.`;
+}
+
+async function requestAnnouncementDemoAgentReply(
+  channelId: string,
+  agent: MockManagedAgent,
+) {
+  const provider = getAnnouncementDemoProviderConfig(agent);
+  const response = await fetch("/__announcement-demo/agent-response", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...provider,
+      systemPrompt: getAnnouncementDemoSystemPrompt(channelId, agent),
+      messages: getAnnouncementDemoConversation(channelId, agent),
+    }),
+  });
+  const body = (await response.json()) as AnnouncementDemoAgentReply;
+  if (!response.ok || !body.text?.trim()) {
+    throw new Error(body.error?.trim() || "The model returned no reply.");
+  }
+  return body.text.trim();
+}
+
+function announcementDemoAgentFailureMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (/api key|authentication|401|unauthorized/i.test(message)) {
+    return "I couldn’t connect with that API key. Please check it in my settings and try again.";
+  }
+  if (/choose .*model|model .*not found|model.*does not exist/i.test(message)) {
+    return "I need a valid model selected in my settings before I can answer.";
+  }
+  if (/choose anthropic|choose openai|provider/i.test(message)) {
+    return "I need an Anthropic or OpenAI provider selected in my settings before I can answer.";
+  }
+  return "I hit a connection hiccup. Please try that again in a moment.";
+}
+
+function publishAnnouncementDemoAgentReply(
+  channelId: string,
+  sourceEvent: RelayEvent,
+  agent: MockManagedAgent,
+  content: string,
+) {
+  const sourceThread = getThreadReferenceFromTags(sourceEvent.tags);
+  const tags = sourceThread.rootEventId
+    ? buildReplyMessageTags(
+        channelId,
+        agent.pubkey,
+        sourceEvent.id,
+        sourceThread.rootEventId,
+        [sourceEvent.pubkey],
+      )
+    : buildTopLevelMessageTags(channelId, [sourceEvent.pubkey], agent.pubkey);
+  const event = createMockEvent(
+    9,
+    content,
+    tags,
+    agent.pubkey,
+    Math.max(Math.floor(Date.now() / 1_000), sourceEvent.created_at + 1),
+  );
+  recordMockMessage(channelId, event);
+  emitMockLiveEvent(channelId, event);
+}
+
+function queueAnnouncementDemoAgentResponses(
+  channelId: string,
+  sourceEvent: RelayEvent,
+) {
+  if (!getConfig()?.mock?.announcementDemo) {
+    return;
+  }
+
+  for (const agent of getAnnouncementDemoAgentTargets(channelId, sourceEvent)) {
+    const responseKey = `${sourceEvent.id}:${agent.pubkey}`;
+    if (pendingAnnouncementDemoAgentResponses.has(responseKey)) {
+      continue;
+    }
+    pendingAnnouncementDemoAgentResponses.add(responseKey);
+    emitMockTypingIndicator(channelId, agent.pubkey);
+    const typingInterval = window.setInterval(
+      () => emitMockTypingIndicator(channelId, agent.pubkey),
+      2_500,
+    );
+
+    void requestAnnouncementDemoAgentReply(channelId, agent)
+      .then(async (reply) => {
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+        agent.last_error = null;
+        agent.last_error_code = null;
+        agent.log_lines.push(
+          `completed announcement demo turn at ${new Date().toISOString()}`,
+        );
+        publishAnnouncementDemoAgentReply(channelId, sourceEvent, agent, reply);
+      })
+      .catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        agent.last_error = detail;
+        agent.log_lines.push(`announcement demo turn failed: ${detail}`);
+        publishAnnouncementDemoAgentReply(
+          channelId,
+          sourceEvent,
+          agent,
+          announcementDemoAgentFailureMessage(error),
+        );
+      })
+      .finally(() => {
+        window.clearInterval(typingInterval);
+        pendingAnnouncementDemoAgentResponses.delete(responseKey);
+        persistAnnouncementDemoAgentState();
+      });
+  }
 }
 
 function toRawForumPost(
@@ -4595,8 +5270,18 @@ function buildMockProjectEvents(): RelayEvent[] {
   const daySeconds = 86_400;
   const now = Math.floor(Date.now() / 1000);
   const historyDays = 26 * 7;
+  const projectSeeds = getConfig()?.mock?.announcementDemo
+    ? ANNOUNCEMENT_DEMO_PROJECTS.map((seed) => ({
+        ...seed,
+        owner: getAnnouncementDemoPersonPubkey(seed.owner),
+        contributors: seed.contributors.map(getAnnouncementDemoPersonPubkey),
+      }))
+    : MOCK_PROJECT_SEEDS;
+  const projectSubjects: readonly string[] = getConfig()?.mock?.announcementDemo
+    ? ANNOUNCEMENT_DEMO_PROJECT_SUBJECTS
+    : MOCK_PROJECT_SUBJECTS;
 
-  for (const [projectIndex, seed] of MOCK_PROJECT_SEEDS.entries()) {
+  for (const [projectIndex, seed] of projectSeeds.entries()) {
     const repoAddress = `${KIND_REPO_ANNOUNCEMENT}:${seed.owner}:${seed.dtag}`;
     const authors = [seed.owner, ...seed.contributors];
     const random = mulberry32(projectIndex + 1);
@@ -4628,9 +5313,7 @@ function buildMockProjectEvents(): RelayEvent[] {
           now - dayOffset * daySeconds - Math.floor(random() * 10) * 3_600;
         const author = authors[Math.floor(random() * authors.length)];
         const subject =
-          MOCK_PROJECT_SUBJECTS[
-            Math.floor(random() * MOCK_PROJECT_SUBJECTS.length)
-          ];
+          projectSubjects[Math.floor(random() * projectSubjects.length)];
         const commitHash = `${seed.dtag}${dayOffset}x${index}`
           .padEnd(40, "0")
           .slice(0, 40);
@@ -6051,6 +6734,7 @@ async function handleAddChannelMembers(
     syncMockChannel(targetChannel);
     touchMockChannel(targetChannel);
     syncMockRelayAgentsFromManagedAgents();
+    persistAnnouncementDemoAgentState();
     return {
       added,
       errors,
@@ -6093,6 +6777,7 @@ async function handleRemoveChannelMember(
     syncMockChannel(channel);
     touchMockChannel(channel);
     syncMockRelayAgentsFromManagedAgents();
+    persistAnnouncementDemoAgentState();
     return;
   }
 
@@ -6191,8 +6876,113 @@ async function handleGetFeed(
       wantedTypes.length === 0 || wantedTypes.includes(type);
 
     const currentPubkey = getMockMemberPubkey(config).toLowerCase();
-    const defaultFeed: RawHomeFeedResponse["feed"] =
-      currentPubkey === ALICE_PUBKEY
+    const defaultFeed: RawHomeFeedResponse["feed"] = config?.mock
+      ?.announcementDemo
+      ? {
+          mentions: [
+            {
+              id: "announcement-demo-feed-mention",
+              kind: 9,
+              pubkey: ALICE_PUBKEY,
+              content:
+                "Alex, the final desktop build is ready for the capture session.",
+              created_at: now - 7 * 60,
+              channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+              channel_name: "flight-path",
+              tags: [
+                ["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"],
+                ["p", currentPubkey],
+              ],
+              category: "mention" as const,
+            },
+          ],
+          needs_action: [],
+          activity: [
+            {
+              id: "announcement-demo-feed-priya",
+              kind: 9,
+              pubkey: CHARLIE_PUBKEY,
+              content: "Launch copy and the press kit are in final review.",
+              created_at: now - 9 * 60,
+              channel_id: "c6f3a9b2-4d55-5a23-bf78-5b9e2g3c5d6f",
+              channel_name: "marketing",
+              tags: [["e", "c6f3a9b2-4d55-5a23-bf78-5b9e2g3c5d6f"]],
+              category: "activity" as const,
+            },
+            {
+              id: "announcement-demo-feed-camille",
+              kind: 9,
+              pubkey: CAMILLE_PUBKEY,
+              content:
+                "The final edit is at seventy-two seconds and ready for the new product capture.",
+              created_at: now - 10 * 60,
+              channel_id: "3c2d9f0a-1b44-5e77-9a21-6f8b0c4d2e91",
+              channel_name: "queen-bee-launch",
+              tags: [["e", "3c2d9f0a-1b44-5e77-9a21-6f8b0c4d2e91"]],
+              category: "activity" as const,
+            },
+            {
+              id: "announcement-demo-feed-marcus",
+              kind: 9,
+              pubkey: MARCUS_PUBKEY,
+              content:
+                "The recording paths passed the final desktop and mobile smoke sweep.",
+              created_at: now - 11 * 60,
+              channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+              channel_name: "flight-path",
+              tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+              category: "activity" as const,
+            },
+            {
+              id: "announcement-demo-feed-jordan",
+              kind: 9,
+              pubkey: BOB_PUBKEY,
+              content: "The final motion pass is ready in Comb Kit.",
+              created_at: now - 12 * 60,
+              channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+              channel_name: "design",
+              tags: [["e", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"]],
+              category: "activity" as const,
+            },
+            {
+              id: "announcement-demo-feed-sofia",
+              kind: 45001,
+              pubkey: SOFIA_PUBKEY,
+              content:
+                "Research synthesis: what should a calm first five minutes in Buzz feel like?",
+              created_at: now - 13 * 60,
+              channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+              channel_name: "product-ideas",
+              tags: [["e", "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"]],
+              category: "activity" as const,
+            },
+            {
+              id: "announcement-demo-feed-alex",
+              kind: 9,
+              pubkey: MOCK_IDENTITY_PUBKEY,
+              content: "The announcement cut is ready for one last watch.",
+              created_at: now - 14 * 60,
+              channel_id: "3c2d9f0a-1b44-5e77-9a21-6f8b0c4d2e91",
+              channel_name: "queen-bee-launch",
+              tags: [["e", "3c2d9f0a-1b44-5e77-9a21-6f8b0c4d2e91"]],
+              category: "activity" as const,
+            },
+            {
+              id: "announcement-demo-feed-noah",
+              kind: 9,
+              pubkey: NOAH_PUBKEY,
+              content:
+                "The community preview group is ready for announcement day.",
+              created_at: now - 16 * 60,
+              channel_id: "c6f3a9b2-4d55-5a23-bf78-5b9e2g3c5d6f",
+              channel_name: "marketing",
+              tags: [["e", "c6f3a9b2-4d55-5a23-bf78-5b9e2g3c5d6f"]],
+              category: "activity" as const,
+            },
+          ],
+          agent_activity: [],
+        }
+      : currentPubkey === ALICE_PUBKEY
         ? {
             mentions: [
               {
@@ -7207,6 +7997,7 @@ async function handleCreateManagedAgent(
     has_profile_event: true,
   });
   syncMockRelayAgentsFromManagedAgents();
+  persistAnnouncementDemoAgentState();
 
   return {
     agent: cloneManagedAgent(managedAgent),
@@ -7279,6 +8070,7 @@ async function handleStartManagedAgent(
       : `started mock harness at ${now}`,
   );
   syncMockRelayAgentsFromManagedAgents();
+  persistAnnouncementDemoAgentState();
   return cloneManagedAgent(agent);
 }
 
@@ -7294,6 +8086,7 @@ async function handleStopManagedAgent(args: {
   setMockPresenceStatus(agent.pubkey, "offline");
   agent.log_lines.push(`stopped mock harness at ${now}`);
   syncMockRelayAgentsFromManagedAgents();
+  persistAnnouncementDemoAgentState();
   return cloneManagedAgent(agent);
 }
 
@@ -7318,6 +8111,7 @@ async function handleDeleteManagedAgent(args: {
     (candidate) => candidate.pubkey !== args.pubkey,
   );
   syncMockRelayAgentsFromManagedAgents();
+  persistAnnouncementDemoAgentState();
 }
 
 async function handleSetManagedAgentStartOnAppLaunch(args: {
@@ -7327,6 +8121,7 @@ async function handleSetManagedAgentStartOnAppLaunch(args: {
   const agent = getMockManagedAgent(args.pubkey);
   agent.start_on_app_launch = args.startOnAppLaunch;
   agent.updated_at = new Date().toISOString();
+  persistAnnouncementDemoAgentState();
   return cloneManagedAgent(agent);
 }
 
@@ -7337,6 +8132,7 @@ async function handleSetManagedAgentAutoRestart(args: {
   const agent = getMockManagedAgent(args.pubkey);
   agent.auto_restart_on_config_change = args.autoRestartOnConfigChange;
   agent.updated_at = new Date().toISOString();
+  persistAnnouncementDemoAgentState();
   return cloneManagedAgent(agent);
 }
 
@@ -7383,6 +8179,7 @@ async function handleUpdateManagedAgent(args: {
     agent.respond_to_allowlist = args.input.respondToAllowlist;
   }
   agent.updated_at = new Date().toISOString();
+  persistAnnouncementDemoAgentState();
   return { agent: cloneManagedAgent(agent), profile_sync_error: null };
 }
 
@@ -8374,8 +9171,10 @@ export function maybeInstallE2eTauriMocks() {
     return;
   }
 
+  applyAnnouncementDemoFixtures(config);
   resetMockRelayMembers(config);
   resetMockRelayAgents(config);
+  resetMockGlobalAgentConfig(config);
   resetMockManagedAgents(config);
   resetMockPersonas(config);
   resetMockTeams(config);
@@ -8385,7 +9184,22 @@ export function maybeInstallE2eTauriMocks() {
   resetMockUserStatuses();
   resetMockPendingCommunityDeepLinks(config);
   mockWebsocketSendMutexWedged = false;
-  mockWindows("main");
+  // The browser test harness has no Tauri globals, so install the complete
+  // window mock there. The native announcement demo already has Tauri's
+  // read-only `window.__TAURI_INTERNALS__` binding; attempting to replace it
+  // throws before React can render. Its existing metadata is sufficient, and
+  // we swap only the nested invoke handler below.
+  const nativeTauriInternals = (
+    window as unknown as {
+      __TAURI_INTERNALS__?: {
+        invoke: (command: string, payload?: unknown) => Promise<unknown>;
+        listen?: (event: string, cb: () => void) => Promise<() => void>;
+      };
+    }
+  ).__TAURI_INTERNALS__;
+  if (!nativeTauriInternals) {
+    mockWindows("main");
+  }
   window.__BUZZ_E2E_COMMANDS__ = [];
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
@@ -8616,13 +9430,33 @@ export function maybeInstallE2eTauriMocks() {
     deviceId: state === "running" ? "mock-endpoint-id" : null,
     deviceName: state === "running" ? "Mock desktop" : null,
   });
+  const redactAnnouncementDemoLogValue = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      return value.map(redactAnnouncementDemoLogValue);
+    }
+    if (typeof value !== "object" || value === null) {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        /api[_-]?key|token|secret|password/i.test(key)
+          ? "[redacted]"
+          : redactAnnouncementDemoLogValue(entry),
+      ]),
+    );
+  };
   const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__BUZZ_E2E_COMMANDS__?.push(command);
+    const logPayload = activeConfig?.mock?.announcementDemo
+      ? redactAnnouncementDemoLogValue(payload)
+      : payload;
     const loggedPayload = (() => {
       try {
-        return JSON.parse(JSON.stringify(payload ?? null));
+        return JSON.parse(JSON.stringify(logPayload ?? null));
       } catch {
         return null;
       }
@@ -8631,9 +9465,14 @@ export function maybeInstallE2eTauriMocks() {
       command,
       payload: loggedPayload,
     });
-    window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
+    window.__BUZZ_E2E_COMMAND_LOG__?.push({
+      command,
+      payload: logPayload,
+    });
 
     switch (command) {
+      case "set_prevent_sleep_active":
+        return null;
       case "mesh_installed_models":
         return mockMeshState.models;
       case "mesh_node_status":
@@ -9381,15 +10220,7 @@ export function maybeInstallE2eTauriMocks() {
         return null;
       }
       case "get_global_agent_config": {
-        // Return the mock global agent config if provided; otherwise return
-        // an empty config (no global provider, model, or env vars).
-        return (
-          config?.mock?.globalAgentConfig ?? {
-            env_vars: {},
-            provider: null,
-            model: null,
-          }
-        );
+        return cloneMockGlobalAgentConfig(mockGlobalAgentConfig);
       }
       case "set_global_agent_config": {
         // Echo back the submitted config as the saved value (mirrors the
@@ -9415,6 +10246,8 @@ export function maybeInstallE2eTauriMocks() {
         if (saveDelayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, saveDelayMs));
         }
+        mockGlobalAgentConfig = cloneMockGlobalAgentConfig(savedConfig);
+        persistAnnouncementDemoAgentState();
         // In the E2E environment there are no running agents to restart, so
         // the counts default to 0 unless a spec drives them explicitly.
         return {
@@ -9876,28 +10709,33 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
     handleMockCommand(command, payload ?? null);
-  mockIPC(handleMockCommand, { shouldMockEvents: true });
+  if (!nativeTauriInternals) {
+    mockIPC(handleMockCommand, { shouldMockEvents: true });
+  }
 
   // Wire up __TAURI_INTERNALS__.listen so tests can subscribe to backend-emitted
   // events (e.g. "agents-data-changed"). mockIPC already ensures __TAURI_INTERNALS__
   // exists; we just add the listen property without clobbering invoke.
-  (
+  const tauriInternals = (
     window as unknown as {
       __TAURI_INTERNALS__: {
         listen?: (event: string, cb: () => void) => Promise<() => void>;
       };
     }
-  ).__TAURI_INTERNALS__.listen = async (event: string, cb: () => void) => {
-    let listeners = tauriEventListeners.get(event);
-    if (!listeners) {
-      listeners = new Set();
-      tauriEventListeners.set(event, listeners);
-    }
-    listeners.add(cb);
-    return () => {
-      tauriEventListeners.get(event)?.delete(cb);
+  ).__TAURI_INTERNALS__;
+  if (!nativeTauriInternals) {
+    tauriInternals.listen = async (event: string, cb: () => void) => {
+      let listeners = tauriEventListeners.get(event);
+      if (!listeners) {
+        listeners = new Set();
+        tauriEventListeners.set(event, listeners);
+      }
+      listeners.add(cb);
+      return () => {
+        tauriEventListeners.get(event)?.delete(cb);
+      };
     };
-  };
+  }
 
   installed = true;
 }
