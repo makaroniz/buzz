@@ -54,7 +54,6 @@
     "targets": "all",
     "externalBin": [
       "binaries/buzz-acp",
-      "binaries/buzz-agent",
       "binaries/buzz-dev-mcp",
       "binaries/git-credential-nostr",
       "binaries/buzz",

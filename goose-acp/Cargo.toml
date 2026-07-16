@@ -3,19 +3,17 @@
 #
 # This crate is deliberately EXCLUDED from the Buzz workspace (see the root
 # Cargo.toml `exclude` list): it has its own Cargo.lock so goose's ~700-crate
-# dependency graph never touches the workspace lockfile, and so rmcp can be
-# pinned independently (goose requires rmcp 1.7.x; 1.8 breaks its build —
-# if you regenerate the lockfile, run `cargo update rmcp --precise 1.7.0`).
+# dependency graph never touches the workspace lockfile, and so Goose's ACP/MCP
+# dependency versions can move independently.
 #
 # Build:  cargo build --release --manifest-path goose-acp/Cargo.toml
-# Result: a ~32 MB `goose-acp` binary (macOS arm64) that buzz-acp spawns via
+# Result: a ~33 MiB `goose-acp` binary (macOS arm64) that buzz-acp spawns via
 #         BUZZ_ACP_AGENT_COMMAND. Feature-slimmed: no code-mode/V8, no
 #         local-inference/llama.cpp, no keyring/AWS/telemetry — agent loop,
 #         providers, sessions, and MCP extensions intact.
 #
-# The pinned rev is goose main HEAD as of 2026-07-05. When goose lands the
-# analyze/tiktoken feature gates (micn/slim-features), bump the rev and add
-# nothing — the binary drops to ~14 MB automatically via default-features=false.
+# The pinned rev is the Goose v1.43.0 release (2026-07-14). Pin release commits
+# deliberately: Goose's public ACP surface and MSRV move quickly.
 
 [package]
 name = "goose-acp"
@@ -24,11 +22,15 @@ edition = "2021"
 publish = false
 
 [dependencies]
-goose = { git = "https://github.com/aaif-goose/goose", rev = "c26dbb26b", default-features = false, features = ["rustls-tls"] }
+goose = { git = "https://github.com/aaif-goose/goose", rev = "5a9eb7edea1e081e2d54473ae41481f0289b826a", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
 
-# Size-optimized: measured 32 MB vs 41 MB with the stock release profile.
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+
+# Size-optimized: 32.5 MiB on macOS arm64 with Goose v1.43.0.
 [profile.release]
 opt-level = "z"
 lto = "fat"
