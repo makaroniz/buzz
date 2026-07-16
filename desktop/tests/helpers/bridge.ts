@@ -47,6 +47,8 @@ type MockManagedAgentSeed = {
   name: string;
   personaId?: string | null;
   status?: "running" | "stopped" | "deployed" | "not_deployed";
+  /** Home-relay pin; defaults to the mock workspace relay when omitted. */
+  relayUrl?: string;
   channelNames?: string[];
   channelIds?: string[];
   backend?:
