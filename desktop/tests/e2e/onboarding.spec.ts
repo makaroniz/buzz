@@ -246,22 +246,25 @@ async function expectWelcomePersonaMention(page: Page) {
   expect(alignment.display).toBe("inline-block");
   expect(alignment.verticalAlign).toBe("baseline");
   expect(alignment.lineHeightMatchesBanner).toBe(true);
-  await expect(banner).toContainText("Try mentioning");
+  await expect(banner).toContainText("Mention");
 }
 
-async function expectWelcomeView(page: Page) {
+async function expectPrivateWelcomeLanding(page: Page) {
   await expect(page).toHaveURL(/#\/channels\/[^/?#]+$/);
   await expect(page.getByTestId("channel-Welcome")).toBeVisible();
   await expect(page.getByTestId("chat-title")).toContainText("Welcome");
+}
+
+async function expectWelcomeView(page: Page) {
+  await expectPrivateWelcomeLanding(page);
+  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
   await expect(page.getByTestId("channel-ephemeral-Welcome")).toHaveCount(0);
   await expect(page.getByTestId("chat-ephemeral-badge")).toHaveCount(0);
   await expect(page.getByTestId("message-unread-pill")).toHaveCount(0);
   await expect(page.getByTestId("message-channel-intro")).toBeVisible();
   await expect(page.getByTestId("message-channel-intro")).toContainText(
-    "This is the beginning of the private welcome channel.",
-  );
-  await expect(page.getByTestId("message-channel-intro")).not.toContainText(
-    "A few good first steps",
+    "private welcome channel",
   );
   await expect(
     page.getByTestId("message-channel-intro").getByRole("button"),
@@ -313,10 +316,10 @@ async function expectWelcomeView(page: Page) {
   await expect(page.getByTestId("message-composer")).toBeVisible();
   await expect(page.getByTestId("welcome-composer-guide-banner")).toBeVisible();
   await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
-    "Try mentioning",
+    "Mention",
   );
   await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
-    "to chat with an agent in this channel.",
+    "whenever you want their help.",
   );
   await expectWelcomePersonaMention(page);
   await expectWelcomeComposerBannerLayout(page);
@@ -424,34 +427,43 @@ async function getWelcomeChannelId(page: Page) {
   );
 }
 
-async function expectPrivateWelcomeChannel(page: Page) {
+async function expectStarterChannels(page: Page) {
   await expect
     .poll(async () => {
       const channels = await getMockChannels(page);
-      const welcomeChannel = channels.find(
-        (channel) =>
-          channel.name === "Welcome" && channel.visibility === "private",
-      );
-
-      if (!welcomeChannel) {
-        return null;
-      }
-
-      return {
-        channelType: welcomeChannel.channel_type,
-        isMember: welcomeChannel.is_member,
-        memberCount: welcomeChannel.member_count,
-        ttlSeconds: welcomeChannel.ttl_seconds,
-        visibility: welcomeChannel.visibility,
-      };
+      return ["general", "welcome-everyone"].map((name) => {
+        const channel = channels.find(
+          (candidate) =>
+            candidate.name === name && candidate.visibility === "open",
+        );
+        if (!channel) {
+          return null;
+        }
+        return {
+          channelType: channel.channel_type,
+          isMember: channel.is_member,
+          memberCountAtLeastOne: channel.member_count >= 1,
+          ttlSeconds: channel.ttl_seconds,
+          visibility: channel.visibility,
+        };
+      });
     })
-    .toEqual({
-      channelType: "stream",
-      isMember: true,
-      memberCount: 2,
-      ttlSeconds: null,
-      visibility: "private",
-    });
+    .toEqual([
+      {
+        channelType: "stream",
+        isMember: true,
+        memberCountAtLeastOne: true,
+        ttlSeconds: null,
+        visibility: "open",
+      },
+      {
+        channelType: "stream",
+        isMember: true,
+        memberCountAtLeastOne: true,
+        ttlSeconds: null,
+        visibility: "open",
+      },
+    ]);
 }
 
 async function expectWelcomeGuideIntro(
@@ -465,19 +477,13 @@ async function expectWelcomeGuideIntro(
         return null;
       }
 
-      const [members, agents, introSearch] = await Promise.all([
+      const [members, agents] = await Promise.all([
         invokeMockCommand<{
           members: Array<{ pubkey: string; role: string; is_agent: boolean }>;
         }>(page, "get_channel_members", { channelId }),
         invokeMockCommand<
           Array<{ pubkey: string; name: string; persona_id: string | null }>
         >(page, "list_managed_agents"),
-        invokeMockCommand<{
-          hits: Array<{ pubkey: string; content: string }>;
-        }>(page, "search_messages", {
-          q: "Hi, I'm Fizz",
-          limit: 10,
-        }),
       ]);
       const fizz = agents.find(
         (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
@@ -485,12 +491,6 @@ async function expectWelcomeGuideIntro(
       const fizzMember = fizz
         ? members.members.find((member) => member.pubkey === fizz.pubkey)
         : null;
-      const intro = fizz
-        ? introSearch.hits.find((hit) => hit.pubkey === fizz.pubkey)
-        : null;
-      const fizzWelcomeHits = fizz
-        ? introSearch.hits.filter((hit) => hit.pubkey === fizz.pubkey)
-        : [];
       const profileAvatarUrl = fizz
         ? (
             await invokeMockCommand<{
@@ -504,32 +504,17 @@ async function expectWelcomeGuideIntro(
       return {
         fizzIsBot: fizzMember?.role === "bot" && fizzMember.is_agent,
         fizzPersonaId: fizz?.persona_id ?? null,
-        introContent: intro?.content ?? null,
-        introMatchesFizz: Boolean(fizz && intro?.pubkey === fizz.pubkey),
-        fizzWelcomeHitCount: fizzWelcomeHits.length,
         profileAvatarUrl,
       };
     })
     .toEqual({
       fizzIsBot: true,
       fizzPersonaId: "builtin:fizz",
-      introContent:
-        "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.",
-      introMatchesFizz: true,
-      fizzWelcomeHitCount: 1,
       profileAvatarUrl: null,
     });
 
   if (expectVisible) {
-    await expect(page.getByTestId("message-timeline")).toContainText(
-      "Hi, I'm Fizz. Welcome to Buzz.",
-    );
-    await expect(page.getByTestId("message-timeline")).toContainText(
-      "Feel free to ask me what else you can do in Buzz",
-    );
-    await expect(
-      page.getByTestId("message-timeline-day-divider"),
-    ).toBeVisible();
+    await expect(page.getByTestId("message-channel-intro")).toBeVisible();
     await expect(page.getByTestId("system-message-row")).toHaveCount(0);
   }
 }
@@ -578,6 +563,16 @@ test("first-community choices expose npub and invite input", async ({
     skipOnboardingSeed: true,
     skipCommunitySeed: true,
   });
+  await page.route(
+    "https://default.example.com/api/join-policy",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "{}",
+      });
+    },
+  );
   await page.goto("/");
 
   await expect(
@@ -924,7 +919,7 @@ test("avatar upload accepts a file whose server-detected MIME is an image", asyn
   await expect(page.getByTestId("onboarding-avatar-error")).toHaveCount(0);
 });
 
-test("first-run onboarding keeps the shell hidden and lands on Welcome after profile setup", async ({
+test("first-run onboarding keeps the shell hidden and lands on private Welcome after profile setup", async ({
   page,
 }) => {
   await seedActiveIdentity(page, FIRST_RUN_ALICE);
@@ -940,7 +935,7 @@ test("first-run onboarding keeps the shell hidden and lands on Welcome after pro
   await completeProfileOnboarding(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
-  await expectPrivateWelcomeChannel(page);
+  await expectStarterChannels(page);
   await expectWelcomeGuideIntro(page);
 });
 
@@ -955,79 +950,65 @@ async function retryToastAction(
   { command, title }: { command: string; title: string },
 ) {
   const activeToast = retryToast(page, title);
-  await expect(activeToast).toBeVisible();
   await expect(
     activeToast.getByRole("button", { name: "Retry" }),
   ).toBeVisible();
+  const before = await commandCount(page, command);
+  await activeToast
+    .getByRole("button", { name: "Retry" })
+    .dispatchEvent("click");
+  await expect.poll(() => commandCount(page, command)).toBeGreaterThan(before);
+}
 
-  const commandCountBeforeRetry = await page.evaluate(
-    (retryCommand) =>
-      (
-        window as Window & {
-          __BUZZ_E2E_COMMANDS__?: string[];
-        }
-      ).__BUZZ_E2E_COMMANDS__?.filter((entry) => entry === retryCommand)
+async function commandCount(page: Page, command: string) {
+  return page.evaluate(
+    (target) =>
+      window.__BUZZ_E2E_COMMANDS__?.filter((entry) => entry === target)
         .length ?? 0,
     command,
   );
-  await activeToast
-    .getByRole("button", { name: "Retry" })
-    .evaluate((button) => (button as HTMLButtonElement).click());
-
-  await expect
-    .poll(() =>
-      page.evaluate(
-        ({ retryCommand }) =>
-          (
-            window as Window & {
-              __BUZZ_E2E_COMMANDS__?: string[];
-            }
-          ).__BUZZ_E2E_COMMANDS__?.filter((entry) => entry === retryCommand)
-            .length ?? 0,
-        { retryCommand: command, minimum: commandCountBeforeRetry + 1 },
-      ),
-    )
-    .toBeGreaterThanOrEqual(commandCountBeforeRetry + 1);
 }
 
-async function expectRetryFailureRecreatesActionableToast(
-  page: Page,
-  { command, error, title }: { command: string; error: string; title: string },
-) {
+test("failed starter channel retries recreate actionable toasts", async ({
+  page,
+}) => {
+  const starterError = "Mock starter channel setup failed.";
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      ensureStarterChannelsErrors: [starterError, starterError, starterError],
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await completeProfileOnboarding(page);
+
+  await expectPrivateWelcomeLanding(page);
+  const title = "Couldn't set up starter channels";
   const activeToast = retryToast(page, title);
-  await expect(activeToast).toContainText(error);
-
-  await retryToastAction(page, { command, title });
-
-  await expect(activeToast).toHaveCount(1);
-  await expect(activeToast).toContainText(error);
+  await expect(activeToast).toContainText(starterError);
+  await retryToastAction(page, {
+    command: "ensure_starter_channels",
+    title,
+  });
+  await expect(activeToast).toContainText(starterError);
   await expect(
     activeToast.getByRole("button", { name: "Retry" }),
   ).toBeVisible();
-}
+});
 
-async function expectRetrySuccessDismissesToast(
-  page: Page,
-  { command, title }: { command: string; title: string },
-) {
-  const activeToast = retryToast(page, title);
-
-  await retryToastAction(page, { command, title });
-
-  await expect(activeToast).toHaveCount(0);
-}
-
-test("failed Welcome and general retries recreate actionable toasts", async ({
+test("successful starter channel retry clears its actionable toast", async ({
   page,
 }) => {
-  const welcomeError = "Mock Welcome create failed.";
-  const generalError = "Mock general join failed.";
+  const starterError = "Mock starter channel setup failed.";
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
     {
-      createChannelErrors: [welcomeError, welcomeError],
-      joinChannelErrors: [generalError, generalError],
+      ensureStarterChannelsErrors: [starterError, starterError],
     },
     { skipOnboardingSeed: true },
   );
@@ -1036,29 +1017,27 @@ test("failed Welcome and general retries recreate actionable toasts", async ({
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await completeProfileOnboarding(page);
 
-  await expectRetryFailureRecreatesActionableToast(page, {
-    command: "create_channel",
-    error: welcomeError,
-    title: "Couldn't set up the Welcome channel",
+  const title = "Couldn't set up starter channels";
+  await expect(retryToast(page, title)).toContainText(starterError);
+  await retryToastAction(page, {
+    command: "ensure_starter_channels",
+    title,
   });
-  await expectRetryFailureRecreatesActionableToast(page, {
-    command: "join_channel",
-    error: generalError,
-    title: "Couldn't join #general",
-  });
+  await expect(retryToast(page, title)).toHaveCount(0);
+  await expectWelcomeView(page);
+  await expectStarterChannels(page);
 });
 
-test("successful Welcome and general retries clear their actionable toasts", async ({
-  page,
-}) => {
-  const welcomeError = "Mock Welcome create failed.";
-  const generalError = "Mock general join failed.";
+test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
     {
-      createChannelErrors: [welcomeError],
-      joinChannelErrors: [generalError],
+      globalAgentConfig: {
+        env_vars: { OPENAI_API_KEY: "e2e-placeholder" },
+        provider: "openai",
+        model: "gpt-5.5",
+      },
     },
     { skipOnboardingSeed: true },
   );
@@ -1067,25 +1046,22 @@ test("successful Welcome and general retries clear their actionable toasts", asy
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await completeProfileOnboarding(page);
 
-  await expectRetrySuccessDismissesToast(page, {
-    command: "create_channel",
-    title: "Couldn't set up the Welcome channel",
-  });
-  await expectRetrySuccessDismissesToast(page, {
-    command: "join_channel",
-    title: "Couldn't join #general",
-  });
-  await expectWelcomeView(page);
-  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await expectPrivateWelcomeLanding(page);
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Hi, I'm Fizz. Welcome to Buzz.",
+  );
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Honey and Bumble, introduce yourselves",
+  );
 });
 
-test("first-run onboarding shows setup loading until Welcome bootstrap completes", async ({
+test("first-run onboarding lands before Welcome team bootstrap completes", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
-    { createManagedAgentDelayMs: 9_000 },
+    { createManagedAgentDelayMs: 1_000 },
     { skipOnboardingSeed: true },
   );
   await page.goto("/");
@@ -1093,69 +1069,13 @@ test("first-run onboarding shows setup loading until Welcome bootstrap completes
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await completeProfileOnboarding(page);
 
-  const loadingGate = page.getByTestId("app-loading-gate");
-  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expect(loadingGate).toBeVisible();
-  await expect(loadingGate).toContainText("Setting up your community...");
-
-  // The boot gate is the theme-adaptive grainient with the flapping Buzz bee
-  // as its hero. The mark must paint complete on the FIRST frame — a blank
-  // gate reads as "nothing is loading" — so nothing about it may depend on
-  // SMIL/scripted animation (<animate> count stays 0); the wing flap is pure
-  // CSS on HTML-level wing layers so it keeps running on the compositor even
-  // while boot work hogs the main thread.
-  await expect(
-    loadingGate.getByTestId("setup-grainient-background"),
-  ).toBeVisible();
-  const mark = loadingGate.locator(".buzz-mark");
-  await expect(mark).toBeVisible();
-  const gateTreatment = await loadingGate.evaluate((element) => {
-    const markElement = element.querySelector(".buzz-mark");
-    const markSvgs = markElement
-      ? Array.from(markElement.querySelectorAll("svg"))
-      : [];
-    const wing = element.querySelector(".bee-wing");
-    const wingStyles =
-      wing instanceof SVGElement ? window.getComputedStyle(wing) : null;
-    const wash = element.querySelector(".buzz-setup-grainient__wash");
-    const washStyles =
-      wash instanceof HTMLElement ? window.getComputedStyle(wash) : null;
-    return {
-      animateElementCount: element.querySelectorAll("animate").length,
-      // The document must match the OS scheme before the gate mounts (inline
-      // <style> + script in index.html; with no cached theme the first-launch
-      // default is Buzz following the OS scheme — white here because
-      // Playwright's default color scheme is light).
-      documentBackgroundColor: window.getComputedStyle(document.documentElement)
-        .backgroundColor,
-      grainientAnimation: washStyles?.animationName,
-      grainientUsesRadialGradients:
-        washStyles?.backgroundImage.includes("radial-gradient"),
-      markSvgsUseCurrentColor:
-        markSvgs.length > 0 &&
-        markSvgs.every((svg) => svg.getAttribute("fill") === "currentColor"),
-      wingFlapAnimation: wingStyles?.animationName,
-      wingFlapRunning: wingStyles?.animationPlayState,
-    };
-  });
-  expect(gateTreatment).toEqual({
-    animateElementCount: 0,
-    documentBackgroundColor: "rgb(255, 255, 255)",
-    grainientAnimation: "buzz-grainient-orbit",
-    grainientUsesRadialGradients: true,
-    markSvgsUseCurrentColor: true,
-    wingFlapAnimation: "bee-wing-left-flap",
-    wingFlapRunning: "running",
-  });
-  await expect(loadingGate).not.toHaveClass(/buzz-onboarding-neutral-theme/);
-  await expectShellHidden(page);
-  await page.waitForTimeout(250);
-  await expect(loadingGate).toBeVisible();
-  await expect(mark).toBeVisible();
-
-  await expectWelcomeView(page);
-  await expectPrivateWelcomeChannel(page);
-  await expectWelcomeGuideIntro(page);
+  await expectPrivateWelcomeLanding(page);
+  await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Hi, I'm Fizz. Welcome to Buzz.",
+  );
+  await page.waitForTimeout(1_500);
+  expect(await commandCount(page, "create_managed_agent")).toBe(3);
 });
 
 test("existing relay profile with display name auto-skips onboarding without localStorage", async ({
@@ -1211,7 +1131,7 @@ test("onboarding can import an existing key when the community is already set up
   await expectHomeView(page);
 });
 
-test("completed onboarding backfills a missing private Welcome channel", async ({
+test("completed onboarding backfills missing starter channels", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -1221,12 +1141,13 @@ test("completed onboarding backfills a missing private Welcome channel", async (
 
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectHomeView(page);
-  await expect(page.getByTestId("channel-Welcome")).toBeVisible();
-  await expectPrivateWelcomeChannel(page);
+  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
+  await expectStarterChannels(page);
   await expectWelcomeGuideIntro(page, { expectVisible: false });
 });
 
-test("finishing onboarding creates and focuses a private Welcome channel for a new member", async ({
+test("finishing onboarding creates starter channels and focuses welcome-everyone for a new member", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -1238,7 +1159,7 @@ test("finishing onboarding creates and focuses a private Welcome channel for a n
 
   await expectWelcomeView(page);
   await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expectPrivateWelcomeChannel(page);
+  await expectStarterChannels(page);
   await expectWelcomeGuideIntro(page);
   await expectWelcomeComposerBannerCompletesAfterPersonaMention(page);
 });
@@ -1713,7 +1634,41 @@ test("denied on relay A then paste relay B invite URL switches community to B", 
   // Intercept the claimInvite POST to relay B so it succeeds.
   const relayBUrl = "wss://relay-b.example.com";
   const relayBHttpUrl = "https://relay-b.example.com";
+  const policyReceipt = "relay-signed-policy-receipt";
+  await page.route(`${relayBHttpUrl}/api/join-policy`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        policy: {
+          terms_markdown: "# Terms",
+          privacy_markdown: "# Privacy",
+          age_attestation_required: true,
+          version: "policy-v1",
+        },
+      }),
+    });
+  });
+  await page.route(
+    `${relayBHttpUrl}/api/invites/accept-policy`,
+    async (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        code: "test-invite-code",
+        policy_version: "policy-v1",
+        age_confirmed: true,
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ receipt: policyReceipt }),
+      });
+    },
+  );
   await page.route(`${relayBHttpUrl}/api/invites/claim`, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      code: "test-invite-code",
+      policy_receipt: policyReceipt,
+    });
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1731,6 +1686,12 @@ test("denied on relay A then paste relay B invite URL switches community to B", 
   await page
     .getByTestId("invite-redeem-input")
     .fill(`${relayBHttpUrl}/invite/test-invite-code`);
+  await page.getByTestId("invite-redeem-submit").click();
+  await expect(page.getByText("I am 18 years of age or older.")).toBeVisible();
+  await page.getByLabel("I am 18 years of age or older.").check();
+  await page
+    .getByLabel("I agree to the Buzz Terms of Service and Privacy Policy.")
+    .check();
   await page.getByTestId("invite-redeem-submit").click();
 
   // After successful claim, relay B is added and becomes active; relay A remains

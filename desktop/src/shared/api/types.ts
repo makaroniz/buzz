@@ -319,6 +319,7 @@ export type ManagedAgent = {
   pubkey: string;
   name: string;
   personaId: string | null;
+  teamId?: string | null;
   relayUrl: string;
   acpCommand: string;
   /** Resolved/effective harness command (persona-wins, override-honored). */
@@ -548,6 +549,24 @@ export type InstallRuntimeResult = {
   steps: InstallStepResult[];
   restartedCount: number;
   failedRestartCount: number;
+};
+
+export type AcpAuthMethod = {
+  id: string;
+  name: string;
+  description: string | null;
+  type: string | null;
+  args: string[];
+  command: string[];
+  meta: unknown | null;
+};
+
+export type AcpAuthMethodsResult = {
+  methods: AcpAuthMethod[];
+};
+
+export type ConnectAcpRuntimeResult = {
+  launched: boolean;
 };
 
 export type CommandAvailability = {

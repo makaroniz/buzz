@@ -4,14 +4,13 @@ import { Outlet, useLocation } from "@tanstack/react-router";
 
 import { deriveShellRoute } from "@/app/AppShell.helpers";
 import { AppShellProvider } from "@/app/AppShellContext";
-import {
-  AppShellOverlays,
-  type BrowseDialogType,
-} from "@/app/AppShellOverlays";
+import * as BuzzTheme from "@/app/BuzzThemeSurfaces";
+import { AppShellOverlays } from "@/app/AppShellOverlays";
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useLiveHomeFeedActions } from "@/app/useLiveHomeFeedActions";
+import { useChannelBrowserDialog } from "@/app/useChannelBrowserDialog";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useAppShellDesktopNotifications } from "@/app/useAppShellDesktopNotifications";
@@ -54,7 +53,7 @@ import {
 } from "@/features/user-status/hooks";
 import { useCommunityEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
 import { useArchiveSync } from "@/features/local-archive/archiveSyncManager";
-import { useObserverArchiveSeed } from "@/features/local-archive/useObserverArchiveSeed";
+import { useObserverArchiveReconciliation } from "@/features/local-archive/useObserverArchiveSeed";
 import { useAgentMetricArchiveSeed } from "@/features/local-archive/useAgentMetricArchiveSeed";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { SendFeedbackController } from "@/features/settings/ui/SendFeedbackController";
@@ -72,15 +71,15 @@ import { CommunityRail } from "@/features/sidebar/ui/CommunityRail";
 import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { useAddCommunityDialogState } from "@/features/communities/addCommunityPrefill";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
-import { useFeatureEnabled } from "@/shared/features";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useRelayAutoHeal } from "@/shared/api/useRelayAutoHeal";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { useWebviewScrollBoundaryLock } from "@/shared/hooks/useWebviewScrollBoundaryLock";
 import { joinChannel } from "@/shared/api/tauri";
-import type { SearchHit } from "@/shared/api/types";
+import type { ChannelVisibility, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { MainInsetProvider } from "@/shared/layout/MainInsetContext";
 import { chromeCssVarDefaults } from "@/shared/layout/chromeLayout";
@@ -102,16 +101,14 @@ export function AppShell() {
   useWebviewScrollBoundaryLock();
 
   const communitiesHook = useCommunities();
-  const communityRailEnabled = useFeatureEnabled("workspaceRail");
-  const [isAddCommunityOpen, setIsAddCommunityOpen] = React.useState(false);
+  const hasCommunityRail = communitiesHook.communities.length > 1;
+  const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
   const [managedChannelId, setManagedChannelId] = React.useState<string | null>(
     null,
   );
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
-  const [browseDialogType, setBrowseDialogType] =
-    React.useState<BrowseDialogType>(null);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = React.useState(false);
   const [isSendFeedbackOpen, setIsSendFeedbackOpen] = React.useState(false);
   const [isHuddleDrawerOpen, setIsHuddleDrawerOpen] = React.useState(false);
@@ -186,15 +183,18 @@ export function AppShell() {
   // relay-owned agents join automatically once identity arrives. Adding a
   // guard here would drop managed-agent coverage during startup.
   useAgentObserverIngestion();
-  useArchiveSync();
-  // Defer the archive *seeds* until startup is idle: they're first-run catch-up
-  // config (a one-shot mergeSaveSubscriptionKinds), not live-ingest — that's
-  // useArchiveSync's job, which stays eager above. Passing deferredPubkey makes
-  // each seed hook wait on its own `if (!pubkey) return` guard until the shell
-  // is interactive, so their IPC + sqlite archive open doesn't compete with
-  // first paint. The explicit-choice guard inside each hook is unchanged.
+  // Kind 24200 is relay-ephemeral, so reconciliation runs eagerly (not
+  // deferred) and unconditionally repairs the DB subscription on internal
+  // builds — otherwise frames emitted before the listener opens are lost.
+  const observerReconciled = useObserverArchiveReconciliation(
+    identityQuery.data?.pubkey,
+  );
+  // useArchiveSync must wait for reconciliation, or listeners could open
+  // before kind 24200 is guaranteed present in the subscription.
+  useArchiveSync(observerReconciled);
+  // Kind 44200 is relay-persisted (durable) and stays deferred: missed
+  // startup frames can be replayed, so there's no ordering constraint.
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
-  useObserverArchiveSeed(deferredPubkey);
   useAgentMetricArchiveSeed(deferredPubkey);
   const profileQuery = useProfileQuery();
   useRelayAutoHeal();
@@ -374,6 +374,7 @@ export function AppShell() {
       threadActivityFeedItems,
       getThreadReadAt,
       getMessageReadAt,
+      channels,
     );
 
   const dueReminderBadge = useDueReminderBadgeCount(
@@ -412,26 +413,21 @@ export function AppShell() {
     [unfollowThread, muteThread],
   );
 
-  const createChannelMutation = useCreateChannelMutation();
-  const createForumMutation = useCreateChannelMutation();
+  const createChannelMutation = useCreateChannelMutation(),
+    createForumMutation = useCreateChannelMutation();
   const { applyCanvas, applyAgents } = useApplyTemplate();
-
   const openDmMutation = useOpenDmMutation();
   const hideDmMutation = useHideDmMutation();
-  const handleOpenBrowseChannels = React.useCallback(() => {
-    setBrowseDialogType("stream");
-    void refetchChannels();
-  }, [refetchChannels]);
+  const {
+    browseDialogType,
+    openBrowseChannels: handleOpenBrowseChannels,
+    onBrowseDialogOpenChange: handleBrowseDialogOpenChange,
+    getCreateSuccess,
+  } = useChannelBrowserDialog(() => void refetchChannels());
   const handleOpenSearch = React.useCallback(() => {
     setSearchFocusRequest((request) => request + 1);
     void refetchChannels();
   }, [refetchChannels]);
-
-  const handleBrowseDialogOpenChange = React.useCallback((open: boolean) => {
-    if (!open) {
-      setBrowseDialogType(null);
-    }
-  }, []);
 
   const handleBrowseChannelJoin = React.useCallback(
     async (channelId: string) => {
@@ -439,6 +435,92 @@ export function AppShell() {
       await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     },
     [queryClient],
+  );
+
+  const handleCreateChannel = React.useCallback(
+    async (
+      {
+        description,
+        name,
+        visibility,
+        ttlSeconds,
+        templateId,
+      }: {
+        name: string;
+        description?: string;
+        visibility: ChannelVisibility;
+        ttlSeconds?: number;
+        templateId?: string;
+      },
+      onCreated?: (channelId: string) => void,
+    ) => {
+      const createdChannel = await createChannelMutation.mutateAsync({
+        name,
+        description,
+        channelType: "stream",
+        visibility,
+        ttlSeconds,
+      });
+
+      await applyCanvas(templateId, createdChannel.id, name);
+      await goChannel(createdChannel.id);
+      onCreated?.(createdChannel.id);
+      void applyAgents(templateId, createdChannel.id);
+    },
+    [applyAgents, applyCanvas, createChannelMutation, goChannel],
+  );
+
+  const handleCreateForum = React.useCallback(
+    async ({
+      description,
+      name,
+      visibility,
+      ttlSeconds,
+      templateId,
+    }: {
+      name: string;
+      description?: string;
+      visibility: ChannelVisibility;
+      ttlSeconds?: number;
+      templateId?: string;
+    }) => {
+      const createdForum = await createForumMutation.mutateAsync({
+        name,
+        description,
+        channelType: "forum",
+        visibility,
+        ttlSeconds,
+      });
+
+      await applyCanvas(templateId, createdForum.id, name);
+      await goChannel(createdForum.id);
+      void applyAgents(templateId, createdForum.id);
+    },
+    [applyAgents, applyCanvas, createForumMutation, goChannel],
+  );
+
+  // The channel browser can create either a stream or a forum depending on
+  // which section opened it. Route to the matching handler.
+  const handleBrowseChannelCreate = React.useCallback(
+    async (input: {
+      name: string;
+      description?: string;
+      visibility: ChannelVisibility;
+      ttlSeconds?: number;
+      templateId?: string;
+    }) => {
+      if (browseDialogType === "forum") {
+        await handleCreateForum(input);
+      } else {
+        await handleCreateChannel(input, getCreateSuccess() ?? undefined);
+      }
+    },
+    [
+      browseDialogType,
+      handleCreateChannel,
+      handleCreateForum,
+      getCreateSuccess,
+    ],
   );
 
   const handleHideDm = React.useCallback(
@@ -681,12 +763,13 @@ export function AppShell() {
                     isHuddleDrawerOpen && "buzz-huddle-app-surface-open",
                   )}
                 >
-                  {communityRailEnabled ? (
+                  <BuzzTheme.GradientLayer />
+                  {hasCommunityRail ? (
                     <CommunityRail
                       activeCommunityId={
                         communitiesHook.activeCommunity?.id ?? null
                       }
-                      onAddCommunity={() => setIsAddCommunityOpen(true)}
+                      onAddCommunity={addCommunityDialog.openDialog}
                       onRemoveCommunity={communitiesHook.removeCommunity}
                       onSwitchCommunity={handleSwitchCommunity}
                       onUpdateCommunity={communitiesHook.updateCommunity}
@@ -698,10 +781,7 @@ export function AppShell() {
                       <AppTopChrome
                         canGoBack={canGoBack}
                         canGoForward={canGoForward}
-                        hasCommunityRail={
-                          communityRailEnabled &&
-                          communitiesHook.communities.length > 1
-                        }
+                        hasCommunityRail={hasCommunityRail}
                         onGoBack={goBack}
                         onGoForward={goForward}
                       />
@@ -757,7 +837,8 @@ export function AppShell() {
                           errorMessage={channelsErrorMessage}
                           fallbackDisplayName={identityQuery.data?.displayName}
                           homeBadgeCount={homeBadgeCount + dueReminderBadge}
-                          isAddCommunityOpen={isAddCommunityOpen}
+                          addCommunityPrefill={addCommunityDialog.prefill}
+                          isAddCommunityOpen={addCommunityDialog.open}
                           relayConnectionCard={relayConnectionCard}
                           isCreatingChannel={createChannelMutation.isPending}
                           isCreatingForum={createForumMutation.isPending}
@@ -768,10 +849,12 @@ export function AppShell() {
                             const id = communitiesHook.addCommunity(community);
                             handleSwitchCommunity(id);
                           }}
-                          onAddCommunityOpenChange={setIsAddCommunityOpen}
+                          onAddCommunityOpenChange={
+                            addCommunityDialog.onOpenChange
+                          }
                           onNewMessage={handleOpenNewDm}
                           onCreateChannelOpenChange={setIsCreateChannelOpen}
-                          onOpenAddCommunity={() => setIsAddCommunityOpen(true)}
+                          onOpenAddCommunity={addCommunityDialog.openDialog}
                           onSendFeedback={() => setIsSendFeedbackOpen(true)}
                           onUpdateCommunity={communitiesHook.updateCommunity}
                           onRemoveCommunity={communitiesHook.removeCommunity}
@@ -779,54 +862,8 @@ export function AppShell() {
                           onCreateAgent={() => requestOpenCreateAgent()}
                           selfPresenceStatus={presenceSession.currentStatus}
                           communities={communitiesHook.communities}
-                          onCreateChannel={async ({
-                            description,
-                            name,
-                            visibility,
-                            ttlSeconds,
-                            templateId,
-                          }) => {
-                            const createdChannel =
-                              await createChannelMutation.mutateAsync({
-                                name,
-                                description,
-                                channelType: "stream",
-                                visibility,
-                                ttlSeconds,
-                              });
-
-                            await applyCanvas(
-                              templateId,
-                              createdChannel.id,
-                              name,
-                            );
-                            await goChannel(createdChannel.id);
-                            void applyAgents(templateId, createdChannel.id);
-                          }}
-                          onCreateForum={async ({
-                            description,
-                            name,
-                            visibility,
-                            ttlSeconds,
-                            templateId,
-                          }) => {
-                            const createdForum =
-                              await createForumMutation.mutateAsync({
-                                name,
-                                description,
-                                channelType: "forum",
-                                visibility,
-                                ttlSeconds,
-                              });
-
-                            await applyCanvas(
-                              templateId,
-                              createdForum.id,
-                              name,
-                            );
-                            await goChannel(createdForum.id);
-                            void applyAgents(templateId, createdForum.id);
-                          }}
+                          onCreateChannel={handleCreateChannel}
+                          onCreateForum={handleCreateForum}
                           onHideDm={handleHideDm}
                           onMarkAllChannelsRead={markAllChannelsRead}
                           onMarkChannelRead={markChannelRead}
@@ -887,20 +924,18 @@ export function AppShell() {
                             ref={mainInsetRef}
                             className="isolate min-h-0 min-w-0 overflow-hidden bg-sidebar"
                             data-buzz-glass-inset
+                            data-buzz-shadow-viewport
                             style={chromeCssVarDefaults as React.CSSProperties}
                           >
-                            <div className="relative z-10 mb-2 ml-px mr-2 mt-px flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-background shadow-[-1px_-1px_0_0_hsl(var(--sidebar-border)/0.45)]">
+                            <BuzzTheme.ContentSurface>
                               <Outlet />
-                            </div>
+                            </BuzzTheme.ContentSurface>
                           </SidebarInset>
                         </MainInsetProvider>
                         <RelayConnectionOverlay
                           card={relayConnectionCard}
                           errorMessage={channelsErrorMessage}
-                          hasCommunityRail={
-                            communityRailEnabled &&
-                            communitiesHook.communities.length > 1
-                          }
+                          hasCommunityRail={hasCommunityRail}
                           isHuddleDrawerOpen={isHuddleDrawerOpen}
                         />
                       </div>
@@ -913,7 +948,12 @@ export function AppShell() {
                       channels={channels}
                       currentPubkey={identityQuery.data?.pubkey}
                       isChannelManagementOpen={isChannelManagementOpen}
+                      isCreatingBrowseChannel={
+                        createChannelMutation.isPending ||
+                        createForumMutation.isPending
+                      }
                       onBrowseChannelJoin={handleBrowseChannelJoin}
+                      onBrowseChannelCreate={handleBrowseChannelCreate}
                       onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                       onChannelManagementOpenChange={(open) => {
                         setIsChannelManagementOpen(open);

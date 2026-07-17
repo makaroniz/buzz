@@ -20,11 +20,13 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
+        "**/onboarding-docked-cta-screenshots.spec.ts",
         "**/navigation.spec.ts",
         "**/channels.spec.ts",
         "**/channel-shared-header-backdrop.spec.ts",
         "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
+        "**/channel-add-screenshots.spec.ts",
         "**/messaging.spec.ts",
         "**/custom-emoji.spec.ts",
         "**/profile-custom-emoji-status.spec.ts",
@@ -106,6 +108,7 @@ export default defineConfig({
         "**/agent-lifecycle-feedback.spec.ts",
         "**/inbox-live-update.spec.ts",
         "**/mesh-compute.spec.ts",
+        "**/observer-archive-policy.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

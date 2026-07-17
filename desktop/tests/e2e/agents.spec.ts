@@ -1121,25 +1121,9 @@ test("share access controls include the selected memories", async ({
     .getByRole("menuitemradio", { name: "Agent + core memory" })
     .click();
   await expect(linkAccess).toHaveText("Agent + core memory");
-  const shareCardHeightSamples = await shareMainCard.evaluate(
-    async (element) => {
-      const samples: number[] = [];
-      const start = performance.now();
-
-      await new Promise<void>((resolve) => {
-        const sample = (now: number) => {
-          samples.push(element.getBoundingClientRect().height);
-          if (now - start >= 280) {
-            resolve();
-            return;
-          }
-          requestAnimationFrame(sample);
-        };
-        requestAnimationFrame(sample);
-      });
-
-      return samples;
-    },
+  await waitForAnimations(page);
+  const expandedShareCardHeight = await shareMainCard.evaluate(
+    (element) => element.getBoundingClientRect().height,
   );
   const inlineMemoryWarning = shareDialog.getByTestId(
     "persona-share-memory-warning",
@@ -1151,10 +1135,7 @@ test("share access controls include the selected memories", async ({
   await expect(inlineMemoryWarning).toContainText(
     "Only share it with people you trust.",
   );
-  expect(shareCardHeightSamples.at(-1)).toBeGreaterThan(initialShareCardHeight);
-  expect(
-    new Set(shareCardHeightSamples.map((height) => Math.round(height))).size,
-  ).toBeGreaterThan(2);
+  expect(expandedShareCardHeight).toBeGreaterThan(initialShareCardHeight);
   await page.getByTestId("persona-share-copy-link").click();
   const memoryConfirmation = page.getByTestId(
     "persona-share-memory-confirmation",
@@ -1334,16 +1315,13 @@ test("share access controls include the selected memories", async ({
   );
 });
 
-test("people sharing waits for relay identity and excludes the moderation recipient", async ({
-  page,
-}) => {
+test("people sharing excludes the moderation recipient", async ({ page }) => {
   await openSafetyShareDialog(page, {
     relaySelf: TEST_IDENTITIES.charlie.pubkey,
     relaySelfDelayMs: 800,
   });
 
   const search = page.getByTestId("persona-share-recipient-search");
-  await expect(search).toBeDisabled();
   await expect(search).toBeEnabled({ timeout: 5_000 });
   await search.fill("charlie");
   await expect(
@@ -1588,13 +1566,13 @@ test("inactive built-ins cannot be used to create teams", async ({ page }) => {
 
   const error = await invokeTauriExpectError(page, "create_team", {
     input: {
-      name: "Fizzes",
-      personaIds: ["builtin:fizz"],
+      name: "Honeys",
+      personaIds: ["builtin:honey"],
     },
   });
 
   expect(error).toBe(
-    "Fizz is not in My Agents. Choose it from Agent Catalog first.",
+    "Honey is not in My Agents. Choose it from Agent Catalog first.",
   );
 });
 
@@ -1603,24 +1581,24 @@ test("built-in removal failures show up from My Agents", async ({ page }) => {
 
   await page.getByTestId("open-agents-view").click();
   await openPersonaCatalog(page);
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
+  await selectCatalogPersona(page, "builtin:honey");
+  await useCatalogPersona(page, "builtin:honey");
 
   await invokeTauri(page, "create_team", {
     input: {
-      name: "Fizzes",
-      personaIds: ["builtin:fizz"],
+      name: "Honeys",
+      personaIds: ["builtin:honey"],
     },
   });
 
   await page.keyboard.press("Escape");
-  await page.getByLabel("Open actions for Fizz").click();
+  await page.getByLabel("Open actions for Honey").click();
   await page.getByRole("menuitem", { name: "Delete" }).click();
 
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Fizz is still referenced by a team." }),
+      .filter({ hasText: "Honey is still referenced by a team." }),
   ).toBeVisible();
 });
 

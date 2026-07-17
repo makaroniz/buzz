@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.4.13
+
+- fix(desktop): compare relay media origins case-insensitively so uploads render when the saved community URL has uppercase characters
+- fix(desktop): invalidate stale media lookups so an in-flight relay-origin fetch cannot repopulate caches after a community reset
+
+## v0.4.12
+
+- fix(desktop): proxy authenticated relay media after cold-start community initialization
+- fix(desktop): keep shared-compute consumers admitted (WIP: multi-workspace publishing) ([#2000](https://github.com/block/buzz/pull/2000)) ([`5d77fa57`](https://github.com/block/buzz/commit/5d77fa57))
+- feat(desktop): reskin provider, config, community, profile, and team onboarding pages ([#2003](https://github.com/block/buzz/pull/2003)) ([`f054df73`](https://github.com/block/buzz/commit/f054df73))
+
+
+## v0.4.11
+
+- Fix policy receipts for cold-launch invite links ([#2005](https://github.com/block/buzz/pull/2005)) ([`1d8d006a`](https://github.com/block/buzz/commit/1d8d006aaf078ffd5b92eae06334b7bb908b680e))
+- Preserve persistent agent audience order ([#1989](https://github.com/block/buzz/pull/1989)) ([`fb8e6827`](https://github.com/block/buzz/commit/fb8e6827c758c73c9c6e16965dcdcecd00a5827c))
+- feat(desktop): create channels in sections ([#1996](https://github.com/block/buzz/pull/1996)) ([`9b649740`](https://github.com/block/buzz/commit/9b6497402f343e380f6c79b97a01c2d52bd12f17))
+- feat(desktop): graduate community rail ([#1995](https://github.com/block/buzz/pull/1995)) ([`f06b59ff`](https://github.com/block/buzz/commit/f06b59ff13bef0c031c8e4c3bdf979e120ea76d5))
+
+
+## v0.4.10
+
+- feat(desktop): onboarding step dots, identity/key page restyle, overflow scroll ([#1993](https://github.com/block/buzz/pull/1993)) ([`f2522995c`](https://github.com/block/buzz/commit/f2522995cbea67c96b79d5de6c19c665e465027d))
+- chore(desktop): add AppShell.tsx file-size override to unblock main CI ([#1992](https://github.com/block/buzz/pull/1992)) ([`db57bc8a2`](https://github.com/block/buzz/commit/db57bc8a2cdac846d6e0f47100cb76bf07a4f326))
+- feat: add invite QR and mobile direct join ([#1957](https://github.com/block/buzz/pull/1957)) ([`648cbf361`](https://github.com/block/buzz/commit/648cbf36109d97be6bd8530e77073d1c7e6008a0))
+- feat: open add community from deep links ([#1970](https://github.com/block/buzz/pull/1970)) ([`adb48311e`](https://github.com/block/buzz/commit/adb48311e6e8940c83e9b75ab896807e09263960))
+- fix(desktop): enforce observer archive policy reconciliation on internal builds ([#1923](https://github.com/block/buzz/pull/1923)) ([`896974554`](https://github.com/block/buzz/commit/896974554937126ec1d9e85f681da84fed9644b2))
+- feat(desktop): streamline nostr identity pairing ([#1974](https://github.com/block/buzz/pull/1974)) ([`1eae8575e`](https://github.com/block/buzz/commit/1eae8575ed5a475729759315686a7d336f02c663))
+- feat(desktop): ensure starter channels during onboarding ([#1937](https://github.com/block/buzz/pull/1937)) ([`74f3f2975`](https://github.com/block/buzz/commit/74f3f29758b0b76377a1823e22d65e65ce19ba41))
+- test(desktop): make omission-preservation test discriminate on instructions ([#1988](https://github.com/block/buzz/pull/1988)) ([`2b015cb5d`](https://github.com/block/buzz/commit/2b015cb5dcc5f91738736b4f778742c893129e47))
+- fix(desktop): omission must not wipe team persona_ids/instructions ([#1985](https://github.com/block/buzz/pull/1985)) ([`1e91fd473`](https://github.com/block/buzz/commit/1e91fd473bb45fdcdb7e34623091e4e9401355dc))
+- [codex] Prevent actor-tag UI impersonation ([#1931](https://github.com/block/buzz/pull/1931)) ([`c540ec967`](https://github.com/block/buzz/commit/c540ec967869ef0f4eef90439bf70929fc74f7f6))
+
+
+## v0.4.9
+
+- Restyle onboarding: branded landing screen, yellow/gradient backgrounds, new starter avatars ([#1982](https://github.com/block/buzz/pull/1982)) ([`831c80c1a`](https://github.com/block/buzz/commit/831c80c1a5d0811c7ac6ae832a95b2fd4ddc4e89))
+- Guide CLI installation and subscription sign-in ([#1980](https://github.com/block/buzz/pull/1980)) ([`8d3666c5f`](https://github.com/block/buzz/commit/8d3666c5f8ea07abe65355a1afe7de95ea247441))
+- unify channel add + search into one entry point ([#1964](https://github.com/block/buzz/pull/1964)) ([`3dd236eb6`](https://github.com/block/buzz/commit/3dd236eb6fd7c0dd86a9174d2852bc9ae9861912))
+- Apply optional relay join policy across join flows ([#1894](https://github.com/block/buzz/pull/1894)) ([`6c2d66757`](https://github.com/block/buzz/commit/6c2d667575cbc372ba42d26134448660fb1d2ee9))
+- fix(desktop): preserve relaunch through mesh shutdown ([#1966](https://github.com/block/buzz/pull/1966)) ([`a1626f96c`](https://github.com/block/buzz/commit/a1626f96cea57e415dad72558df04494ab4c2596))
+- Persist agent audiences with native inline mentions ([#1949](https://github.com/block/buzz/pull/1949)) ([`19dc33bda`](https://github.com/block/buzz/commit/19dc33bda6e9e7f09703c4efcd721235de644ce9))
+
+
 ## v0.4.8
 
 - fix(desktop): restore default community join option ([#1969](https://github.com/block/buzz/pull/1969)) ([`a84fe13a8`](https://github.com/block/buzz/commit/a84fe13a8c419f3d2d6ff3b577b431629b8e3e07))
