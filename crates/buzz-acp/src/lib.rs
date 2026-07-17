@@ -1670,12 +1670,17 @@ async fn tokio_main() -> Result<()> {
             // indefinitely on quiet channels — dispatch_pending is only
             // called on relay events or pool results, neither of which
             // arrive when the channel is silent.
+            //
+            // has_flushable_work()'s expiry loop can dirty a channel even
+            // when it returns false, so sync unconditionally.
             if queue.has_flushable_work() {
                 for (channel_id, thread_tags) in
                     dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
                 {
                     typing_channels.insert(channel_id, thread_tags);
                 }
+            } else {
+                sync_dirty(&mut queue, &mut ledger);
             }
         }
 
@@ -1881,6 +1886,10 @@ async fn tokio_main() -> Result<()> {
                                             "cleaned up after membership removal"
                                         );
                                     }
+                                    // drain_channel marked `ch` dirty; this branch
+                                    // `continue`s below rather than falling through
+                                    // to a `dispatch_pending` call, so sync here.
+                                    sync_dirty(&mut queue, &mut ledger);
                                 }
                                 continue;
                             }
@@ -2135,17 +2144,26 @@ async fn tokio_main() -> Result<()> {
                     }
                 } => {
                     let _ = result_rx;
-                    if queue.has_flushable_work() {
+                    // has_flushable_work()'s expiry loop can dirty a channel
+                    // even when it returns false (e.g. it auto-released a
+                    // stuck in-flight channel that still isn't flushable for
+                    // some other reason) — sync unconditionally so that
+                    // dirty channel is never left unsynced.
+                    let flushable = queue.has_flushable_work();
+                    if flushable {
                         tracing::debug!("heartbeat_skipped_events");
                         for (channel_id, thread_tags) in
                             dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
                         {
                             typing_channels.insert(channel_id, thread_tags);
                         }
-                    } else if pool.any_idle() {
-                        dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
                     } else {
-                        tracing::debug!("heartbeat_skipped_busy");
+                        sync_dirty(&mut queue, &mut ledger);
+                        if pool.any_idle() {
+                            dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
+                        } else {
+                            tracing::debug!("heartbeat_skipped_busy");
+                        }
                     }
                     None
                 }
@@ -2399,20 +2417,59 @@ async fn tokio_main() -> Result<()> {
     // explicitly shut them down here to reap child processes. If the grace
     // period expires, remaining tasks are aborted and fall back to
     // AcpClient::Drop (start_kill + try_wait — best-effort, not guaranteed).
-    let (rx_ref, js_ref) = pool.rx_and_join_set();
+    let (rx_ref, js_ref, task_map_ref) = pool.rx_join_set_and_task_map();
     let shutdown_result = tokio::time::timeout(grace, async {
         loop {
             tokio::select! {
-                result = js_ref.join_next() => {
+                result = js_ref.join_next_with_id() => {
                     match result {
-                        Some(Err(e)) => tracing::warn!("task error during shutdown: {e}"),
-                        Some(Ok(())) => {}
+                        Some(Err(join_error)) => {
+                            tracing::warn!("task error during shutdown: {join_error}");
+                            // R6-F4: a task that panics during the shutdown
+                            // grace period produces no PromptResult, so its
+                            // in-flight triggers would otherwise stay stale
+                            // in the ledger mirror — Queue mode skipping
+                            // retry accounting, Drop mode resurrecting a
+                            // batch the normal panic policy would have
+                            // dropped. Apply the same queue-only panic
+                            // disposition `recover_panicked_agent` uses,
+                            // minus respawn/dispatch (shutdown is tearing
+                            // down, not recovering).
+                            let task_id = join_error.id();
+                            if let Some(meta) = task_map_ref.remove(&task_id) {
+                                if let Some(ch) = meta.channel_id {
+                                    let disposition = if removed_channels.contains(&ch) {
+                                        BatchDisposition::Dropped
+                                    } else {
+                                        BatchDisposition::Retry
+                                    };
+                                    queue.complete_batch(ch, meta.recoverable_batch, disposition);
+                                    sync_dirty(&mut queue, &mut ledger);
+                                }
+                            }
+                        }
+                        Some(Ok((_, ()))) => {}
                         None => break, // join_set empty
                     }
                 }
                 maybe_result = rx_ref.recv() => {
                     if let Some(mut pr) = maybe_result {
                         let idx = pr.agent.index;
+                        // R5-F2: classify the result through the same
+                        // disposition logic as the normal completion path
+                        // before reaping — a successful result received
+                        // during the grace period must clear its in-flight
+                        // triggers, not leave them stale for the next boot
+                        // to needlessly re-run. No dispatch: shutdown must
+                        // not admit new work.
+                        classify_and_complete_batch(
+                            &mut queue,
+                            &config,
+                            &mut pr,
+                            &removed_channels,
+                            Some(&ctx.rest_client),
+                        );
+                        sync_dirty(&mut queue, &mut ledger);
                         pr.agent.acp.shutdown().await;
                         tracing::debug!(agent = idx, "reaped checked-out agent on shutdown");
                     }
@@ -2427,9 +2484,17 @@ async fn tokio_main() -> Result<()> {
         pool.join_set.shutdown().await;
     }
     // Drain any remaining results that arrived after join_set drained but
-    // before tasks were aborted.
+    // before tasks were aborted. Same R5-F2 classification as above.
     while let Ok(mut pr) = pool.result_rx_try_recv() {
         let idx = pr.agent.index;
+        classify_and_complete_batch(
+            &mut queue,
+            &config,
+            &mut pr,
+            &removed_channels,
+            Some(&ctx.rest_client),
+        );
+        sync_dirty(&mut queue, &mut ledger);
         pr.agent.acp.shutdown().await;
         tracing::debug!(agent = idx, "reaped late-arriving agent on shutdown");
     }
@@ -2813,31 +2878,20 @@ fn spawn_failure_notice(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn handle_prompt_result(
-    pool: &mut AgentPool,
+/// Classify a completed prompt's batch (if any) into a [`BatchDisposition`]
+/// and apply it via [`EventQueue::complete_batch`], posting a dead-letter
+/// failure notice when retries are exhausted. Shared by the normal
+/// completion path (`handle_prompt_result`) and the shutdown-drain paths
+/// (R5-F2/R6-F4): both apply the identical disposition logic, but the
+/// shutdown paths skip everything else here (respawn, heartbeat
+/// bookkeeping, dispatch) — the caller decides what happens after.
+fn classify_and_complete_batch(
     queue: &mut EventQueue,
     config: &Config,
-    mut result: PromptResult,
-    heartbeat_in_flight: &mut bool,
+    result: &mut PromptResult,
     removed_channels: &HashSet<Uuid>,
-    crash_history: &mut [SlotCircuit],
-    respawn_tx: &mpsc::Sender<RespawnResult>,
-    respawn_tasks: &mut tokio::task::JoinSet<()>,
-    observer: Option<observer::ObserverHandle>,
     rest_client: Option<&relay::RestClient>,
-) -> LoopAction {
-    let before = pool.task_map().len();
-    let agent_index = result.agent.index;
-    pool.task_map_mut()
-        .retain(|_, meta| meta.agent_index != agent_index);
-    debug_assert_eq!(before, pool.task_map().len() + 1);
-
-    // Every completion — batched or not — goes through exactly one
-    // `complete_batch` call for the channel, folding the disposition
-    // (requeue/cancel/drop semantics) and in-flight completion into one
-    // atomic transition (P3-F1): no public queue operation can observe an
-    // intermediate state between them.
+) {
     if let Some(batch) = result.batch.take() {
         let channel_id = batch.channel_id;
         // Don't requeue batches for channels the agent was removed from —
@@ -2914,6 +2968,34 @@ fn handle_prompt_result(
     } else if let PromptSource::Channel(ch) = &result.source {
         queue.complete_batch(*ch, None, BatchDisposition::Success);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_prompt_result(
+    pool: &mut AgentPool,
+    queue: &mut EventQueue,
+    config: &Config,
+    mut result: PromptResult,
+    heartbeat_in_flight: &mut bool,
+    removed_channels: &HashSet<Uuid>,
+    crash_history: &mut [SlotCircuit],
+    respawn_tx: &mpsc::Sender<RespawnResult>,
+    respawn_tasks: &mut tokio::task::JoinSet<()>,
+    observer: Option<observer::ObserverHandle>,
+    rest_client: Option<&relay::RestClient>,
+) -> LoopAction {
+    let before = pool.task_map().len();
+    let agent_index = result.agent.index;
+    pool.task_map_mut()
+        .retain(|_, meta| meta.agent_index != agent_index);
+    debug_assert_eq!(before, pool.task_map().len() + 1);
+
+    // Every completion — batched or not — goes through exactly one
+    // `complete_batch` call for the channel, folding the disposition
+    // (requeue/cancel/drop semantics) and in-flight completion into one
+    // atomic transition (P3-F1): no public queue operation can observe an
+    // intermediate state between them.
+    classify_and_complete_batch(queue, config, &mut result, removed_channels, rest_client);
 
     if let PromptSource::Heartbeat = &result.source {
         *heartbeat_in_flight = false;
