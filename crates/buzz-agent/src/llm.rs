@@ -89,7 +89,7 @@ impl Llm {
                     .await?;
                 parse_anthropic(v)
             }
-            Provider::OpenAi | Provider::Databricks => {
+            Provider::OpenAi | Provider::Databricks | Provider::Gemini => {
                 self.openai_request(cfg, effective_model, |use_responses| {
                     // Normalize effort for model-specific availability. Startup no longer rejects
                     // `max` for pure OpenAI/Databricks; this per-model table is the single authority
@@ -178,7 +178,7 @@ impl Llm {
                 });
                 Ok(parse_anthropic(self.post_anthropic(cfg, &body).await?)?.text)
             }
-            Provider::OpenAi | Provider::Databricks => {
+            Provider::OpenAi | Provider::Databricks | Provider::Gemini => {
                 let r = self
                     .openai_request(cfg, effective_model, |use_responses| {
                         if use_responses {
@@ -274,9 +274,11 @@ impl Llm {
     where
         F: FnMut(bool) -> (Value, OpenAiParse) + Send,
     {
-        let use_responses = self.auto_upgraded.load(Ordering::Relaxed)
-            || matches!(cfg.openai_api, OpenAiApi::Responses)
-            || matches!(cfg.openai_api, OpenAiApi::Auto) && is_openai_host(&cfg.base_url);
+        let use_responses = should_use_responses(
+            cfg.openai_api,
+            &cfg.base_url,
+            self.auto_upgraded.load(Ordering::Relaxed),
+        );
 
         if use_responses {
             let (b, p) = build(true);
@@ -384,6 +386,26 @@ impl Llm {
             );
         }
         true
+    }
+}
+
+/// Decide whether an OpenAI-family request targets `/responses` instead of
+/// `/chat/completions`.
+///
+/// `OpenAiApi::Chat` is authoritative: a Chat-pinned provider (e.g. Gemini's
+/// OpenAI-compatible surface, which has no `/responses` endpoint) can NEVER be
+/// routed to `/responses`, regardless of the `auto_upgraded` latch or the host
+/// heuristic. This is what keeps Gemini dispatch on Chat Completions even if the
+/// auto-upgrade heuristics change later.
+///
+/// `Responses` always uses `/responses`. `Auto` upgrades once the provider has
+/// signalled it (the `auto_upgraded` latch, set only under `Auto`) or when the
+/// base URL is a first-party OpenAI host.
+fn should_use_responses(api: OpenAiApi, base_url: &str, auto_upgraded: bool) -> bool {
+    match api {
+        OpenAiApi::Chat => false,
+        OpenAiApi::Responses => true,
+        OpenAiApi::Auto => auto_upgraded || is_openai_host(base_url),
     }
 }
 
@@ -1121,13 +1143,15 @@ where
 ///   never read for Anthropic requests (those go through `post_anthropic` with
 ///   `x-api-key`), but Llm holds one to keep the field non-`Option`.
 /// - `Provider::OpenAi`: a static source over `OPENAI_COMPAT_API_KEY`.
+/// - `Provider::Gemini`: a static source over `GEMINI_API_KEY`, sent as the
+///   `Authorization: Bearer` token on Gemini's OpenAI-compatible surface.
 /// - `Provider::Databricks`: if `DATABRICKS_TOKEN` is set, a static source.
 ///   Otherwise a `PkceOAuthTokenSource` pointed at the workspace's OIDC
 ///   discovery URL. First request without a cached token triggers a browser
 ///   flow; subsequent requests use the cache + refresh transparently.
 pub(crate) fn build_token_source(cfg: &Config) -> Result<Arc<dyn TokenSource>, AgentError> {
     match cfg.provider {
-        Provider::Anthropic | Provider::OpenAi => {
+        Provider::Anthropic | Provider::OpenAi | Provider::Gemini => {
             Ok(Arc::new(StaticTokenSource::new(cfg.api_key.clone())))
         }
         Provider::Databricks | Provider::DatabricksV2 => {
@@ -1204,6 +1228,54 @@ mod tests {
             hints_enabled: true,
             thinking_effort: None,
         }
+    }
+
+    #[test]
+    fn chat_pinned_never_uses_responses_regardless_of_host_or_latch() {
+        // Gemini (and any Chat-pinned provider) must stay on /chat/completions.
+        // Neither a first-party OpenAI host nor a set auto-upgrade latch may flip
+        // it to /responses — Chat is authoritative. This guards Gemini dispatch
+        // against future changes to the host/auto heuristics.
+        for base in [
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "https://api.openai.com/v1", // even a real OpenAI host stays on Chat
+        ] {
+            for auto_upgraded in [false, true] {
+                assert!(
+                    !should_use_responses(OpenAiApi::Chat, base, auto_upgraded),
+                    "Chat must never route to /responses (base={base}, auto_upgraded={auto_upgraded})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn responses_pinned_always_uses_responses() {
+        assert!(should_use_responses(
+            OpenAiApi::Responses,
+            "http://example.invalid",
+            false
+        ));
+    }
+
+    #[test]
+    fn auto_upgrades_on_openai_host_or_latch_only() {
+        // Auto: /responses only when the latch is set or the base is an OpenAI host.
+        assert!(should_use_responses(
+            OpenAiApi::Auto,
+            "https://api.openai.com/v1",
+            false
+        ));
+        assert!(should_use_responses(
+            OpenAiApi::Auto,
+            "http://example.invalid",
+            true
+        ));
+        assert!(!should_use_responses(
+            OpenAiApi::Auto,
+            "http://example.invalid",
+            false
+        ));
     }
 
     fn image_history() -> Vec<HistoryItem> {

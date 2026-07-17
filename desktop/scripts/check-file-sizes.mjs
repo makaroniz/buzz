@@ -442,7 +442,11 @@ const overrides = new Map([
   // (if let Some(provider_update) = input.provider { record.provider = provider_update; }).
   // +8: harness_override thread-through in update_managed_agent so a deliberate
   // Custom pin routes to update_time_agent_command_override (comment + call).
-  ["src-tauri/src/commands/agent_models.rs", 1079],
+  // +15: gemini provider — is_gemini_provider + provider-aware base-URL/api-key
+  // resolution (openai_compatible_base_url_env / _api_key_env) so Gemini reuses
+  // the OpenAI-compatible /models discovery path with GEMINI_BASE_URL/GEMINI_API_KEY.
+  // Load-bearing feature growth; queued to split with the rest of this list.
+  ["src-tauri/src/commands/agent_models.rs", 1095],
   // global-agent-config: get_agent_config_surface / write_agent_config_field /
   // put_agent_session_config commands + GlobalAgentConfig serde types. New file
   // in this PR; queued to split with the command module refactor.

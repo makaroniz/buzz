@@ -6,6 +6,7 @@ import {
   getPersonaProviderOptions,
   requiredCredentialEnvKeys,
   isMissingRequiredDropdownField,
+  providerRequiresExplicitModel,
 } from "./agentConfigOptions.tsx";
 import {
   computeEditAgentFormValidity,
@@ -56,7 +57,7 @@ test("editAgent_providerFieldHidden_forBlankRuntime", () => {
 // ── Provider dropdown options for EditAgentProviderField ────────────────────
 //
 // The provider dropdown contains the well-known providers
-// (databricks, databricks_v2, anthropic, openai, openai-compat) plus a
+// (databricks, databricks_v2, anthropic, openai, openai-compat, gemini) plus a
 // default-provider fallback entry so users can clear a saved provider.
 //
 // On OSS builds, Databricks v1 ("databricks") is shown alongside v2 so OSS
@@ -109,6 +110,64 @@ test("editAgent_providerOptions_includesDatabricksV1AsCurrentEvenWhenHidden", ()
     ids.includes("databricks"),
     "databricks must appear as current provider when it is the saved value",
   );
+});
+
+test("editAgent_providerOptions_includesGemini", () => {
+  const options = getPersonaProviderOptions("", "buzz-agent");
+  const ids = options.map((o) => o.id);
+  assert.ok(ids.includes("gemini"), "gemini must be present in the dropdown");
+});
+
+test("editAgent_gemini_requiresApiKeyAndExplicitModel", () => {
+  // Gemini's credential is GEMINI_API_KEY, and (like OpenAI/Anthropic) it has
+  // no auto/default model, so an explicit model must be chosen.
+  assert.deepEqual(requiredCredentialEnvKeys("buzz-agent", "gemini"), [
+    "GEMINI_API_KEY",
+  ]);
+  assert.ok(
+    providerRequiresExplicitModel("gemini"),
+    "gemini must require an explicit model",
+  );
+});
+
+// ── Gemini is buzz-agent-only — must not be advertised for Goose ─────────────
+//
+// Goose's readiness map (readiness::goose_requirements) has no `gemini` arm,
+// so offering Gemini for Goose would demand a GEMINI_API_KEY the Goose backend
+// never reads (frontend/backend drift). The picker and credential-requirement
+// helpers gate Gemini to buzz-agent; a value already persisted with `gemini`
+// still renders via the `(current)` tail so an existing agent never loses it.
+
+test("editAgent_providerOptions_excludesGeminiForGoose", () => {
+  const options = getPersonaProviderOptions("", "goose");
+  const ids = options.map((o) => o.id);
+  assert.ok(
+    !ids.includes("gemini"),
+    "gemini must not be offered for the goose runtime",
+  );
+});
+
+test("editAgent_providerOptions_includesGeminiAsCurrentForGooseWhenSaved", () => {
+  // A record already persisted with provider="gemini" on goose must still show
+  // its saved value via the (current) tail even though gemini is not offered.
+  const options = getPersonaProviderOptions("gemini", "goose");
+  const ids = options.map((o) => o.id);
+  assert.ok(
+    ids.includes("gemini"),
+    "a saved gemini value must render as the current provider on goose",
+  );
+});
+
+test("editAgent_gemini_requiresNoCredentialsForGoose", () => {
+  // Goose can't drive gemini, so it requires no gemini credentials there.
+  assert.deepEqual(requiredCredentialEnvKeys("goose", "gemini"), []);
+});
+
+test("editAgent_gooseSupportedProviderCredentialsUnchanged", () => {
+  // The gate is narrow: providers Goose does support keep their credentials.
+  assert.deepEqual(requiredCredentialEnvKeys("goose", "anthropic"), [
+    "ANTHROPIC_API_KEY",
+  ]);
 });
 
 test("editAgent_providerOptions_includesDefaultEntry", () => {

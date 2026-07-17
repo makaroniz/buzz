@@ -19,6 +19,20 @@ export const BLOCK_BUILD_HIDDEN_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "databricks",
 ]);
 
+/**
+ * Provider ids that only the `buzz-agent` runtime can drive. Goose keys off
+ * `GOOSE_PROVIDER`/`GOOSE_MODEL` plus its own config and its readiness map
+ * (`readiness::goose_requirements`) only knows anthropic/openai/databricks —
+ * it has no `gemini` arm. Offering Gemini for Goose would advertise a provider
+ * the Goose backend never checks and demand a `GEMINI_API_KEY` it never reads
+ * (frontend/backend drift). These ids are suppressed from the picker and from
+ * credential requirements for every runtime except `buzz-agent`; a value
+ * already persisted with one of them still renders via the `(current)` tail.
+ */
+export const BUZZ_AGENT_ONLY_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "gemini",
+]);
+
 export const PERSONA_FIELD_SHELL_CLASS =
   "rounded-xl border border-input bg-muted/40 transition-colors duration-150 ease-out hover:border-muted-foreground/40 focus-within:border-muted-foreground/50";
 export const PERSONA_FIELD_CONTROL_CLASS =
@@ -36,6 +50,7 @@ const KNOWN_LLM_PROVIDER_IDS = [
   "anthropic",
   "databricks",
   "databricks_v2",
+  "gemini",
   "openai",
   "openai-compat",
 ] as const;
@@ -91,6 +106,10 @@ const PROVIDER_CREDENTIAL_CONFIG: Partial<
     requiredEnvKeys: ["OPENAI_COMPAT_API_KEY"],
     secretEnvVar: "OPENAI_COMPAT_API_KEY",
   },
+  gemini: {
+    requiredEnvKeys: ["GEMINI_API_KEY"],
+    secretEnvVar: "GEMINI_API_KEY",
+  },
   databricks: {
     // DATABRICKS_TOKEN is NOT required — OAuth PKCE is the normal path.
     requiredEnvKeys: ["DATABRICKS_HOST"],
@@ -116,6 +135,7 @@ export const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
   { id: "anthropic", label: "Anthropic" },
   { id: "openai", label: "OpenAI" },
   { id: "openai-compat", label: "OpenAI-compatible" },
+  { id: "gemini", label: "Gemini" },
   { id: "relay-mesh", label: "Buzz shared compute" },
   { id: "databricks", label: "Databricks" },
   { id: "databricks_v2", label: "Databricks v2" },
@@ -158,7 +178,17 @@ export function requiredCredentialEnvKeys(
   if (normalizedRuntime !== "buzz-agent" && normalizedRuntime !== "goose") {
     return [];
   }
-  const config = PROVIDER_CREDENTIAL_CONFIG[provider.trim().toLowerCase()];
+  const normalizedProvider = provider.trim().toLowerCase();
+  // buzz-agent-only providers (e.g. gemini) are unsupported by Goose, so they
+  // require no credentials there — keep this in lockstep with the picker gate
+  // in getPersonaProviderOptions so options and requirements never drift.
+  if (
+    normalizedRuntime !== "buzz-agent" &&
+    BUZZ_AGENT_ONLY_PROVIDER_IDS.has(normalizedProvider)
+  ) {
+    return [];
+  }
+  const config = PROVIDER_CREDENTIAL_CONFIG[normalizedProvider];
   return config?.requiredEnvKeys ?? [];
 }
 
@@ -254,7 +284,8 @@ export function providerRequiresExplicitModel(
   return (
     trimmedProvider === "anthropic" ||
     trimmedProvider === "openai" ||
-    trimmedProvider === "openai-compat"
+    trimmedProvider === "openai-compat" ||
+    trimmedProvider === "gemini"
   );
 }
 
@@ -342,9 +373,18 @@ export function getPersonaProviderOptions(
   const defaultProviderOptions = [
     { id: "", label: getDefaultLlmProviderLabel(runtimeId, globalProvider) },
   ];
+  // Suppress buzz-agent-only providers (e.g. gemini) for every other runtime.
+  // A value already persisted with one still renders via the `(current)` tail
+  // below, so an existing agent never loses its saved selection.
+  const isBuzzAgentRuntime = runtimeId.trim() === "buzz-agent";
+  const runtimeVisibleOptions = isBuzzAgentRuntime
+    ? PERSONA_LLM_PROVIDER_OPTIONS
+    : PERSONA_LLM_PROVIDER_OPTIONS.filter(
+        (o) => !BUZZ_AGENT_ONLY_PROVIDER_IDS.has(o.id),
+      );
   const filteredOptions = hideProviderIds?.size
-    ? PERSONA_LLM_PROVIDER_OPTIONS.filter((o) => !hideProviderIds.has(o.id))
-    : PERSONA_LLM_PROVIDER_OPTIONS;
+    ? runtimeVisibleOptions.filter((o) => !hideProviderIds.has(o.id))
+    : runtimeVisibleOptions;
   const options = [...defaultProviderOptions, ...filteredOptions];
   if (
     trimmedProvider.length === 0 ||

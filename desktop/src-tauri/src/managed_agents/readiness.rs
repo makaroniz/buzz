@@ -242,6 +242,7 @@ impl AgentReadiness {
 ///   provider-specific credentials are required:
 ///   - `anthropic` → `ANTHROPIC_API_KEY`
 ///   - `openai` → `OPENAI_COMPAT_API_KEY`
+///   - `gemini` → `GEMINI_API_KEY`
 ///   - `databricks` / `databricks_v2` → `DATABRICKS_HOST` (token optional —
 ///     OAuth PKCE is the fallback)
 /// * **claude**: a successful `claude auth status` probe.
@@ -329,6 +330,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
         Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        Some("gemini") => Some("GEMINI_MODEL"),
         _ => None,
     };
     let model_present = effective
@@ -361,6 +363,12 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             if env_key_missing("OPENAI_COMPAT_API_KEY") => {
                 missing.push(Requirement::EnvKey {
                     key: "OPENAI_COMPAT_API_KEY".to_string(),
+                });
+            }
+        Some("gemini")
+            if env_key_missing("GEMINI_API_KEY") => {
+                missing.push(Requirement::EnvKey {
+                    key: "GEMINI_API_KEY".to_string(),
                 });
             }
         Some("databricks") | Some("databricks_v2") | Some("databricks-v2")
@@ -580,6 +588,50 @@ mod tests {
         assert!(result.requirements().contains(&Requirement::EnvKey {
             key: "OPENAI_COMPAT_API_KEY".to_string()
         }));
+    }
+
+    #[test]
+    fn buzz_agent_missing_gemini_key_returns_not_ready() {
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "gemini"),
+                ("BUZZ_AGENT_MODEL", "gemini-2.5-flash"),
+            ]),
+        );
+        let result = agent_readiness(&env);
+        assert!(!result.is_ready());
+        assert!(result.requirements().contains(&Requirement::EnvKey {
+            key: "GEMINI_API_KEY".to_string()
+        }));
+    }
+
+    #[test]
+    fn buzz_agent_gemini_with_all_fields_is_ready() {
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "gemini"),
+                ("BUZZ_AGENT_MODEL", "gemini-2.5-flash"),
+                ("GEMINI_API_KEY", "AIza-test"),
+            ]),
+        );
+        assert!(agent_readiness(&env).is_ready());
+    }
+
+    #[test]
+    fn buzz_agent_gemini_model_fallback_env_key_is_ready() {
+        // GEMINI_MODEL (not BUZZ_AGENT_MODEL) should satisfy the model requirement,
+        // mirroring the provider-specific fallback for the other providers.
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "gemini"),
+                ("GEMINI_MODEL", "gemini-2.5-pro"),
+                ("GEMINI_API_KEY", "AIza-test"),
+            ]),
+        );
+        assert!(agent_readiness(&env).is_ready());
     }
 
     #[test]
