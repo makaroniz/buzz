@@ -14,7 +14,7 @@
 //! - **Queue** — all events accumulate; batched on the next flush cycle.
 
 use nostr::{Event, ToBech32};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -365,6 +365,21 @@ pub struct EventQueue {
     /// `lib.rs` never needs a hand-maintained list of mutation seams to
     /// sync after.
     dirty_channels: HashSet<Uuid>,
+    /// Per-channel unresolved-record ordering barrier (R6-F1). While a
+    /// channel has an entry here, `flush_next`/`has_flushable_work` refuse
+    /// to flush any of its queued events whose `admission_seq` exceeds the
+    /// barrier's lowest held seq. Cleared by resolution (`admit_recovered`),
+    /// invalidation (`drain_channel`), or deadline expiry
+    /// (`expire_due_unresolved_barriers`).
+    unresolved_barriers: HashMap<Uuid, UnresolvedBarrier>,
+}
+
+/// A channel's active unresolved-ordering barrier: the set of admission
+/// seqs still owed a boot-fetch resolution, and the shared deadline (from
+/// boot commit) past which the hold is lifted regardless.
+struct UnresolvedBarrier {
+    seqs: BTreeSet<u64>,
+    deadline: Instant,
 }
 
 impl EventQueue {
@@ -389,6 +404,7 @@ impl EventQueue {
             next_admission_seq: 0,
             in_flight_batch_triggers: HashMap::new(),
             dirty_channels: HashSet::new(),
+            unresolved_barriers: HashMap::new(),
         }
     }
 
@@ -446,6 +462,151 @@ impl EventQueue {
         std::mem::take(&mut self.dirty_channels)
             .into_iter()
             .collect()
+    }
+
+    /// Lowest currently-unresolved `admission_seq` for `channel_id`, or
+    /// `None` if the channel has no active barrier. Queue invariant: every
+    /// per-channel table (`queues`, `cancelled_batches`) is always ascending
+    /// by `admission_seq` (established by construction at every mutator —
+    /// live `push` appends the process-max seq, all restore paths
+    /// front-load strictly lower seqs than what remains, and
+    /// `import_recovered`/`admit_recovered` insert in seq order). Events at
+    /// or below this floor precede every remaining hole and flush
+    /// normally; events above it are held.
+    fn barrier_floor(&self, channel_id: Uuid) -> Option<u64> {
+        self.unresolved_barriers
+            .get(&channel_id)
+            .and_then(|b| b.seqs.iter().next().copied())
+    }
+
+    /// Splits an ascending-by-`admission_seq` vector into (flushable, held)
+    /// given an optional barrier floor: `Some(k)` keeps only entries with
+    /// `admission_seq <= k` in the flushable half; `None` keeps everything
+    /// flushable. Relative order within each half is preserved regardless
+    /// of the input's admission_seq order. Shared by `flush_next`'s
+    /// cancelled-batch fallback and cancelled-events merge so both respect
+    /// the same per-event rule the main queue drain does.
+    fn split_at_barrier_floor(
+        entries: Vec<BatchEvent>,
+        floor: Option<u64>,
+    ) -> (Vec<BatchEvent>, Vec<BatchEvent>) {
+        match floor {
+            None => (entries, Vec::new()),
+            Some(floor) => {
+                let mut flushable = Vec::with_capacity(entries.len());
+                let mut held = Vec::new();
+                for be in entries {
+                    if be.admission_seq <= floor {
+                        flushable.push(be);
+                    } else {
+                        held.push(be);
+                    }
+                }
+                (flushable, held)
+            }
+        }
+    }
+
+    /// Register `channel_id`'s unresolved ordering barrier (R6-F1) — called
+    /// once per channel at boot commit for every channel with unfetched
+    /// boot-recovery triggers. `seqs` is the channel's set of unresolved
+    /// `admission_seq`s; `deadline` is the shared recovery deadline
+    /// (measured from boot commit) at which the barrier lifts regardless of
+    /// resolution. A channel with no unresolved seqs gets no barrier.
+    pub fn set_unresolved_barrier(
+        &mut self,
+        channel_id: Uuid,
+        seqs: BTreeSet<u64>,
+        deadline: Instant,
+    ) {
+        if seqs.is_empty() {
+            return;
+        }
+        self.unresolved_barriers
+            .insert(channel_id, UnresolvedBarrier { seqs, deadline });
+    }
+
+    /// Earliest active barrier deadline across all channels, or `None` when
+    /// no barrier is armed. The main `select!`'s `tokio::time::Sleep` arm
+    /// is reset from this whenever the barrier set changes (rev 6.1).
+    pub fn next_unresolved_barrier_deadline(&self) -> Option<Instant> {
+        self.unresolved_barriers.values().map(|b| b.deadline).min()
+    }
+
+    /// Expire every barrier at or past `now`, lifting the hold on its
+    /// channel's suffix. Called by the dedicated `select!` timer arm on
+    /// fire, and opportunistically at the top of `flush_next`/
+    /// `has_flushable_work` as a cheap check on already-woken paths — the
+    /// timer arm is what makes the deadline an actual bound on a quiet
+    /// harness (rev 6.1). Returns the expired channel ids (already
+    /// inserted into `dirty_channels`) so the caller can ledger-sync them.
+    pub fn expire_due_unresolved_barriers(&mut self, now: Instant) -> Vec<Uuid> {
+        let due: Vec<Uuid> = self
+            .unresolved_barriers
+            .iter()
+            .filter(|(_, b)| now >= b.deadline)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &due {
+            self.unresolved_barriers.remove(id);
+            self.dirty_channels.insert(*id);
+        }
+        due
+    }
+
+    /// Boot-only bulk restore: re-admits a channel's complete durable
+    /// trigger set, in `admission_seq` order, bypassing cap eviction (the
+    /// durable set can legitimately exceed [`MAX_PENDING_PER_CHANNEL`] —
+    /// see module docs on cap enforcement). Applies the promotion rule:
+    /// if none of `events` is already `cap_exempt` (no exempt record
+    /// survived the previous generation), the whole snapshot is promoted
+    /// to exempt; otherwise every record keeps its persisted class. A
+    /// no-op for an empty `events`.
+    pub fn import_recovered(&mut self, channel_id: Uuid, mut events: Vec<QueuedEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        events.sort_by_key(|e| e.admission_seq);
+        let promote = !events.iter().any(|e| e.cap_exempt);
+        let queue = self.queues.entry(channel_id).or_default();
+        for mut event in events {
+            event.channel_id = channel_id;
+            if promote {
+                event.cap_exempt = true;
+            }
+            queue.push_back(event);
+        }
+        self.dirty_channels.insert(channel_id);
+    }
+
+    /// Recovery-specific single-event admission for resolving an unresolved
+    /// boot-fetch record (R5-F3): bypasses `DedupMode::Drop`'s in-flight
+    /// rejection and cap accounting, and inserts `event` at its
+    /// `admission_seq` position among the channel's queued events (not the
+    /// tail) so the runtime queue matches the ledger's total order. Also
+    /// releases the resolved seq from the channel's unresolved barrier, if
+    /// any (release path 1 of 3 — see `set_unresolved_barrier`).
+    ///
+    /// Caller supplies `event` with its original `admission_seq`/
+    /// `enqueued_at_unix`/`restart_recovery`/`cap_exempt` restored from the
+    /// unresolved ledger record — this does not stamp or overwrite any of
+    /// those fields (unlike `push`).
+    pub fn admit_recovered(&mut self, channel_id: Uuid, mut event: QueuedEvent) {
+        event.channel_id = channel_id;
+        let seq = event.admission_seq;
+        let queue = self.queues.entry(channel_id).or_default();
+        let pos = queue
+            .iter()
+            .position(|qe| qe.admission_seq > seq)
+            .unwrap_or(queue.len());
+        queue.insert(pos, event);
+        if let Some(barrier) = self.unresolved_barriers.get_mut(&channel_id) {
+            barrier.seqs.remove(&seq);
+            if barrier.seqs.is_empty() {
+                self.unresolved_barriers.remove(&channel_id);
+            }
+        }
+        self.dirty_channels.insert(channel_id);
     }
 
     /// Evicts counted-class (`cap_exempt == false`) events from `victim_end`
@@ -535,6 +696,12 @@ impl EventQueue {
     pub fn flush_next(&mut self) -> Option<FlushBatch> {
         let now = Instant::now();
 
+        // Opportunistic barrier expiry — cheap check on this already-woken
+        // path. The dedicated select! timer arm is what makes the deadline
+        // an actual bound on a quiet harness (rev 6.1); this just avoids
+        // leaving an expired barrier armed until the next timer fire.
+        self.expire_due_unresolved_barriers(now);
+
         // Auto-expire any stuck in-flight entries that missed mark_complete.
         let expired: Vec<Uuid> = self
             .in_flight_deadlines
@@ -564,7 +731,8 @@ impl EventQueue {
         }
 
         // Find the channel whose head event has the oldest received_at,
-        // excluding in-flight channels and throttled channels.
+        // excluding in-flight channels, throttled channels, and channels
+        // whose head event is held behind an active unresolved barrier.
         let channel_id = self
             .queues
             .iter()
@@ -572,27 +740,48 @@ impl EventQueue {
                 !q.is_empty()
                     && !self.in_flight_channels.contains(id)
                     && self.retry_after.get(id).is_none_or(|&t| t <= now)
+                    && q.front().unwrap().admission_seq
+                        <= self.barrier_floor(**id).unwrap_or(u64::MAX)
             })
             .min_by_key(|(_, q)| q.front().unwrap().received_at)
             .map(|(id, _)| *id);
 
         // Fallback: if no queued events are ready but a channel has cancelled
         // events waiting (e.g., explicit !cancel with no new @mention), flush
-        // those as a regular batch (re-dispatch unchanged).
+        // those as a regular batch (re-dispatch unchanged). Held-behind-the-
+        // barrier cancelled events are split out and kept for a later cycle.
         let channel_id = match channel_id {
             Some(id) => id,
             None => {
                 let cancelled_id = self
                     .cancelled_batches
-                    .keys()
-                    .find(|id| !self.in_flight_channels.contains(id))
-                    .copied();
+                    .iter()
+                    .find(|(id, batch)| {
+                        !self.in_flight_channels.contains(*id)
+                            && batch.iter().any(|be| {
+                                be.admission_seq <= self.barrier_floor(**id).unwrap_or(u64::MAX)
+                            })
+                    })
+                    .map(|(id, _)| *id);
                 match cancelled_id {
                     Some(id) => {
                         // Move cancelled events into the regular events slot.
                         // No new events to merge — re-dispatch the original batch.
-                        let cancelled = self.cancelled_batches.remove(&id).unwrap_or_default();
-                        let cancel_reason = self.cancel_reasons.remove(&id);
+                        let full = self.cancelled_batches.remove(&id).unwrap_or_default();
+                        let stored_reason = self.cancel_reasons.remove(&id);
+                        let floor = self.barrier_floor(id);
+                        let (cancelled, held) = Self::split_at_barrier_floor(full, floor);
+                        if !held.is_empty() {
+                            self.cancelled_batches.insert(id, held);
+                            if let Some(r) = stored_reason {
+                                self.cancel_reasons.insert(id, r);
+                            }
+                        }
+                        let cancel_reason = if cancelled.is_empty() {
+                            None
+                        } else {
+                            stored_reason
+                        };
                         self.in_flight_channels.insert(id);
                         self.in_flight_deadlines
                             .insert(id, now + self.in_flight_deadline);
@@ -617,9 +806,16 @@ impl EventQueue {
             }
         };
 
-        // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
+        // Drain up to MAX_BATCH_EVENTS, but never past the channel's
+        // unresolved barrier floor (if any) — events above it are left in
+        // the queue for a later cycle, after resolution/invalidation/expiry.
+        let floor = self.barrier_floor(channel_id).unwrap_or(u64::MAX);
         let queue = self.queues.entry(channel_id).or_default();
-        let drain_count = MAX_BATCH_EVENTS.min(queue.len());
+        let flushable_len = queue
+            .iter()
+            .take_while(|qe| qe.admission_seq <= floor)
+            .count();
+        let drain_count = MAX_BATCH_EVENTS.min(flushable_len);
         let mut events: Vec<BatchEvent> = queue
             .drain(..drain_count)
             .map(QueuedEvent::into_batch_event)
@@ -640,16 +836,25 @@ impl EventQueue {
             .insert(channel_id, now + self.in_flight_deadline);
         self.in_flight_batch_sizes.insert(channel_id, events.len());
 
-        // Merge any cancelled events stored by requeue_as_cancelled().
-        let cancelled_events = self
+        // Merge any cancelled events stored by requeue_as_cancelled(),
+        // splitting out any held behind the same barrier floor.
+        let cancelled_raw = self
             .cancelled_batches
             .remove(&channel_id)
             .unwrap_or_default();
+        let stored_reason = self.cancel_reasons.remove(&channel_id);
+        let (cancelled_events, held_cancelled) =
+            Self::split_at_barrier_floor(cancelled_raw, Some(floor));
+        if !held_cancelled.is_empty() {
+            self.cancelled_batches.insert(channel_id, held_cancelled);
+            if let Some(r) = stored_reason {
+                self.cancel_reasons.insert(channel_id, r);
+            }
+        }
         let cancel_reason = if cancelled_events.is_empty() {
-            self.cancel_reasons.remove(&channel_id);
             None
         } else {
-            self.cancel_reasons.remove(&channel_id)
+            stored_reason
         };
 
         self.in_flight_batch_triggers.insert(
@@ -927,6 +1132,9 @@ impl EventQueue {
     pub fn has_flushable_work(&mut self) -> bool {
         let now = Instant::now();
 
+        // Opportunistic barrier expiry — see flush_next's rationale.
+        self.expire_due_unresolved_barriers(now);
+
         // Auto-expire stuck in-flight entries (same logic as flush_next).
         let expired: Vec<Uuid> = self
             .in_flight_deadlines
@@ -957,10 +1165,13 @@ impl EventQueue {
             !q.is_empty()
                 && !self.in_flight_channels.contains(id)
                 && self.retry_after.get(id).is_none_or(|&t| t <= now)
-        }) || self
-            .cancelled_batches
-            .keys()
-            .any(|id| !self.in_flight_channels.contains(id))
+                && q.front().unwrap().admission_seq <= self.barrier_floor(*id).unwrap_or(u64::MAX)
+        }) || self.cancelled_batches.iter().any(|(id, batch)| {
+            !self.in_flight_channels.contains(id)
+                && batch
+                    .iter()
+                    .any(|be| be.admission_seq <= self.barrier_floor(*id).unwrap_or(u64::MAX))
+        })
     }
 
     /// Number of channels with pending events.
@@ -996,6 +1207,11 @@ impl EventQueue {
         self.cancelled_batches.remove(&channel_id);
         self.cancel_reasons.remove(&channel_id);
         self.withheld_native_steer.remove(&channel_id);
+        // Invalidation (release path 2 of 3): a removed channel's unresolved
+        // barrier — and any unresolved ledger records it guards — must not
+        // survive to resurrect discarded work if the agent is re-added later.
+        self.unresolved_barriers.remove(&channel_id);
+        self.dirty_channels.insert(channel_id);
         // Preserve in_flight_channels AND in_flight_deadlines: the in-flight
         // task will eventually complete (calling mark_complete) or the deadline
         // will expire (auto-cleaning the channel). Removing deadlines without
