@@ -5311,4 +5311,354 @@ mod tests {
             "in_flight_deadline must be strictly greater than max_turn_duration"
         );
     }
+
+    // ── Resume-ledger seam: recoverable_triggers / dirty_channels ─────────
+
+    #[test]
+    fn test_recoverable_triggers_gathers_all_four_tables_sorted_by_seq() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // seq 0: queued event (in-flight after flush).
+        q.push(make_queued(ch, "a"));
+        let batch = q.flush_next().expect("flush");
+        // seq 1: queued while in-flight (Queue mode allows it).
+        q.push(make_queued(ch, "b"));
+        // Cancel the in-flight batch — moves seq-0 trigger into cancelled_batches.
+        q.complete_batch(
+            ch,
+            Some(batch),
+            BatchDisposition::Cancelled(CancelReason::Steer),
+        );
+        // seq 2: withhold the queued (seq-1) event for native steer.
+        let seq1_id = q.recoverable_triggers(ch)[1].event_id.clone();
+        assert!(q.mark_native_steer_pending(ch, &seq1_id));
+        // seq 3: a fresh push lands back in queues.
+        q.push(make_queued(ch, "c"));
+
+        let triggers = q.recoverable_triggers(ch);
+        assert_eq!(triggers.len(), 3, "cancelled + withheld + fresh queued");
+        let seqs: Vec<u64> = triggers.iter().map(|t| t.admission_seq).collect();
+        let mut sorted = seqs.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            seqs, sorted,
+            "recoverable_triggers must be admission_seq-ascending"
+        );
+    }
+
+    #[test]
+    fn test_take_dirty_channels_drains_and_resets() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.push(make_queued(ch, "a"));
+        assert_eq!(q.take_dirty_channels(), vec![ch]);
+        // Second call with no intervening mutation returns empty.
+        assert!(q.take_dirty_channels().is_empty());
+    }
+
+    #[test]
+    fn test_set_next_admission_seq_only_advances_forward() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.set_next_admission_seq(100);
+        q.push(make_queued(ch, "a"));
+        let seq = q.recoverable_triggers(ch)[0].admission_seq;
+        assert_eq!(
+            seq, 101,
+            "push after resume must land above the resumed floor"
+        );
+
+        // A lower resume request must not roll the counter backward.
+        q.set_next_admission_seq(5);
+        q.push(make_queued(ch, "b"));
+        let seq2 = q.recoverable_triggers(ch)[1].admission_seq;
+        assert_eq!(seq2, 102);
+    }
+
+    // ── import_recovered: promotion rule ───────────────────────────────────
+
+    #[test]
+    fn test_import_recovered_promotes_whole_snapshot_when_no_exempt_record() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut e1 = make_queued(ch, "a");
+        e1.admission_seq = 5;
+        let mut e2 = make_queued(ch, "b");
+        e2.admission_seq = 6;
+        // Neither record carries cap_exempt=true — the whole snapshot promotes.
+        q.import_recovered(ch, vec![e2, e1]);
+
+        let triggers = q.recoverable_triggers(ch);
+        assert_eq!(triggers.len(), 2);
+        assert!(triggers.iter().all(|t| t.cap_exempt));
+        // Restored in admission_seq order regardless of input order.
+        assert_eq!(triggers[0].admission_seq, 5);
+        assert_eq!(triggers[1].admission_seq, 6);
+    }
+
+    #[test]
+    fn test_import_recovered_keeps_persisted_class_when_one_exempt_survives() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut exempt = make_queued(ch, "a");
+        exempt.admission_seq = 1;
+        exempt.cap_exempt = true;
+        let mut counted = make_queued(ch, "b");
+        counted.admission_seq = 2;
+        counted.cap_exempt = false;
+
+        q.import_recovered(ch, vec![exempt, counted]);
+
+        let triggers = q.recoverable_triggers(ch);
+        assert!(
+            triggers[0].cap_exempt,
+            "persisted exempt record kept exempt"
+        );
+        assert!(
+            !triggers[1].cap_exempt,
+            "persisted counted record kept counted"
+        );
+    }
+
+    #[test]
+    fn test_import_recovered_empty_is_noop() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.import_recovered(ch, vec![]);
+        assert!(q.recoverable_triggers(ch).is_empty());
+        assert!(
+            q.take_dirty_channels().is_empty(),
+            "no-op must not dirty the channel"
+        );
+    }
+
+    #[test]
+    fn test_import_recovered_bypasses_cap() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let events: Vec<QueuedEvent> = (0..(MAX_PENDING_PER_CHANNEL as u64 + 50))
+            .map(|seq| {
+                let mut e = make_queued(ch, "x");
+                e.admission_seq = seq;
+                e
+            })
+            .collect();
+        q.import_recovered(ch, events);
+        assert_eq!(
+            q.recoverable_triggers(ch).len(),
+            MAX_PENDING_PER_CHANNEL + 50,
+            "import must not trim an over-cap snapshot"
+        );
+    }
+
+    // ── admit_recovered: seq-positioned insertion + barrier release ────────
+
+    #[test]
+    fn test_admit_recovered_inserts_at_seq_position_among_queued() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut low = make_queued(ch, "low");
+        low.admission_seq = 1;
+        let mut high = make_queued(ch, "high");
+        high.admission_seq = 3;
+        q.import_recovered(ch, vec![low, high]);
+
+        let mut mid = make_queued(ch, "mid");
+        mid.admission_seq = 2;
+        mid.restart_recovery = true;
+        q.admit_recovered(ch, mid);
+
+        let batch = q.flush_next().expect("flush");
+        let contents: Vec<&str> = batch
+            .events
+            .iter()
+            .map(|be| be.event.content.as_str())
+            .collect();
+        // events are sorted by created_at for the batch, not admission_seq —
+        // but all three must have flushed together in one batch.
+        assert_eq!(contents.len(), 3);
+        assert!(contents.contains(&"mid"));
+    }
+
+    #[test]
+    fn test_admit_recovered_bypasses_drop_mode_in_flight_rejection() {
+        let mut q = EventQueue::new(DedupMode::Drop);
+        let ch = Uuid::new_v4();
+        q.push(make_queued(ch, "first"));
+        let _batch = q.flush_next().expect("flush");
+        assert!(q.is_channel_in_flight(ch));
+
+        let mut recovered = make_queued(ch, "recovered");
+        recovered.admission_seq = 999;
+        recovered.restart_recovery = true;
+        q.admit_recovered(ch, recovered);
+
+        // Ordinary push would have silently dropped this in Drop mode;
+        // admit_recovered must not.
+        assert_eq!(q.queued_event_count(&ch), 1);
+    }
+
+    #[test]
+    fn test_admit_recovered_releases_barrier_seq() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut unresolved = make_queued(ch, "a");
+        unresolved.admission_seq = 1;
+        let mut fetched = make_queued(ch, "b");
+        fetched.admission_seq = 2;
+        q.import_recovered(ch, vec![fetched]);
+
+        let deadline = Instant::now() + Duration::from_secs(60);
+        q.set_unresolved_barrier(ch, BTreeSet::from([1u64]), deadline);
+
+        // B (seq 2) is held behind unresolved A (seq 1).
+        assert!(
+            q.flush_next().is_none(),
+            "B must not flush while A is unresolved"
+        );
+
+        // Resolution admits A and releases the barrier.
+        q.admit_recovered(ch, unresolved);
+        let batch = q.flush_next().expect("A resolved — suffix flushes");
+        assert_eq!(batch.events.len(), 2);
+        assert_eq!(batch.events[0].event.content, "a");
+        assert_eq!(batch.events[1].event.content, "b");
+    }
+
+    // ── Unresolved ordering barrier: three release paths ────────────────────
+
+    #[test]
+    fn test_barrier_holds_suffix_until_resolution() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut fetched = make_queued(ch, "b");
+        fetched.admission_seq = 2;
+        q.import_recovered(ch, vec![fetched]);
+        q.set_unresolved_barrier(
+            ch,
+            BTreeSet::from([1u64]),
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        assert!(
+            !q.has_flushable_work(),
+            "held suffix must not report flushable"
+        );
+        assert!(q.flush_next().is_none());
+    }
+
+    #[test]
+    fn test_barrier_holds_fresh_live_arrival_behind_the_hole() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.set_next_admission_seq(1); // fresh live pushes land above seq 1.
+        q.set_unresolved_barrier(
+            ch,
+            BTreeSet::from([1u64]),
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        // Fresh live push necessarily stamps a higher seq than the hole.
+        q.push(make_queued(ch, "fresh"));
+        assert!(
+            q.flush_next().is_none(),
+            "fresh arrival behind the hole must be held"
+        );
+    }
+
+    #[test]
+    fn test_barrier_releases_on_invalidation() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut fetched = make_queued(ch, "b");
+        fetched.admission_seq = 2;
+        q.import_recovered(ch, vec![fetched]);
+        q.set_unresolved_barrier(
+            ch,
+            BTreeSet::from([1u64]),
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        q.drain_channel(ch);
+        assert!(
+            q.next_unresolved_barrier_deadline().is_none(),
+            "invalidation must clear the barrier"
+        );
+    }
+
+    #[test]
+    fn test_barrier_releases_on_deadline_expiry() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let mut fetched = make_queued(ch, "b");
+        fetched.admission_seq = 2;
+        q.import_recovered(ch, vec![fetched]);
+        // Deadline already in the past — expiry should lift it immediately.
+        q.set_unresolved_barrier(
+            ch,
+            BTreeSet::from([1u64]),
+            Instant::now() - Duration::from_secs(1),
+        );
+
+        let batch = q
+            .flush_next()
+            .expect("expired barrier must release the suffix");
+        assert_eq!(batch.events[0].event.content, "b");
+        assert!(q.next_unresolved_barrier_deadline().is_none());
+    }
+
+    #[test]
+    fn test_next_unresolved_barrier_deadline_is_earliest_across_channels() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let earlier = Instant::now() + Duration::from_secs(10);
+        let later = Instant::now() + Duration::from_secs(60);
+        q.set_unresolved_barrier(ch_a, BTreeSet::from([1u64]), later);
+        q.set_unresolved_barrier(ch_b, BTreeSet::from([1u64]), earlier);
+
+        assert_eq!(q.next_unresolved_barrier_deadline(), Some(earlier));
+    }
+
+    #[test]
+    fn test_set_unresolved_barrier_noop_for_empty_seqs() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.set_unresolved_barrier(
+            ch,
+            BTreeSet::new(),
+            Instant::now() + Duration::from_secs(60),
+        );
+        assert!(q.next_unresolved_barrier_deadline().is_none());
+    }
+
+    #[test]
+    fn test_barrier_holds_cancelled_batch_fallback_behind_the_hole() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.set_next_admission_seq(0); // next push lands at seq 1, leaving seq 0 open for the barrier.
+        q.push(make_queued(ch, "first")); // admission_seq 1
+        let batch = q.flush_next().expect("flush");
+        // Cancel it — lands in cancelled_batches at admission_seq 1.
+        q.complete_batch(
+            ch,
+            Some(batch),
+            BatchDisposition::Cancelled(CancelReason::Steer),
+        );
+
+        // Barrier holds seq 0 unresolved — strictly below the cancelled
+        // event's seq 1, so the cancelled-only fallback (which respects
+        // `split_at_barrier_floor`, the same per-event rule as the main
+        // drain path) must hold it rather than re-dispatch.
+        q.set_unresolved_barrier(
+            ch,
+            BTreeSet::from([0u64]),
+            Instant::now() + Duration::from_secs(60),
+        );
+        assert!(
+            q.flush_next().is_none(),
+            "cancelled-only fallback must respect the barrier too"
+        );
+    }
 }
