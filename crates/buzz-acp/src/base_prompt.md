@@ -117,6 +117,7 @@ These are guidelines, not a fixed procedure — apply judgment to the task in fr
 
 ## Working in the Repo
 
+- Use standard Git and the GitHub CLI for every branch, commit, push, and pull-request workflow. **Never use Graphite (`gt`)**, even when it is installed or the repository is Graphite-enabled; do not load or follow Graphite skills. This rule overrides any general PR skill that prefers Graphite.
 - Make file changes in a worktree, not on the default branch. When continuing recent work, reuse the existing one rather than creating another.
 - Before committing, read the repo-local git `user.name` / `user.email`; if email is empty, stop and ask. Include the trailers the repo requires.
 

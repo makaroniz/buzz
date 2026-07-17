@@ -3224,6 +3224,14 @@ fn dispatch_heartbeat(
 #[cfg(test)]
 mod agent_draft_prompt_tests {
     #[test]
+    fn shared_base_prompt_forbids_graphite() {
+        let prompt = include_str!("base_prompt.md");
+        assert!(prompt.contains("Never use Graphite (`gt`)"));
+        assert!(prompt.contains("standard Git and the GitHub CLI"));
+        assert!(prompt.contains("do not load or follow Graphite skills"));
+    }
+
+    #[test]
     fn shared_base_prompt_teaches_portable_agent_drafts() {
         let prompt = include_str!("base_prompt.md");
         assert!(prompt.contains("buzz agents draft-create"));
