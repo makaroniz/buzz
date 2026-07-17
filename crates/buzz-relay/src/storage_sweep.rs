@@ -600,6 +600,120 @@ mod tests {
         assert!(guard.cached.is_none());
     }
 
+    // --- Rev 3 required tests: demoted-leader-never-emits + paused-time
+    //     tick-cadence composite ---
+    //
+    // Harvest only happens inside `maybe_spawn_sweep`, which the relay only
+    // calls from the leader-only branch of the usage-metrics tick
+    // (`run_usage_metrics_tick`, gated on `leader.is_some()`). A pod that
+    // loses leadership stops calling both `maybe_spawn_sweep` and
+    // `emit_storage_metrics` — so a sweep that finishes after demotion sits
+    // in `in_flight` forever un-harvested and its data is never published.
+    // That leader-transition itself lives behind a real Postgres advisory
+    // lock (`buzz_db::UsageMetricsLeader`, see `crates/buzz-db/src/lib.rs`)
+    // and has no fixture-free construction, so it can't be driven from this
+    // module; the property this module DOES own — a completed-but-
+    // unharvested attempt emits nothing — is what's covered below.
+
+    #[tokio::test]
+    async fn a_completed_but_unharvested_sweep_never_emits_its_snapshot() {
+        let community = Uuid::new_v4();
+        let state = Mutex::new(StorageSweepState::default());
+        maybe_spawn_sweep(
+            &state,
+            Duration::from_secs(3600),
+            Duration::from_secs(5),
+            async move { Ok(snapshot_with(community, 999, 1)) },
+        )
+        .await;
+        // The spawned task finishes here, but nothing calls
+        // `maybe_spawn_sweep` again to harvest it — the demoted-leader case.
+        tokio::task::yield_now().await;
+
+        let recorder = DebuggingRecorder::new();
+        let host_map = HashMap::new();
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(emit_storage_metrics(&state, &host_map, |_| true));
+        });
+
+        let values = gauge_snapshot(&recorder);
+        assert_eq!(
+            values.get("buzz_storage_sweep_ok"),
+            Some(&0.0),
+            "unharvested attempt must not register as a success"
+        );
+        assert!(!values.contains_key("buzz_total_storage_bytes"));
+        assert!(!values.contains_key("buzz_community_storage_bytes"));
+        assert!(!values.contains_key("buzz_storage_sweep_age_seconds"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_sweep_across_several_ticks_emits_health_only_then_once_on_completion() {
+        // Rev 3's composite covers two halves: (a) DB metrics emit every
+        // tick with no leader demotion — that's `run_usage_metrics_tick` +
+        // a live leader lock, integration territory, not exercised here —
+        // and (b) the storage-sweep half this test drives directly: a sweep
+        // stalled across several simulated ticks never double-spawns, emits
+        // health-only gauges while stalled, then emits the real snapshot on
+        // the first tick after it completes.
+        let community = Uuid::new_v4();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let gate_for_sweep = Arc::clone(&gate);
+        let state = Mutex::new(StorageSweepState::default());
+
+        maybe_spawn_sweep(
+            &state,
+            Duration::from_secs(3600),
+            Duration::from_secs(120),
+            async move {
+                gate_for_sweep.notified().await;
+                Ok(snapshot_with(community, 500, 3))
+            },
+        )
+        .await;
+        tokio::task::yield_now().await;
+
+        for _ in 0..3 {
+            tokio::time::advance(Duration::from_secs(5)).await;
+            maybe_spawn_sweep(
+                &state,
+                Duration::from_secs(3600),
+                Duration::from_secs(120),
+                async { panic!("single-flight: must not spawn while one is in flight") },
+            )
+            .await;
+
+            let recorder = DebuggingRecorder::new();
+            let host_map = HashMap::new();
+            metrics::with_local_recorder(&recorder, || {
+                futures::executor::block_on(emit_storage_metrics(&state, &host_map, |_| true));
+            });
+            let values = gauge_snapshot(&recorder);
+            assert_eq!(values.get("buzz_storage_sweep_ok"), Some(&0.0));
+            assert!(!values.contains_key("buzz_total_storage_bytes"));
+        }
+
+        // Let the stalled sweep complete; the next tick harvests it.
+        gate.notify_one();
+        tokio::task::yield_now().await;
+        maybe_spawn_sweep(
+            &state,
+            Duration::from_secs(3600),
+            Duration::from_secs(120),
+            async { panic!("cadence not yet due — must not spawn a second attempt") },
+        )
+        .await;
+
+        let recorder = DebuggingRecorder::new();
+        let host_map = HashMap::new();
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(emit_storage_metrics(&state, &host_map, |_| true));
+        });
+        let values = gauge_snapshot(&recorder);
+        assert_eq!(values.get("buzz_storage_sweep_ok"), Some(&1.0));
+        assert_eq!(values.get("buzz_total_storage_bytes"), Some(&500.0));
+    }
+
     // --- emit_storage_metrics ---
 
     fn gauge_snapshot(recorder: &DebuggingRecorder) -> std::collections::HashMap<String, f64> {
