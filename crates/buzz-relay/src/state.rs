@@ -502,6 +502,10 @@ pub struct AppState {
     pub audit_tx: mpsc::Sender<buzz_audit::NewAuditEntry>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
+    /// Single-flight + cache state for the hourly S3 storage sweep. See
+    /// `storage_sweep` module docs; shared with the usage-metrics tick via
+    /// `Arc` the same way other cross-tick poller state lives on `AppState`.
+    pub storage_sweep: Arc<tokio::sync::Mutex<crate::storage_sweep::StorageSweepState>>,
     /// Git object-store backend (content-addressed packs/manifests plus
     /// CAS-guarded manifest pointer). This is the durable git source of truth;
     /// see `api::git::store` and `docs/git-on-object-storage.md`.
@@ -680,6 +684,9 @@ impl AppState {
             ),
             audit_tx,
             media_storage: Arc::new(media_storage),
+            storage_sweep: Arc::new(tokio::sync::Mutex::new(
+                crate::storage_sweep::StorageSweepState::default(),
+            )),
             git_store,
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
