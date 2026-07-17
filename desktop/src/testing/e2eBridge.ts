@@ -164,6 +164,8 @@ type E2eConfig = {
     applyCommunityDelayMs?: number;
     openDmDelayMs?: number;
     sendMessageDelayMs?: number;
+    /** Persist sends without echoing them to live subscriptions. */
+    suppressLiveMessageEcho?: boolean;
     /** Reject successive kind-9 sends with these messages, then resume. */
     sendMessageErrors?: string[];
     /** Reject successive managed-agent starts, then resume. */
@@ -7660,7 +7662,9 @@ async function handleSendChannelMessage(
         ...extraTags,
       ]);
       recordMockMessage(args.channelId, event);
-      emitMockLiveEvent(args.channelId, event);
+      if (!config?.mock?.suppressLiveMessageEcho) {
+        emitMockLiveEvent(args.channelId, event);
+      }
 
       return {
         event_id: event.id,
@@ -7723,7 +7727,9 @@ async function handleSendChannelMessage(
     };
 
     recordMockMessage(args.channelId, event);
-    emitMockLiveEvent(args.channelId, event);
+    if (!config?.mock?.suppressLiveMessageEcho) {
+      emitMockLiveEvent(args.channelId, event);
+    }
 
     return {
       event_id: event.id,

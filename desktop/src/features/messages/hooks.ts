@@ -74,6 +74,8 @@ type MessageQueryContext = {
   previousWindow: ChannelWindowStore | undefined;
   channelId: string;
   queryKey: ReturnType<typeof channelMessagesKey>;
+  threadQueryKey?: ReturnType<typeof threadRepliesKey>;
+  previousThreadReplies?: RelayEvent[];
 };
 
 const CHANNEL_TIMELINE_KINDS = new Set<number>(CHANNEL_TIMELINE_CONTENT_KINDS);
@@ -565,6 +567,17 @@ export function useSendMessageMutation(
         mediaTags ?? [],
       );
 
+      const threadRootId = getThreadReference(optimisticMessage.tags).rootId;
+      const threadQueryKey = threadRootId
+        ? threadRepliesKey(effectiveChannel.id, threadRootId)
+        : undefined;
+      if (threadQueryKey) {
+        await queryClient.cancelQueries({ queryKey: threadQueryKey });
+      }
+      const previousThreadReplies = threadQueryKey
+        ? (queryClient.getQueryData<RelayEvent[]>(threadQueryKey) ?? [])
+        : undefined;
+
       const nextWindow = mergeLiveChannelWindowEvent(
         previousWindow ?? emptyChannelWindowStore(),
         optimisticMessage,
@@ -572,12 +585,21 @@ export function useSendMessageMutation(
       queryClient.setQueryData(windowKey, nextWindow);
       projectChannelWindowMessages(queryClient, effectiveChannel.id);
 
+      if (threadQueryKey) {
+        queryClient.setQueryData<RelayEvent[]>(
+          threadQueryKey,
+          mergeMessages(previousThreadReplies ?? [], optimisticMessage),
+        );
+      }
+
       return {
         optimisticId: optimisticMessage.id,
         previousMessages,
         previousWindow,
         channelId: effectiveChannel.id,
         queryKey,
+        threadQueryKey,
+        previousThreadReplies,
       };
     },
     onError: (error, _variables, context) => {
@@ -594,6 +616,12 @@ export function useSendMessageMutation(
         channelWindowKey(context.channelId),
         context.previousWindow,
       );
+      if (context.threadQueryKey) {
+        queryClient.setQueryData(
+          context.threadQueryKey,
+          context.previousThreadReplies,
+        );
+      }
     },
     onSuccess: (message, _variables, context) => {
       // An accepted send proves the write-block is lifted; clear any recorded
@@ -619,6 +647,16 @@ export function useSendMessageMutation(
       });
       queryClient.setQueryData(windowKey, next);
       projectChannelWindowMessages(queryClient, context.channelId);
+      if (context.threadQueryKey) {
+        queryClient.setQueryData<RelayEvent[]>(
+          context.threadQueryKey,
+          (current = []) =>
+            mergeMessages(current, {
+              ...message,
+              localKey: context.optimisticId,
+            }),
+        );
+      }
     },
   });
 }

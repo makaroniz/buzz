@@ -1158,6 +1158,35 @@ test("thread refetch preserves a live reply and reaction received in flight", as
   await expect(replyRow.getByLabel("Toggle 👍 reaction")).toBeVisible();
 });
 
+test("thread reply appears without a live subscription echo", async ({
+  page,
+}) => {
+  await installMockBridge(page, { suppressLiveMessageEcho: true });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const seed = `Thread no-echo seed ${Date.now()}`;
+  await page.getByTestId("message-input").fill(seed);
+  await page.getByTestId("send-message").click();
+  await expect(page.getByTestId("message-timeline")).toContainText(seed);
+
+  const rootMessage = page
+    .getByTestId("message-timeline")
+    .getByTestId("message-row")
+    .last();
+  await rootMessage.hover();
+  await rootMessage.getByRole("button", { name: "Reply" }).click();
+
+  const threadPanel = page.getByTestId("message-thread-panel");
+  const reply = `Thread reply without echo ${Date.now()}`;
+  await threadPanel.getByTestId("message-input").fill(reply);
+  await threadPanel.getByTestId("send-message").click();
+
+  await expect(threadPanel).toContainText(reply);
+  await expect(threadPanel.getByTestId("message-input")).toBeEnabled();
+});
+
 test("thread composer keeps focus after sending a thread reply", async ({
   page,
 }) => {

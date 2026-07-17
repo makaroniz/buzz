@@ -184,6 +184,8 @@ type MockBridgeOptions = {
   applyCommunityDelayMs?: number;
   openDmDelayMs?: number;
   sendMessageDelayMs?: number;
+  /** Persist sends without echoing them to live subscriptions. */
+  suppressLiveMessageEcho?: boolean;
   /** Reject successive kind-9 sends with these messages, then resume. */
   sendMessageErrors?: string[];
   /** Reject successive managed-agent starts, then resume. */
