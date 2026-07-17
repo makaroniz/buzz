@@ -772,3 +772,37 @@ fn own_group_grandchild_detected_by_ancestor_walk() {
     unsafe { libc::kill(-(intermediate_pid as i32), libc::SIGKILL) };
     let _ = intermediate.wait();
 }
+
+// ── restart_eligible tests ──────────────────────────────────────────────
+
+#[test]
+fn restart_eligible_true_when_non_orphan_has_hash_drift() {
+    assert!(super::restart_eligible(false, true, false));
+}
+
+#[test]
+fn restart_eligible_true_when_non_orphan_has_availability_drift() {
+    assert!(super::restart_eligible(false, false, true));
+}
+
+#[test]
+fn restart_eligible_false_when_orphan_has_hash_drift() {
+    // An orphan can never be restarted successfully — spawn refuses it —
+    // so hash drift alone must not surface "Restart required".
+    assert!(!super::restart_eligible(true, true, false));
+}
+
+#[test]
+fn restart_eligible_false_when_orphan_has_availability_drift() {
+    assert!(!super::restart_eligible(true, false, true));
+}
+
+#[test]
+fn restart_eligible_false_when_orphan_has_no_drift() {
+    assert!(!super::restart_eligible(true, false, false));
+}
+
+#[test]
+fn restart_eligible_false_when_non_orphan_has_no_drift() {
+    assert!(!super::restart_eligible(false, false, false));
+}

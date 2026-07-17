@@ -331,7 +331,18 @@ pub(super) async fn start_local_agent_with_preflight(
         return Err(format!("agent {pubkey} is not a local agent"));
     }
 
-    ensure_relay_mesh_for_record(app, &record_snapshot, allow_fresh_create_start).await?;
+    // Preflight against the record's SPAWN-TIME state, not its pre-snapshot
+    // bytes: preview the same prospective persona re-snapshot spawn_config_hash
+    // uses, so a definition edit that flips `provider` to/from relay-mesh
+    // between saves is reflected in the mesh-preflight decision instead of
+    // the stale value that `apply_persona_snapshot` below is about to
+    // overwrite anyway.
+    let preflight_record =
+        crate::managed_agents::persona_events::preview_prospective_persona_snapshot(
+            &record_snapshot,
+            &load_personas(app).unwrap_or_default(),
+        );
+    ensure_relay_mesh_for_record(app, &preflight_record, allow_fresh_create_start).await?;
 
     let _store_guard = state
         .managed_agents_store_lock

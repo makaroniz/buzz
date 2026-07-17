@@ -1,4 +1,141 @@
 use super::*;
+use crate::managed_agents::{BackendKind, ManagedAgentRecord, RespondTo};
+
+/// A linked instance record with no persona-derived fields set yet — the
+/// state right after creation, before any snapshot apply.
+fn sample_record() -> ManagedAgentRecord {
+    ManagedAgentRecord {
+        pubkey: "p".repeat(64),
+        name: "agent".into(),
+        persona_id: Some("test-persona".into()),
+        private_key_nsec: "nsec1fake".into(),
+        auth_tag: None,
+        relay_url: "ws://localhost:3000".into(),
+        avatar_url: None,
+        acp_command: "buzz-acp".into(),
+        agent_command: "goose".into(),
+        agent_command_override: None,
+        agent_args: vec![],
+        mcp_command: String::new(),
+        turn_timeout_seconds: 320,
+        idle_timeout_seconds: None,
+        max_turn_duration_seconds: None,
+        parallelism: 1,
+        system_prompt: None,
+        model: None,
+        provider: None,
+        persona_source_version: None,
+        env_vars: BTreeMap::new(),
+        start_on_app_launch: false,
+        auto_restart_on_config_change: true,
+        runtime_pid: None,
+        backend: BackendKind::Local,
+        backend_agent_id: None,
+        provider_binary_path: None,
+        team_id: None,
+        persona_team_dir: None,
+        persona_name_in_team: None,
+        created_at: "now".into(),
+        updated_at: "now".into(),
+        last_started_at: None,
+        last_stopped_at: None,
+        last_exit_code: None,
+        last_error: None,
+        last_error_code: None,
+        respond_to: RespondTo::OwnerOnly,
+        respond_to_allowlist: vec![],
+        display_name: None,
+        slug: None,
+        runtime: None,
+        name_pool: Vec::new(),
+        is_builtin: false,
+        is_active: true,
+        source_team: None,
+        source_team_persona_slug: None,
+        definition_respond_to: None,
+        definition_respond_to_allowlist: Vec::new(),
+        definition_parallelism: None,
+        relay_mesh: None,
+    }
+}
+
+// ── preview_prospective_persona_snapshot (Finding 4: relay-mesh preflight
+// ordering) ───────────────────────────────────────────────────────────────
+
+/// Regression for the relay-mesh preflight-ordering defect: the preflight
+/// used to check `ensure_relay_mesh_for_record` against the record's stale
+/// pre-snapshot bytes, so a persona edit that flips `provider` to
+/// `relay-mesh` between saves would not trigger the mesh preflight on the
+/// very next start — only on the restart after that, once the real
+/// `apply_persona_snapshot` had already landed. The preview must reflect the
+/// same prospective re-snapshot the real spawn path applies.
+#[test]
+fn preview_reflects_persona_edit_flipping_provider_into_relay_mesh() {
+    let record = sample_record(); // provider: None (not relay-mesh)
+    let mut persona = sample_persona();
+    persona.id = "test-persona".into();
+    persona.provider = Some("relay-mesh".into());
+    persona.model = Some("auto".into());
+
+    let preview = preview_prospective_persona_snapshot(&record, &[persona]);
+
+    assert_eq!(
+        preview.provider.as_deref(),
+        Some("relay-mesh"),
+        "preview must carry the persona's current provider, not the record's stale None"
+    );
+    assert_eq!(preview.model.as_deref(), Some("auto"));
+}
+
+/// Preview reflects a persona edit flipping AWAY from relay-mesh too —
+/// symmetric with the into-mesh case above.
+#[test]
+fn preview_reflects_persona_edit_flipping_provider_out_of_relay_mesh() {
+    let mut record = sample_record();
+    record.provider = Some("relay-mesh".into());
+    record.model = Some("auto".into());
+    let mut persona = sample_persona();
+    persona.id = "test-persona".into();
+    persona.provider = Some("anthropic".into());
+    persona.model = Some("claude-opus-4".into());
+
+    let preview = preview_prospective_persona_snapshot(&record, &[persona]);
+
+    assert_eq!(preview.provider.as_deref(), Some("anthropic"));
+    assert_eq!(preview.model.as_deref(), Some("claude-opus-4"));
+}
+
+/// The preview must not mutate the record passed in — callers (the mesh
+/// preflight) need the original bytes intact for the real snapshot apply
+/// that follows.
+#[test]
+fn preview_does_not_mutate_input_record() {
+    let record = sample_record();
+    let original = record.clone();
+    let mut persona = sample_persona();
+    persona.id = "test-persona".into();
+    persona.provider = Some("relay-mesh".into());
+
+    let _ = preview_prospective_persona_snapshot(&record, &[persona]);
+
+    assert_eq!(record.provider, original.provider);
+    assert_eq!(record.model, original.model);
+}
+
+/// Orphaned instance (persona deleted): the preview must pass the record
+/// through unchanged so downstream orphan handling (refuse to spawn) sees
+/// the same bytes it always would.
+#[test]
+fn preview_passes_through_unchanged_when_persona_missing() {
+    let mut record = sample_record();
+    record.provider = Some("anthropic".into());
+    record.persona_id = Some("deleted-persona".into());
+
+    let preview = preview_prospective_persona_snapshot(&record, &[]);
+
+    assert_eq!(preview.provider.as_deref(), Some("anthropic"));
+    assert_eq!(preview.persona_id.as_deref(), Some("deleted-persona"));
+}
 
 fn sample_persona() -> AgentDefinition {
     AgentDefinition {

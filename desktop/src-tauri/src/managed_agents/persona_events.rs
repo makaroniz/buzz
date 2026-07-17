@@ -433,5 +433,33 @@ pub fn apply_persona_snapshot(record: &mut ManagedAgentRecord, persona: &AgentDe
         .retain(|k, v| persona.env_vars.get(k) != Some(v));
     record.persona_source_version = Some(snapshot.source_version);
 }
+
+/// Preview what `record` would look like immediately after the start/restore
+/// paths re-pin it to its linked persona, without mutating `record` itself.
+///
+/// Every decision made ahead of the real re-pin — the relay-mesh preflight in
+/// `start_local_agent_with_preflight`, the restart-badge hash in
+/// `spawn_config_hash` — needs to reason about spawn-time state, not
+/// pre-snapshot bytes, so a persona edit that flips a field (e.g. `provider`
+/// to/from relay-mesh) between saves is reflected in the decision instead of
+/// the stale value the real [`apply_persona_snapshot`] is about to overwrite
+/// anyway. Idempotent: applying it to an already-current record is a no-op,
+/// so the spawn-time stamp and later recomputes agree when nothing changed.
+///
+/// Orphaned records (persona deleted) pass through unchanged: the caller's
+/// own orphan handling — refusing to spawn, hashing as `(None, None, None)`
+/// — runs on the real record downstream, not on this preview.
+pub fn preview_prospective_persona_snapshot(
+    record: &ManagedAgentRecord,
+    personas: &[AgentDefinition],
+) -> ManagedAgentRecord {
+    let mut preview = record.clone();
+    if let Some(persona_id) = preview.persona_id.clone() {
+        if let Some(persona) = personas.iter().find(|p| p.id == persona_id) {
+            apply_persona_snapshot(&mut preview, persona);
+        }
+    }
+    preview
+}
 #[cfg(test)]
 mod tests;

@@ -29,7 +29,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use super::{
     effective_config::{resolve_effective_config, EffectiveConfigResult},
     known_acp_runtime, normalize_agent_args,
-    persona_events::apply_persona_snapshot,
+    persona_events::preview_prospective_persona_snapshot,
     resolve_effective_agent_env,
     types::{AgentDefinition, ManagedAgentRecord, TeamRecord},
     GlobalAgentConfig,
@@ -67,12 +67,7 @@ pub(crate) fn spawn_config_hash(
     // when nothing changed. The persona env itself reaches the hash through
     // `resolve_effective_agent_env` below; `persona_source_version` is set on
     // the clone but is not a hash input.
-    let mut record = record.clone();
-    if let Some(persona_id) = record.persona_id.clone() {
-        if let Some(persona) = personas.iter().find(|p| p.id == persona_id) {
-            apply_persona_snapshot(&mut record, persona);
-        }
-    }
+    let record = preview_prospective_persona_snapshot(record, personas);
     let record = &record;
 
     let effective_command = crate::managed_agents::record_agent_command(record, personas);

@@ -1,5 +1,10 @@
 import * as React from "react";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  RefreshCw,
+} from "lucide-react";
 
 import { resolveAgentCardModelLabel } from "@/features/agents/lib/agentCardModelLabel";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
@@ -323,7 +328,12 @@ function AgentPersonaCard({
         onOpenPersonaProfile(persona);
       }}
       statusBadge={
-        agent?.needsRestart ? (
+        agent?.personaOrphaned ? (
+          <Badge className="gap-1" variant="warning">
+            <AlertTriangle className="h-3 w-3" />
+            Configuration missing
+          </Badge>
+        ) : agent?.needsRestart ? (
           <Badge className="gap-1" variant="warning">
             <RefreshCw className="h-3 w-3" />
             Restart required
@@ -393,7 +403,12 @@ function StandaloneAgentCard({
         );
       }}
       statusBadge={
-        agent.needsRestart ? (
+        agent.personaOrphaned ? (
+          <Badge className="gap-1" variant="warning">
+            <AlertTriangle className="h-3 w-3" />
+            Configuration missing
+          </Badge>
+        ) : agent.needsRestart ? (
           <Badge className="gap-1" variant="warning">
             <RefreshCw className="h-3 w-3" />
             Restart required

@@ -1370,7 +1370,13 @@ pub fn build_managed_agent_summary(
             runtime.adapter_availability.as_ref(),
             super::adapter_availability_cached(),
         );
-        hash_drift || availability_drift
+        // An orphan can never be restarted successfully —
+        // `spawn_agent_child` refuses it before any process side effect —
+        // so `needs_restart` must never fire for one regardless of hash or
+        // availability drift. Surfacing "Restart required" here would offer
+        // an action guaranteed to fail; the UI shows `persona_orphaned`
+        // instead (see `ManagedAgentSummary::persona_orphaned`).
+        restart_eligible(persona_orphaned, hash_drift, availability_drift)
     });
 
     // Resolve the effective harness the same way, then derive args/mcp from it,
@@ -1423,6 +1429,19 @@ pub fn build_managed_agent_summary(
         respond_to: record.respond_to,
         respond_to_allowlist: record.respond_to_allowlist.clone(),
     })
+}
+
+/// Pure predicate: should the "Restart required" badge fire?
+///
+/// An orphaned linked instance (its persona/definition no longer exists)
+/// can never be restarted successfully — `spawn_agent_child` refuses to
+/// spawn it before any process side effect. Surfacing "Restart required"
+/// for one would offer an action guaranteed to fail, so this always
+/// returns `false` for an orphan regardless of drift. Extracted for unit
+/// testing without `AppHandle`/global state, following the
+/// `availability_drift` pattern in `discovery.rs`.
+fn restart_eligible(persona_orphaned: bool, hash_drift: bool, availability_drift: bool) -> bool {
+    !persona_orphaned && (hash_drift || availability_drift)
 }
 
 pub fn find_managed_agent_mut<'a>(
@@ -1886,9 +1905,13 @@ pub fn spawn_agent_child(
     // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible
     // transport at spawn time and scrub any unrelated ambient OpenAI key.
     #[cfg(feature = "mesh-llm")]
-    if effective_provider == Some(super::RELAY_MESH_PROVIDER_ID) {
+    if effective_provider.as_deref() == Some(super::RELAY_MESH_PROVIDER_ID) {
         let mut mesh_env = std::collections::BTreeMap::new();
-        super::apply_relay_mesh_env(&mut mesh_env, effective_provider, effective_model);
+        super::apply_relay_mesh_env(
+            &mut mesh_env,
+            effective_provider.as_deref(),
+            effective_model.as_deref(),
+        );
         command.env_remove("OPENAI_API_KEY");
         for (key, value) in mesh_env {
             command.env(key, value);
