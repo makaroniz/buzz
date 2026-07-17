@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 
-import { formatAgentModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
+import { resolveAgentCardModelLabel } from "@/features/agents/lib/agentCardModelLabel";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { useUserProfileQuery } from "@/features/profile/hooks";
@@ -261,12 +261,11 @@ function AgentPersonaCard({
   onStartPersona: (persona: AgentPersona) => void;
 }) {
   const title = persona.displayName;
-  const isInherited = !agent?.modelSource || agent.modelSource === "global";
-  const modelLabel = isInherited
-    ? formatDefaultModelLabel(defaultModel)
-    : agent?.model?.trim()
-      ? formatAgentModelLabel(agent.model)
-      : formatDefaultModelLabel(defaultModel);
+  const modelLabel = resolveAgentCardModelLabel({
+    agent,
+    personaModel: persona.model,
+    defaultModel,
+  });
   const isActive = agent ? isManagedAgentActive(agent) : false;
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const avatarUrl = agent
@@ -382,15 +381,11 @@ function StandaloneAgentCard({
       avatarUrl={profileQuery.data?.avatarUrl}
       dataTestId={`managed-agent-${agent.pubkey}`}
       label={title}
-      modelLabel={(() => {
-        const isInherited =
-          !agent.modelSource || agent.modelSource === "global";
-        return isInherited
-          ? formatDefaultModelLabel(defaultModel)
-          : agent.model?.trim()
-            ? formatAgentModelLabel(agent.model)
-            : formatDefaultModelLabel(defaultModel);
-      })()}
+      modelLabel={resolveAgentCardModelLabel({
+        agent,
+        personaModel: null,
+        defaultModel,
+      })}
       onClick={() => {
         onOpenAgentProfile(
           agent.pubkey,
@@ -407,11 +402,6 @@ function StandaloneAgentCard({
       }
     />
   );
-}
-
-function formatDefaultModelLabel(defaultModel: string) {
-  const model = defaultModel.trim();
-  return model ? `Default model (${model})` : "Default model";
 }
 
 function firstAvatarUrl(

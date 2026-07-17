@@ -164,7 +164,7 @@ fn redaction_env_records_value_used_for_request() {
 }
 
 #[test]
-fn saved_agent_model_discovery_uses_record_snapshot() {
+fn saved_agent_model_discovery_uses_record_snapshot_for_definition_less_agent() {
     let record: crate::managed_agents::ManagedAgentRecord = serde_json::from_str(
         r#"{
             "pubkey": "abcd1234",
@@ -193,7 +193,12 @@ fn saved_agent_model_discovery_uses_record_snapshot() {
     )
     .expect("sample managed agent record");
 
-    let config = saved_agent_model_discovery_config(&record, "goose");
+    let config = saved_agent_model_discovery_config(
+        &record,
+        "goose",
+        &[],
+        &crate::managed_agents::GlobalAgentConfig::default(),
+    );
 
     assert_eq!(config.model.as_deref(), Some("record-model"));
     assert_eq!(config.provider.as_deref(), Some("databricks"));
@@ -210,6 +215,74 @@ fn saved_agent_model_discovery_uses_record_snapshot() {
         Some("record-key")
     );
     assert!(!config.env.contains_key("BUZZ_PRIVATE_KEY"));
+}
+
+/// Definition-authoritative: a linked agent's stale materialized
+/// `record.model`/`record.provider` must never drive model discovery — the
+/// linked definition's current model/provider wins, mirroring spawn's
+/// `resolve_effective_model_provider`.
+#[test]
+fn saved_agent_model_discovery_ignores_stale_record_for_linked_agent() {
+    let record: crate::managed_agents::ManagedAgentRecord = serde_json::from_str(
+        r#"{
+            "pubkey": "abcd1234",
+            "name": "test-agent",
+            "persona_id": "persona-1",
+            "private_key_nsec": "nsec1fake",
+            "relay_url": "wss://localhost:3000",
+            "acp_command": "buzz-acp",
+            "agent_command": "goose",
+            "agent_args": [],
+            "mcp_command": "",
+            "turn_timeout_seconds": 320,
+            "system_prompt": null,
+            "model": "stale-record-model",
+            "provider": "stale-record-provider",
+            "env_vars": {},
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_started_at": null,
+            "last_stopped_at": null,
+            "last_exit_code": null,
+            "last_error": null
+        }"#,
+    )
+    .expect("sample managed agent record");
+
+    let persona = crate::managed_agents::AgentDefinition {
+        id: "persona-1".to_string(),
+        display_name: "Persona".to_string(),
+        avatar_url: None,
+        system_prompt: "You are a persona.".to_string(),
+        runtime: None,
+        model: Some("persona-model".to_string()),
+        provider: Some("anthropic".to_string()),
+        name_pool: Vec::new(),
+        is_builtin: false,
+        is_active: true,
+        source_team: None,
+        source_team_persona_slug: None,
+        env_vars: BTreeMap::new(),
+        respond_to: None,
+        respond_to_allowlist: Vec::new(),
+        parallelism: None,
+        created_at: "".to_string(),
+        updated_at: "".to_string(),
+    };
+
+    let config = saved_agent_model_discovery_config(
+        &record,
+        "goose",
+        &[persona],
+        &crate::managed_agents::GlobalAgentConfig::default(),
+    );
+
+    assert_eq!(config.model.as_deref(), Some("persona-model"));
+    assert_eq!(config.provider.as_deref(), Some("anthropic"));
+    assert_eq!(
+        config.env.get("GOOSE_MODEL").map(String::as_str),
+        Some("persona-model")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -287,21 +360,12 @@ fn linked_instance_ignores_model_provider_prompt_writes() {
     let is_linked = record.persona_id.is_some();
     assert!(is_linked, "test setup: record must be linked");
 
-    let model_update: Option<Option<String>> = Some(Some("explicit-model".to_string()));
-    let provider_update: Option<Option<String>> = Some(Some("explicit-prov".to_string()));
-    let prompt_update: Option<Option<String>> = Some(Some("explicit-prompt".to_string()));
-
-    if !is_linked {
-        if let Some(m) = model_update {
-            record.model = m;
-        }
-        if let Some(p) = provider_update {
-            record.provider = p;
-        }
-        if let Some(s) = prompt_update {
-            record.system_prompt = s;
-        }
-    }
+    crate::commands::agent_models::apply_model_provider_prompt_update(
+        &mut record,
+        Some(Some("explicit-model".to_string())),
+        Some(Some("explicit-prov".to_string())),
+        Some(Some("explicit-prompt".to_string())),
+    );
 
     assert!(
         record.model.is_none(),
@@ -347,17 +411,12 @@ fn definition_less_instance_accepts_model_provider_prompt_writes() {
     let is_linked = record.persona_id.is_some();
     assert!(!is_linked, "test setup: record must not be linked");
 
-    if !is_linked {
-        if let Some(m) = Some(Some("new-model".to_string())) {
-            record.model = m;
-        }
-        if let Some(p) = Some(Some("new-prov".to_string())) {
-            record.provider = p;
-        }
-        if let Some(s) = Some(Some("new-prompt".to_string())) {
-            record.system_prompt = s;
-        }
-    }
+    crate::commands::agent_models::apply_model_provider_prompt_update(
+        &mut record,
+        Some(Some("new-model".to_string())),
+        Some(Some("new-prov".to_string())),
+        Some(Some("new-prompt".to_string())),
+    );
 
     assert_eq!(record.model.as_deref(), Some("new-model"));
     assert_eq!(record.provider.as_deref(), Some("new-prov"));

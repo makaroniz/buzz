@@ -217,8 +217,8 @@ pub fn save_global_agent_config(app: &AppHandle, config: &GlobalAgentConfig) -> 
 ///     readiness/hash convenience, not the spawn gate — an orphan must never
 ///     reach a real spawn regardless of what this returns, because
 ///     `spawn_agent_child` refuses orphans itself via
-///     `effective_config::spawn_orphan_refusal` before resolving model/provider
-///     for the process env.
+///     `effective_config::resolve_effective_config(...).require_resolved()`
+///     before resolving model/provider/prompt for the process env.
 ///
 /// Returns owned `String`s because the effective value may come from a
 /// tier that outlives none of the input borrows (e.g. global config).

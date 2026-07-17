@@ -1517,16 +1517,21 @@ pub fn spawn_agent_child(
     // and for the env-var merge at spawn time.
     let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
 
-    // Orphan refusal lives HERE, at the shared spawn boundary, so every
+    // Resolve model/provider/prompt ONCE, here, at the shared spawn boundary —
+    // the single source both the env writes below and `spawn_config_hash`
+    // read from. Previously prompt was read from the record's own (possibly
+    // stale, Phase-A-snapshot) bytes while model/provider were resolved live
+    // from `personas`; a definition edit landing between a caller's snapshot
+    // apply and this spawn could hand a fresh model/provider to a stale
+    // prompt. This also folds in orphan refusal via `require_resolved`: every
     // caller (interactive start, launch restore, `start_managed_agent_process`)
     // inherits it — no caller can bypass this by reaching `spawn_agent_child`
     // directly. Checked before any side effect (log marker, log file, process
     // spawn) so a refused spawn leaves no trace.
-    if let Some(error) =
-        crate::managed_agents::effective_config::spawn_orphan_refusal(record, &personas, &global)
-    {
-        return Err(error);
-    }
+    let effective_cfg = crate::managed_agents::effective_config::resolve_effective_config(
+        record, &personas, &global,
+    )
+    .require_resolved()?;
 
     let log_path = managed_agent_log_path(app, &record.pubkey)?;
     append_log_marker(
@@ -1764,15 +1769,14 @@ pub fn spawn_agent_child(
         command.env_remove("BUZZ_ACP_TEAM_INSTRUCTIONS");
     }
 
-    // System prompt via the shared spawn-effective filter — the SAME function the
-    // config hash digests, so env write and badge cannot disagree (see
-    // `effective_spawn_prompt` for the Some("")/None collapse). Model and
-    // provider use the shared resolver: definition → global (linked
-    // instances never consult the record's own model/provider bytes), or
-    // instance → global for definition-less agents.
-    let effective_prompt = super::spawn_hash::effective_spawn_prompt(record);
-    let (effective_model, effective_provider) =
-        crate::managed_agents::resolve_effective_model_provider(record, &personas, &global);
+    // Prompt, model, and provider all come from the single `effective_cfg`
+    // resolved at the top of this function — the SAME resolve `spawn_config_hash`
+    // performs below, so env write and restart badge cannot disagree. Linked
+    // instances never consult the record's own model/provider/prompt bytes;
+    // definition-less instances fall back to their own fields, then global.
+    let effective_prompt = effective_cfg.system_prompt.value;
+    let effective_model = effective_cfg.model.value;
+    let effective_provider = effective_cfg.provider.value;
 
     if let Some(prompt) = &effective_prompt {
         command.env("BUZZ_ACP_SYSTEM_PROMPT", prompt);

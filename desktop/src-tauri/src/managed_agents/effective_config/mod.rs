@@ -161,22 +161,5 @@ impl EffectiveConfigResult {
     }
 }
 
-/// Refuse to spawn/deploy a linked instance whose definition no longer
-/// exists. Pure — no `AppHandle` — so every caller of the shared spawn
-/// boundary (`spawn_agent_child`) can enforce the identical check the
-/// resolver already computes, without duplicating orphan-detection logic.
-/// Returns `Some(error)` for an orphan, `None` otherwise (including
-/// definition-less records, which are never orphaned).
-pub fn spawn_orphan_refusal(
-    record: &ManagedAgentRecord,
-    definitions: &[AgentDefinition],
-    global: &GlobalAgentConfig,
-) -> Option<String> {
-    match resolve_effective_config(record, definitions, global) {
-        EffectiveConfigResult::OrphanedInstance { .. } => Some(ORPHANED_INSTANCE_ERROR.to_string()),
-        EffectiveConfigResult::Resolved(_) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests;

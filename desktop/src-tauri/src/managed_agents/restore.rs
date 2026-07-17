@@ -25,7 +25,7 @@ type AgentSpawnResult = (String, SpawnResult);
 /// start-path re-snapshot in `start_local_agent_with_preflight`.
 /// If the linked persona is gone, we log loudly and leave the record untouched —
 /// it stays orphaned and `spawn_agent_child` refuses to start it (see
-/// `effective_config::spawn_orphan_refusal`).
+/// `effective_config::resolve_effective_config`'s `OrphanedInstance` arm).
 pub fn backfill_persona_snapshots(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let _store_guard = state

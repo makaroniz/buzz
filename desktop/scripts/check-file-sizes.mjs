@@ -442,7 +442,13 @@ const overrides = new Map([
   // (if let Some(provider_update) = input.provider { record.provider = provider_update; }).
   // +8: harness_override thread-through in update_managed_agent so a deliberate
   // Custom pin routes to update_time_agent_command_override (comment + call).
-  ["src-tauri/src/commands/agent_models.rs", 1079],
+  // +22 (1079 -> 1101): Finding 2 — model discovery now resolves through
+  // resolve_effective_model_provider instead of raw record bytes
+  // (saved_agent_model_discovery_config takes personas/global and the
+  // get_agent_models call site loads global config), plus
+  // apply_model_provider_prompt_update's linked-instance write-guard
+  // extraction and its regression tests.
+  ["src-tauri/src/commands/agent_models.rs", 1101],
   // global-agent-config: get_agent_config_surface / write_agent_config_field /
   // put_agent_session_config commands + GlobalAgentConfig serde types. New file
   // in this PR; queued to split with the command module refactor.
@@ -450,7 +456,14 @@ const overrides = new Map([
   // is_safe_to_reveal allowlist + baked_env_thinking_effort_is_unmasked test.
   // +1: doctor-install-reliability: login_hint: None added to goose_runtime test stub.
   // +1: doctor-install-reliability review fixes: auth_probe_args: None added to stub.
-  ["src-tauri/src/commands/agent_config.rs", 1021],
+  // +59 (1021 -> 1080): Finding 2 (definition-authoritative config surface) —
+  // resolve_config_surface now clears a linked instance's own
+  // system_prompt/model/provider before computing had_* so stale
+  // materialized snapshot bytes can never be tagged BuzzExplicit and
+  // shadow the definition/global fallthrough; the dead persona-model
+  // re-tag branch this replaced is removed, plus two new regression tests
+  // pinning the stale-record-never-outranks-definition contract.
+  ["src-tauri/src/commands/agent_config.rs", 1080],
   // codex-install-auto-restart review-fixes: should_restart_after_install
   // takes pid_alive:bool (pure predicate, no OS-dependent call); 3 racy
   // cache tests replaced with 6 pure availability_drift predicate tests;

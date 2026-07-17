@@ -497,7 +497,8 @@ pub struct ManagedAgentSummary {
     /// `true` when the agent was created from a persona that no longer exists.
     /// Distinct from out-of-date: there is no current persona to respawn into.
     /// An orphaned agent also cannot be (re)started — `spawn_agent_child`
-    /// refuses it (see `effective_config::spawn_orphan_refusal`) — so the UI
+    /// refuses it (see `effective_config::resolve_effective_config`'s
+    /// `OrphanedInstance` arm via `require_resolved`) — so the UI
     /// should surface that it's stuck, not merely stale.
     pub persona_orphaned: bool,
     /// `true` when the running process was spawned with a config that no

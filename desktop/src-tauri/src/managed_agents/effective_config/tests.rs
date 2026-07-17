@@ -327,8 +327,8 @@ fn model_provider_pair_returns_resolved_values() {
     assert_eq!(pair, Some((Some("m".to_string()), Some("p".to_string()))));
 }
 
-// ── require_resolved / spawn_orphan_refusal: the shared refusal contract
-// used by build_deploy_payload and spawn_agent_child ──
+// ── require_resolved: the shared orphan-refusal contract used by
+// build_deploy_payload and spawn_agent_child ──
 
 #[test]
 fn require_resolved_returns_shared_error_for_orphan() {
@@ -350,24 +350,29 @@ fn require_resolved_returns_config_for_resolved() {
 }
 
 #[test]
-fn spawn_orphan_refusal_refuses_orphan_only() {
+fn require_resolved_refuses_orphan_only() {
     let orphan = record(Some("missing"), None, None, None);
     assert_eq!(
-        spawn_orphan_refusal(&orphan, &[], &global(None, None)),
-        Some(ORPHANED_INSTANCE_ERROR.to_string())
+        resolve_effective_config(&orphan, &[], &global(None, None))
+            .require_resolved()
+            .unwrap_err(),
+        ORPHANED_INSTANCE_ERROR,
     );
 
     let linked = record(Some("d1"), None, None, None);
     let defs = vec![definition("d1", Some("m"), None, "")];
-    assert_eq!(
-        spawn_orphan_refusal(&linked, &defs, &global(None, None)),
-        None
+    assert!(
+        resolve_effective_config(&linked, &defs, &global(None, None))
+            .require_resolved()
+            .is_ok()
     );
 
     // Definition-less instances are never orphaned regardless of how bare
     // their own fields are — orphan status only applies to a dangling link.
     let bare = record(None, None, None, None);
-    assert_eq!(spawn_orphan_refusal(&bare, &[], &global(None, None)), None);
+    assert!(resolve_effective_config(&bare, &[], &global(None, None))
+        .require_resolved()
+        .is_ok());
 }
 
 // ── Morgan's exact regression sequence ──

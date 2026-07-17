@@ -424,8 +424,9 @@ fn agent_env_overrides_win_over_persona_env_at_spawn() {
 fn orphaned_agent_refused_at_spawn_boundary() {
     // Persona deleted: `spawn_agent_child` must refuse before any process
     // side effect, not silently degrade to the record's stale overrides.
-    // `spawn_orphan_refusal` is the pure predicate `spawn_agent_child` checks
-    // first — this pins the contract without needing a real `AppHandle`.
+    // `require_resolved` on the shared resolver is the pure predicate
+    // `spawn_agent_child` checks first — this pins the contract without
+    // needing a real `AppHandle`.
     let persona = persona_v("p", "prompt", &[("ANTHROPIC_API_KEY", "persona-key")]);
     let mut record = fixture(RespondTo::Anyone, vec![], Some("tag".into()));
     record.env_vars = BTreeMap::from([("EXTRA".to_string(), "agent-value".to_string())]);
@@ -434,14 +435,16 @@ fn orphaned_agent_refused_at_spawn_boundary() {
     // The persona is absent from the live catalog — same shape restore/start
     // see when a persona was deleted on another device.
     let no_personas: &[crate::managed_agents::AgentDefinition] = &[];
-    let error = crate::managed_agents::effective_config::spawn_orphan_refusal(
+    let error = crate::managed_agents::effective_config::resolve_effective_config(
         &record,
         no_personas,
         &Default::default(),
-    );
+    )
+    .require_resolved()
+    .unwrap_err();
     assert_eq!(
         error,
-        Some(crate::managed_agents::effective_config::ORPHANED_INSTANCE_ERROR.to_string()),
+        crate::managed_agents::effective_config::ORPHANED_INSTANCE_ERROR.to_string(),
         "an orphaned linked instance must be refused, not spawned from its own overrides"
     );
 }
