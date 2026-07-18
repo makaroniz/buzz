@@ -299,6 +299,7 @@ export async function provisionChannelManagedAgent(
   context?: {
     managedAgents?: ManagedAgent[];
     channelMemberPubkeys?: ReadonlySet<string>;
+    activeRelayUrl?: string | null;
   },
 ): Promise<ProvisionChannelManagedAgentResult> {
   const trimmedName = input.name.trim();
@@ -319,6 +320,7 @@ export async function provisionChannelManagedAgent(
       context.managedAgents,
       input.personaId,
       context.channelMemberPubkeys,
+      context.activeRelayUrl,
     );
     if (reusable) {
       // Apply the caller's respondTo settings so the user's permission
@@ -359,6 +361,7 @@ export async function provisionChannelManagedAgent(
       context.managedAgents,
       input.runtime.command,
       context.channelMemberPubkeys,
+      context.activeRelayUrl,
     );
     if (reusable) {
       const needsRespondToUpdate =
@@ -464,7 +467,7 @@ export async function createChannelManagedAgents(
   const channelMemberPubkeys = new Set(
     members.map((m) => normalizePubkey(m.pubkey)),
   );
-  const context = { managedAgents, channelMemberPubkeys };
+  const context = { managedAgents, channelMemberPubkeys, activeRelayUrl };
 
   // Sequential loop: each agent must be fully created and its relay membership
   // written before the next starts. Concurrent writes to the replaceable

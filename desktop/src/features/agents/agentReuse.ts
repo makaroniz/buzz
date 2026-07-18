@@ -1,3 +1,4 @@
+import { agentBelongsToRelay } from "@/features/agents/agentRelayScope";
 import type { ManagedAgent } from "@/shared/api/types";
 
 /** Inline normalization — avoids runtime dependency on @/shared/lib/pubkey. */
@@ -50,11 +51,13 @@ export function findReusablePersonaAgent(
   agents: ManagedAgent[],
   personaId: string,
   channelMemberPubkeys: ReadonlySet<string>,
+  activeRelayUrl: string | null | undefined,
 ): ManagedAgent | undefined {
   const candidates = agents.filter(
     (agent) =>
       agent.personaId === personaId &&
-      !channelMemberPubkeys.has(normalizePubkey(agent.pubkey)),
+      !channelMemberPubkeys.has(normalizePubkey(agent.pubkey)) &&
+      agentBelongsToRelay(agent.relayUrl, activeRelayUrl),
   );
   return pickPreferredManagedAgent(candidates);
 }
@@ -63,13 +66,15 @@ export function findReusableGenericAgent(
   agents: ManagedAgent[],
   command: string,
   channelMemberPubkeys: ReadonlySet<string>,
+  activeRelayUrl: string | null | undefined,
 ): ManagedAgent | undefined {
   const candidates = agents.filter(
     (agent) =>
       !agent.personaId &&
       !agent.systemPrompt?.trim() &&
       commandsMatch(agent.agentCommand, command) &&
-      !channelMemberPubkeys.has(normalizePubkey(agent.pubkey)),
+      !channelMemberPubkeys.has(normalizePubkey(agent.pubkey)) &&
+      agentBelongsToRelay(agent.relayUrl, activeRelayUrl),
   );
   return pickPreferredManagedAgent(candidates);
 }
@@ -86,12 +91,14 @@ export function findReusableAgent(
     systemPrompt?: string;
     command: string;
   },
+  activeRelayUrl: string | null | undefined,
 ): ManagedAgent | undefined {
   if (input.personaId) {
     return findReusablePersonaAgent(
       agents,
       input.personaId,
       channelMemberPubkeys,
+      activeRelayUrl,
     );
   }
   if (!input.systemPrompt?.trim()) {
@@ -99,6 +106,7 @@ export function findReusableAgent(
       agents,
       input.command,
       channelMemberPubkeys,
+      activeRelayUrl,
     );
   }
   return undefined;

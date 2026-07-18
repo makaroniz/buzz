@@ -308,6 +308,71 @@ test("findReusableGenericAgent: command matching uses normalization", () => {
   assert.equal(result, agent);
 });
 
+test("findReusablePersonaAgent: excludes agent pinned to a different relay", () => {
+  const agent = makeAgent({
+    personaId: "persona-1",
+    pubkey: PUB_A,
+    relayUrl: "wss://relay-a.example",
+  });
+  const channelMembers = new Set([PUB_B]);
+  const result = findReusablePersonaAgent(
+    [agent],
+    "persona-1",
+    channelMembers,
+    "wss://relay-b.example",
+  );
+  assert.equal(result, undefined);
+});
+
+test("findReusablePersonaAgent: reuses agent pinned to the active relay", () => {
+  const agent = makeAgent({
+    personaId: "persona-1",
+    pubkey: PUB_A,
+    relayUrl: "wss://relay-b.example",
+  });
+  const channelMembers = new Set([PUB_B]);
+  const result = findReusablePersonaAgent(
+    [agent],
+    "persona-1",
+    channelMembers,
+    "wss://relay-b.example",
+  );
+  assert.equal(result, agent);
+});
+
+test("findReusableGenericAgent: excludes agent pinned to a different relay", () => {
+  const agent = makeAgent({
+    agentCommand: "goose",
+    personaId: null,
+    systemPrompt: null,
+    relayUrl: "wss://relay-a.example",
+  });
+  const channelMembers = new Set([PUB_B]);
+  const result = findReusableGenericAgent(
+    [agent],
+    "goose",
+    channelMembers,
+    "wss://relay-b.example",
+  );
+  assert.equal(result, undefined);
+});
+
+test("findReusableAgent: foreign-relay persona candidate yields fresh agent (no reuse)", () => {
+  const agent = makeAgent({
+    personaId: "p1",
+    pubkey: PUB_A,
+    relayUrl: "wss://relay-a.example",
+  });
+  const channelMembers = new Set([PUB_B]);
+  const result = findReusableAgent(
+    [agent],
+    channelMembers,
+    { personaId: "p1", command: "goose" },
+    "wss://relay-b.example",
+  );
+  assert.equal(result, undefined);
+});
+
 test("findReusableAgent: routes to persona search when personaId provided", () => {
   const agent = makeAgent({ personaId: "p1", pubkey: PUB_A });
   const channelMembers = new Set([PUB_B]);

@@ -711,6 +711,7 @@ export function useProvisionChannelManagedAgentMutation(
   channelId: string | null,
 ) {
   const queryClient = useQueryClient();
+  const activeRelayUrl = useActiveRelayUrl();
 
   return useMutation({
     mutationFn: async (
@@ -731,6 +732,7 @@ export function useProvisionChannelManagedAgentMutation(
         channelMemberPubkeys: new Set(
           members.map((member) => normalizePubkey(member.pubkey)),
         ),
+        activeRelayUrl,
       });
     },
     onSuccess: (result) => {
