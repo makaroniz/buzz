@@ -1,16 +1,22 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Once,
 };
 
 use atomic_write_file::AtomicWriteFile;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
-
-use crate::app_state::AppState;
+use tauri::{AppHandle, Manager};
 
 const EXPERIMENTS_FILE: &str = "desktop-experiments.json";
+
+/// Process-local experiment state, lazily hydrated from the Rust-owned store on
+/// first read so every reader (spawn boundary, frontend) sees persisted state
+/// without an app-setup ordering requirement. A corrupt store fails closed:
+/// the error is logged and the disabled default stays.
+static ACP_TOP_LEVEL_SESSIONS: AtomicBool = AtomicBool::new(false);
+static HYDRATE: Once = Once::new();
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -52,36 +58,36 @@ fn save_experiments(path: &Path, experiments: &DesktopExperiments) -> Result<(),
         .map_err(|error| format!("commit {}: {error}", path.display()))
 }
 
-/// Hydrate process state from the Rust-owned store before managed-agent restore.
-pub(crate) fn hydrate_desktop_experiments(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    let experiments = load_experiments(&experiments_path(app)?)?;
-    state
-        .acp_top_level_sessions_experiment
-        .store(experiments.acp_top_level_sessions, Ordering::Release);
-    Ok(())
+/// Read the experiment, hydrating from the store on first access.
+pub(crate) fn acp_top_level_sessions_enabled(app: &AppHandle) -> bool {
+    HYDRATE.call_once(
+        || match experiments_path(app).and_then(|path| load_experiments(&path)) {
+            Ok(experiments) => {
+                ACP_TOP_LEVEL_SESSIONS.store(experiments.acp_top_level_sessions, Ordering::Release);
+            }
+            Err(error) => {
+                eprintln!("buzz-desktop: failed to hydrate desktop experiments: {error}");
+            }
+        },
+    );
+    ACP_TOP_LEVEL_SESSIONS.load(Ordering::Acquire)
 }
 
 #[tauri::command]
-pub fn get_acp_top_level_sessions_experiment(state: State<'_, AppState>) -> bool {
-    state
-        .acp_top_level_sessions_experiment
-        .load(Ordering::Acquire)
+pub fn get_acp_top_level_sessions_experiment(app: AppHandle) -> bool {
+    acp_top_level_sessions_enabled(&app)
 }
 
 /// Durably apply the experiment before exposing it to subsequently spawned agents.
 #[tauri::command]
-pub fn set_acp_top_level_sessions_experiment(
-    enabled: bool,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub fn set_acp_top_level_sessions_experiment(enabled: bool, app: AppHandle) -> Result<(), String> {
     let path = experiments_path(&app)?;
     let mut experiments = load_experiments(&path)?;
     experiments.acp_top_level_sessions = enabled;
     save_experiments(&path, &experiments)?;
-    state
-        .acp_top_level_sessions_experiment
-        .store(enabled, Ordering::Release);
+    // Persisted first: even if first-read hydration races this store, it
+    // re-reads the same on-disk value.
+    ACP_TOP_LEVEL_SESSIONS.store(enabled, Ordering::Release);
     Ok(())
 }
 

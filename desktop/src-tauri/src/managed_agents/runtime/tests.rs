@@ -761,10 +761,9 @@ fn own_group_grandchild_detected_by_ancestor_walk() {
     let _ = intermediate.wait();
 }
 
-fn command_env(command: &std::process::Command) -> std::collections::HashMap<
-    std::ffi::OsString,
-    std::ffi::OsString,
-> {
+fn command_env(
+    command: &std::process::Command,
+) -> std::collections::HashMap<std::ffi::OsString, std::ffi::OsString> {
     command
         .get_envs()
         .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))

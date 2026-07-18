@@ -1714,13 +1714,7 @@ pub fn spawn_agent_child(
     // Legacy default. User env may override this while the experiment is off;
     // enabled experiment state is authoritatively finalized at the spawn boundary.
     command.env("BUZZ_ACP_MULTIPLE_EVENT_HANDLING", "steer");
-    let top_level_sessions = {
-        use std::sync::atomic::Ordering;
-        use tauri::Manager;
-        app.state::<crate::app_state::AppState>()
-            .acp_top_level_sessions_experiment
-            .load(Ordering::Acquire)
-    };
+    let top_level_sessions = crate::commands::experiments::acp_top_level_sessions_enabled(app);
     command.env("BUZZ_ACP_DEDUP", "queue");
     if let Some(meta) = runtime_meta {
         for (key, value) in meta.default_env {

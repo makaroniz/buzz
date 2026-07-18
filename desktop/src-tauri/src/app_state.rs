@@ -38,8 +38,6 @@ pub struct AppState {
     /// records. Disabled by the agent-managed profiles experiment so an agent's
     /// own profile updates are not overwritten on start or restore.
     pub managed_agent_profile_reconcile_enabled: AtomicBool,
-    /// Process-local in-app experiment forwarded to newly spawned ACP harnesses.
-    pub acp_top_level_sessions_experiment: AtomicBool,
     /// Shared shutdown signal checked by launch-time agent restoration.
     pub shutdown_started: AtomicBool,
     /// Serializes the restore spawn/register transition with shutdown cleanup,
@@ -203,7 +201,6 @@ pub fn build_app_state() -> AppState {
         relay_url_override: Mutex::new(None),
         managed_agent_restore_pending: AtomicBool::new(false),
         managed_agent_profile_reconcile_enabled: AtomicBool::new(true),
-        acp_top_level_sessions_experiment: AtomicBool::new(false),
         shutdown_started: AtomicBool::new(false),
         managed_agent_restore_transition: Mutex::new(()),
         identity_mutation: Mutex::new(()),
