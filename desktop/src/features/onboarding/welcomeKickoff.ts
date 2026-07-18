@@ -24,13 +24,25 @@ import {
 } from "@/shared/api/tauriManagedAgents";
 import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { sendManagedAgentChannelMessage } from "@/shared/api/tauriManagedAgentMessages";
-import { getPresence, listManagedAgents } from "@/shared/api/tauri";
+import {
+  getPresence,
+  getThreadReplies,
+  listManagedAgents,
+} from "@/shared/api/tauri";
 import { getProfile } from "@/shared/api/tauriProfiles";
 import type { Channel, ManagedAgent, RelayEvent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useQueryClient } from "@tanstack/react-query";
 
 export const WELCOME_KICKOFF_OPENER_MARKER = "buzz-welcome-kickoff.opener.v1";
+// Despite the name, presence does NOT mean "the kickoff finished": a clean team
+// kickoff posts no closer at all and is closed by the lead's own callback reply.
+// This marks only the paths that had something to say — a failed or delayed
+// teammate, or no team to wait for (the solo opener carries it too; see
+// `additionalMarkers` below). Ask `welcomeKickoffAlreadyFinished` whether a
+// kickoff is done: a marker needs a message to exist, so absence proves nothing.
+// The string stays as-is — renaming it strands the markers already on relays for
+// kickoffs that failed, and the dedupe below would let them report twice.
 export const WELCOME_KICKOFF_CLOSER_MARKER = "buzz-welcome-kickoff.closer.v1";
 export const WELCOME_KICKOFF_PROVIDER_MARKER =
   "buzz-welcome-kickoff.provider-required.v1";
@@ -87,8 +99,19 @@ const kickoffCoordinator = createWelcomeKickoffCoordinator();
 const closerInFlight = new Set<string>();
 const TEAMMATE_READY_POLL_MS = 250;
 const TEAMMATE_READY_WAIT_MS = 60_000;
-const TEAMMATE_INTRO_WAIT_MS = 15_000;
+// How long a teammate that is alive but silent gets before the closer reports it
+// as delayed. This budget has to cover a whole agent turn — wake on the p tag,
+// fetch context, run inference, shell out to `buzz messages send` — so it is
+// tens of seconds, not a UI beat. At 15s the closer reliably lost the race and
+// announced "taking longer than expected" seconds before the intros landed,
+// contradicting itself in front of a brand new user. A *crashed* teammate does
+// not wait this out: `failed` is read from agent status and closes immediately,
+// so this budget only covers the case where patience is the right answer.
+const TEAMMATE_INTRO_WAIT_MS = 60_000;
 const CLOSER_BEAT_MS = 3_000;
+// The intros are the first replies to the opener; this only has to be deep
+// enough to see them, not to page a real conversation.
+const INTRO_LOOKUP_LIMIT = 200;
 const closerAbortControllers = new Map<string, AbortController>();
 const closerTimeouts = new Map<
   string,
@@ -238,12 +261,24 @@ export async function waitForWelcomeKickoffBeat(options: {
   });
 }
 
+/**
+ * Build the closer, or `null` when nothing needs to be said.
+ *
+ * The scripted closer exists to report a *problem*: a teammate that crashed or
+ * hasn't spoken yet. A clean kickoff returns `null` and posts nothing, because
+ * the lead already closes the conversation itself — the intros `@mention` the
+ * lead (the mandatory callback in `buzz-acp/src/base_prompt.md`), which wakes it
+ * and it replies in-thread. Scripting a second CTA on top of that gave the user
+ * two closers, and the scripted one — fired on a timer, before the intros were
+ * in — was the one that could be wrong. See
+ * docs/welcome-kickoff-silent-failures.md.
+ */
 export function buildWelcomeKickoffCloser(
   failedNames: readonly string[],
   delayedNames: readonly string[] = [],
-) {
+): string | null {
   if (failedNames.length === 0 && delayedNames.length === 0) {
-    return WELCOME_KICKOFF_CTA;
+    return null;
   }
   if (failedNames.length === 1 && delayedNames.length === 0) {
     return `${failedNames[0]} is having trouble starting — you can check on them in Agents.\n\n${WELCOME_KICKOFF_CTA}`;
@@ -337,6 +372,48 @@ async function markerExists(channelId: string, marker: string) {
     marker,
     markerScope: "channel",
   });
+}
+
+/**
+ * Has the kickoff already run to completion in this channel?
+ *
+ * This used to be a single `closerMarker` lookup, which worked only because
+ * every kickoff ended in a scripted message we could tag. A clean kickoff now
+ * posts nothing, so there is no marker to find and the marker check alone would
+ * report "not finished" forever — re-arming the start effect and restarting the
+ * Welcome team on every single revisit.
+ *
+ * So fall back to the other durable, relay-side evidence that it finished: the
+ * opener's thread holds an intro from each teammate. Both signals are
+ * server-side, which is what makes this safe across app restarts and devices —
+ * a local latch would not be.
+ */
+export async function welcomeKickoffAlreadyFinished(
+  channelId: string,
+  opener: RelayEvent | null,
+  agentSet: WelcomeAgentSet,
+  options: {
+    closerExists?: (channelId: string) => Promise<boolean>;
+    fetchReplies?: typeof getThreadReplies;
+  } = {},
+) {
+  const closerExists =
+    options.closerExists ?? ((id: string) => markerExists(id, closerMarker));
+  const fetchReplies = options.fetchReplies ?? getThreadReplies;
+  if (await closerExists(channelId)) return true;
+  if (!opener) return false;
+  const { events } = await fetchReplies(opener.id, channelId, {
+    limit: INTRO_LOOKUP_LIMIT,
+    cursor: null,
+  });
+  const introAuthors = introAuthorsAfterOpener(
+    events,
+    opener,
+    agentSet.teammates,
+  );
+  return agentSet.teammates.every((agent) =>
+    introAuthors.has(normalizePubkey(agent.pubkey)),
+  );
 }
 
 export function welcomeTeammateNeedsRestart(
@@ -453,9 +530,14 @@ async function sendWelcomeKickoffCloser({
 }: {
   agentSet: WelcomeAgentSet;
   channelId: string;
-  content: string;
+  content: string | null;
   opener: RelayEvent;
 }) {
+  // A clean kickoff has nothing to report, so it posts nothing and the lead's
+  // own callback reply closes the thread. Enforced here rather than at the call
+  // sites so the delayed-teammate timer can't sneak a bare CTA out after the
+  // intros land and re-classify the kickoff as clean.
+  if (content === null) return;
   if (await markerExists(channelId, closerMarker)) return;
 
   await sendManagedAgentChannelMessage({
@@ -491,17 +573,24 @@ export function useWelcomeKickoff(
     () => markerEvent(channelEvents, openerMarker) ?? null,
     [channelEvents],
   );
-  // Retire the watch once the closer exists: the kickoff is resolved, so
-  // revisits to Welcome shouldn't keep refetching the subtree forever.
+  const agentSet = React.useMemo(
+    () =>
+      resolveWelcomeAgentSetForRelay(
+        managedAgentsQuery.data ?? [],
+        activeCommunity?.relayUrl,
+      ),
+    [activeCommunity?.relayUrl, managedAgentsQuery.data],
+  );
+  // Retire the watch once the kickoff is resolved, so revisits to Welcome don't
+  // keep refetching the subtree forever.
   //
-  // This has to be a latch rather than a plain derivation. The closer is a
-  // *thread reply* to the opener (see sendWelcomeKickoffCloser), so it never
-  // appears in `channelEvents` unless the user happened to open the thread —
-  // deriving from `channelEvents` meant this never retired at all. Deriving
-  // from `kickoffEvents` instead is self-referential: it gates the query that
-  // feeds it, so retiring would drop the evidence that justified retiring and
-  // (on a cache eviction) flip the query back on. Latching per channel keeps
-  // the decision one-way and stable.
+  // This has to be a latch rather than a plain derivation. The evidence lives in
+  // the opener's *thread*, so it never appears in `channelEvents` unless the user
+  // happened to open the thread — deriving from `channelEvents` meant this never
+  // retired at all. Deriving from `kickoffEvents` instead is self-referential: it
+  // gates the query that feeds it, so retiring would drop the evidence that
+  // justified retiring and (on a cache eviction) flip the query back on. Latching
+  // per channel keeps the decision one-way and stable.
   const [resolvedChannelId, setResolvedChannelId] = React.useState<
     string | null
   >(null);
@@ -516,19 +605,33 @@ export function useWelcomeKickoff(
   );
   React.useEffect(() => {
     if (!channelId || kickoffResolved) return;
-    if (markerEvent(kickoffEvents, closerMarker) == null) return;
+    // A closer only exists when something went wrong, so it can't be the only
+    // thing we latch on any more — a clean kickoff would never retire.
+    if (markerEvent(kickoffEvents, closerMarker) != null) {
+      setResolvedChannelId(channelId);
+      return;
+    }
+    if (!openerEvent || !agentSet) return;
+    const { failed, unresolved } = classifyWelcomeKickoffResolution(
+      kickoffEvents,
+      openerEvent,
+      agentSet,
+    );
+    // Every teammate introduced itself and none crashed: the choreography is
+    // done and the lead's callback reply is the close. Nothing further to post.
+    if (failed.length > 0 || unresolved.length > 0) return;
+    // Drop any pending delayed-teammate timer. `sendWelcomeKickoffCloser` would
+    // refuse to post a clean closer anyway, but leaving a timer armed against a
+    // finished kickoff is a trap for the next reader.
+    const pending = closerTimeouts.get(channelId);
+    if (pending) {
+      globalThis.clearTimeout(pending);
+      closerTimeouts.delete(channelId);
+    }
     setResolvedChannelId(channelId);
-  }, [channelId, kickoffEvents, kickoffResolved]);
+  }, [agentSet, channelId, kickoffEvents, kickoffResolved, openerEvent]);
   const channelEventsRef = React.useRef(kickoffEvents);
   channelEventsRef.current = kickoffEvents;
-  const agentSet = React.useMemo(
-    () =>
-      resolveWelcomeAgentSetForRelay(
-        managedAgentsQuery.data ?? [],
-        activeCommunity?.relayUrl,
-      ),
-    [activeCommunity?.relayUrl, managedAgentsQuery.data],
-  );
   const readiness = React.useMemo(
     () => resolveAgentReadiness(runtimesQuery.data ?? [], globalConfig),
     [globalConfig, runtimesQuery.data],
@@ -562,7 +665,13 @@ export function useWelcomeKickoff(
           teammates: [welcomeTeam[1], welcomeTeam[2]],
         };
 
-        if (await markerExists(channelId, closerMarker)) {
+        if (
+          await welcomeKickoffAlreadyFinished(
+            channelId,
+            markerEvent(channelEventsRef.current, openerMarker) ?? null,
+            resolvedAgentSet,
+          )
+        ) {
           return;
         }
         if (!readiness.ready) {

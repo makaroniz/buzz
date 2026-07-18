@@ -3,11 +3,14 @@
 Status: **partly open.** The *perception* gap is handled (see below); the silent
 paths themselves are not. The [intro loop](#the-intro-loop-a-loud-failure) is
 mitigated as of 2026-07-18 by three bullets in the base prompt's Callback
-Mentions section — **not yet confirmed live against Codex.** Prompt is the only
-lever available: a structural cap was considered and rejected (see that section).
+Mentions section, and **confirmed live against Codex** — the chain terminated on
+its own at four replies. Prompt is the only lever available: a structural cap was
+considered and rejected (see that section). The
+[double closer](#the-closer-was-racing-a-message-it-could-not-beat) that the same
+run exposed is fixed as of 2026-07-18.
 Context: the Welcome-channel kickoff choreography
 (`desktop/src/features/onboarding/welcomeKickoff.ts`) where Fizz posts an
-opener, teammates introduce themselves in-thread, and Fizz posts a closer.
+opener and teammates introduce themselves in-thread.
 
 Two failure shapes live here: the **silent** ones (nobody speaks) and the
 **loud** one (nobody stops). They have opposite symptoms and the same root
@@ -51,7 +54,8 @@ that runs away.
 | 1 | Provider fallback ("connect to an AI provider in Settings…") | Readiness check fails before kickoff | Fizz (marker: `provider-required.v1`) |
 | 2 | Happy-path opener (mentions teammates, asks them to introduce themselves) | Team online | Fizz (marker: `opener.v1`) |
 | 3 | Degraded opener ("I'm here with Honey and Bumble…") | Fizz online, zero teammates online within 60s | Fizz (opener + closer markers, self-contained) |
-| 4 | Closer variants (clean / failed / slow teammate wording) | 3s beat after intros resolve, or 15s intro timeout | Fizz (marker: `closer.v1`) |
+| 4 | Closer variants (failed / slow teammate wording only — a clean kickoff posts nothing) | 3s beat after a teammate is seen crashed, or 60s intro timeout | Fizz (marker: `closer.v1`) |
+| 4b | The actual close on a clean kickoff | The intros `@mention` Fizz, waking it | Fizz, **LLM-generated** (no marker) |
 | 5 | Setup-mode nudge ("here's what you still need to configure") | Agent process spawns but its requirements check fails (e.g. missing API key) | The agent process itself (backend, buzz-acp setup-listener mode) |
 
 ## Silent paths (what the user CANNOT be told today)
@@ -293,14 +297,18 @@ new work — which needs a judgment call the harness can't currently make.
 
 ### Verification status
 
-- **Not verified live.** The prompt change is behavioral; only a real Codex
-  session on a fresh Welcome channel can confirm it. Prompt edits have no test
-  that can fail on a literal-minded model, so the desktop/Rust suites say
-  nothing about whether this works.
-- One run on 2026-07-18 went from 21+ replies to **2** (the two intros, no
-  loop) — but that run had the opener waiver in it too, so it is **confounded
-  and does not count as evidence for the base prompt**. It is the reason the
-  opener was reverted: the next run needs to isolate the variable.
+- **Verified live against Codex on 2026-07-18, with the base prompt as the only
+  variable** (the opener waiver was reverted first, precisely so this run would
+  isolate it). The chain terminated on its own: intros tagged `@Fizz` (the
+  legitimate `:44` callback), Fizz woke and replied once using plain narrative
+  names and **no tags**, so nobody woke and the chain ended at four replies. The
+  designed exit path is the one that fired.
+- An earlier run went from 21+ replies to 2, but it had the opener waiver in it
+  and is **confounded** — it does not count as evidence for the base prompt. It
+  is the reason the opener was reverted.
+- Prompt edits have no test that can fail on a literal-minded model, so the
+  desktop/Rust suites say nothing about whether this holds. One live run is
+  encouraging, not proof: n=1 on a sampled model.
 - Unit-tested only: the solo opener mentions no agent at all (pins the
   degraded path, which cannot loop by construction).
 
@@ -325,6 +333,95 @@ new work — which needs a judgment call the harness can't currently make.
   the end and is not. The wording targets "acknowledge, agree, confirm, or sign
   off", which reads terminal — but the boundary is a model judgment, and reading
   it too broadly converts this loud failure into the silent kind.
+
+## The closer was racing a message it could not beat
+
+Found in the same 2026-07-18 Codex run that cleared the intro loop. The user saw
+Fizz say *"Honey and Bumble are taking longer than expected"* — and then both
+intros landed one minute later, followed by Fizz closing again, properly. Two
+CTAs, and the wrong one came first.
+
+Neither symptom was a failure state. They were **one design conflict**:
+
+1. **The closer raced the intros on a 15s stopwatch.** `TEAMMATE_INTRO_WAIT_MS`
+   was `15_000`, plus a `CLOSER_BEAT_MS` 3s beat — about 18s for a teammate to
+   have an intro *published*. That has to cover a whole agent turn: wake on the p
+   tag, fetch context, run inference, shell out to `buzz messages send`. Real
+   turns run tens of seconds, so the closer reliably lost and announced a delay
+   that wasn't real. PR #2066 tightened this beat, which made it more likely, not
+   less.
+2. **The scripted closer could never be the last word.** The choreography assumed
+   it was. But the intros `@mention` Fizz — that is the *mandatory* callback in
+   `base_prompt.md:44`, since Fizz delegated the intros — so Fizz is **guaranteed**
+   to wake and reply after them. The choreography and the base prompt were
+   fighting: one scripted a final message, the other guaranteed a message after
+   it.
+
+Worth noting which one was better: Fizz's live reply ("bring us a project, bug,
+question, or half-formed idea and I'll route it or start building") beat the
+scripted CTA. It was contextual, and it was right about the state of the world.
+
+### The fix (landed 2026-07-18)
+
+**Let the guaranteed message be the close, and keep the script for problems only.**
+
+1. `buildWelcomeKickoffCloser` returns **`null`** for a clean kickoff — the
+   success state posts nothing. The failure variants (crashed teammate, slow
+   teammate) are unchanged and still carry the CTA, because there the user needs
+   both the bad news and a way forward.
+2. The `null` is enforced inside `sendWelcomeKickoffCloser`, not at the call
+   sites. There are two callers, and the delayed-teammate timer can fire *after*
+   the intros land and re-classify the kickoff as clean — the choke point stops
+   that stray timer from emitting a bare CTA.
+3. `TEAMMATE_INTRO_WAIT_MS` `15_000` → `60_000`, matching the presence wait. This
+   budget now only covers a teammate that is *alive but silent*, where patience is
+   the correct answer — a **crashed** teammate is read from agent status
+   (`failed`) and closes immediately, so real breakage is still reported fast.
+
+### The latch this broke, and why it needed a second signal
+
+The closer marker was doing quiet double duty: it was also the durable *"kickoff
+already finished"* signal, in two places — retiring the opener-thread watch, and
+the guard in the start effect that stops the choreography re-arming on revisit.
+A marker only exists if a **message** exists (`markerExists` resolves it by
+querying the relay for a tagged message), so "success posts nothing" silently
+means "success never latches". Left alone that would have:
+
+- refetched the opener subtree forever on every Welcome revisit — the exact bug
+  PR #2066 fixed; and worse,
+- **restarted the whole Welcome team every time the channel was opened**, because
+  the start effect's guard would never trip.
+
+So completion needs a second piece of evidence, and it has to be **relay-side** —
+a local latch would re-run on another device or after a reinstall.
+`welcomeKickoffAlreadyFinished` now reads: *closer marker exists* **OR** *the
+opener's thread holds an intro from every teammate*. Both are durable server-side
+facts. The marker still short-circuits first, so the failure paths and the solo
+opener (which carries both markers on one message) are untouched and cost no
+extra fetch.
+
+The in-memory latch stays a latch for the reason the original comment gives: the
+evidence lives in the subtree that the latch itself gates, so deriving it fresh
+each render is self-referential.
+
+### Residual risk
+
+- **The CTA is now model-generated on the happy path.** If Fizz wakes and says
+  something that doesn't invite the user in, the kickoff ends softer than the
+  script did. The mitigation is `base_prompt.md:44` making the wake itself
+  guaranteed — but *what Fizz says* is not. This is the deliberate bet of the
+  change, and the thing to watch across runs.
+- **If Fizz doesn't reply at all, nothing closes.** The intros still landed, so
+  the channel is a usable welcome rather than an empty one — but there is no CTA
+  and no scripted backstop. A watchdog (wait N seconds for the lead's callback,
+  then post the scripted CTA) was considered and deliberately left out: it re-adds
+  the timer race this change removed. Revisit only if a run shows the lead going
+  quiet.
+- Unit tests pin the contract (`buildWelcomeKickoffCloser([])` is `null`; the
+  finished-check reads the intros with no marker; a marker short-circuits without
+  a fetch; a missing intro is not finished). What they **cannot** pin is whether a
+  real Fizz reliably produces a good close — same limitation as the intro-loop
+  fix.
 
 ## Constraints for the silent-path fix
 
@@ -391,3 +488,28 @@ new work — which needs a judgment call the harness can't currently make.
 - The two failure classes interact: silent-path work adds messages, and every
   new message is a potential wake. Any fallback that `@mentions` an agent to
   recover from a failure can itself seed a loop.
+- **Open thread panes can go stale while the reply count keeps climbing** — a
+  general bug, not a kickoff bug, but it shows up here because the intros are
+  thread replies. Observed repeatedly, including in the 2026-07-18 run. The cause
+  of the *asymmetry* is confirmed: the count and the list read from different
+  sources. The count is the relay's server-computed recount pushed as kind 39005
+  (`hooks.ts`, `channelWindowStore.ts` `mergeLiveThreadSummary`) — authoritative
+  and independent of the reply event itself. The list is a client-maintained cache
+  (`["thread-replies", channelId, rootId]`) appended to by parsing live events.
+  One is robust, the other is fragile, so they can disagree.
+
+  The specific trigger is **not** confirmed. Leading hypothesis: a refetch
+  overwrite race in `useThreadReplies.ts` — the query is `staleTime: 0`, and on
+  refetch it replaces the cache with the server's answer while preserving only
+  replies that arrived *during* the fetch (`receivedInFlight` is diffed against
+  `idsAtStart`). A live reply that landed just *before* a refetch, and that the
+  server's answer doesn't yet include, is dropped. Welcome refetches unusually
+  often because there are two observers on that cache entry (the pane's, plus
+  `welcomeKickoff.ts`'s opener-subtree watch). Fits every symptom, including why
+  close+reopen fixes it (the later fetch catches up). Ruled out for this case:
+  malformed `e` tags (the CLI/SDK emit proper NIP-10 markers) and root-key
+  divergence (the opener *is* the NIP-10 root).
+
+  Note the live-append branch that feeds the pane has **no test coverage at all**,
+  which is why this can regress quietly. Needs a repro test before a fix — don't
+  fix on the hypothesis.

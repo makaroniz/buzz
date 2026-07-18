@@ -13,6 +13,7 @@ import {
   selectWelcomeKickoffIntroTeammates,
   waitForWelcomeKickoffBeat,
   waitForWelcomeTeammatesOnline,
+  welcomeKickoffAlreadyFinished,
   welcomeTeammateNeedsRestart,
 } from "./welcomeKickoff.ts";
 
@@ -168,8 +169,18 @@ test("kickoff coordinator preserves one task across rerenders and cancels on nav
   assert.ok(coordinator.begin("welcome"));
 });
 
+test("a clean kickoff posts no scripted closer", () => {
+  // The intros @mention the lead, which is the mandatory callback in
+  // base_prompt.md — so the lead is *guaranteed* to wake and reply in-thread.
+  // Scripting a CTA on top of that gave the user two closers, and the scripted
+  // one raced the intros and lost. The lead's live reply is the close now; the
+  // scripted closer is only for reporting a problem.
+  // See docs/welcome-kickoff-silent-failures.md.
+  assert.equal(buildWelcomeKickoffCloser([]), null);
+  assert.equal(buildWelcomeKickoffCloser([], []), null);
+});
+
 test("closer degrades coherently for partial and total startup failure", () => {
-  assert.match(buildWelcomeKickoffCloser([]), /What can we help you build/);
   assert.match(buildWelcomeKickoffCloser(["Honey"]), /Honey is having trouble/);
   assert.match(
     buildWelcomeKickoffCloser(["Honey", "Bumble"]),
@@ -427,6 +438,81 @@ test("intro replies reach the closer classification without the user opening the
     ).unresolved,
     [],
   );
+});
+
+// A clean kickoff posts no closer, so "already finished" can no longer be a
+// single marker lookup — the marker only exists when something went wrong. If
+// this regresses, the start effect re-arms on every revisit and restarts the
+// whole Welcome team each time the channel is opened.
+test("a clean kickoff reads as finished from the intros, with no closer marker", async () => {
+  const agentSet = { lead: fizz, teammates: [honey, bumble] };
+  const finished = await welcomeKickoffAlreadyFinished(
+    "channel-1",
+    kickoffOpener,
+    agentSet,
+    {
+      closerExists: async () => false,
+      fetchReplies: async () => ({
+        events: [
+          introReply("honey-intro", honey.pubkey, kickoffOpener.id),
+          introReply("bumble-intro", bumble.pubkey, kickoffOpener.id),
+        ],
+        nextCursor: null,
+      }),
+    },
+  );
+
+  assert.equal(finished, true);
+});
+
+test("a kickoff missing one intro is not finished", async () => {
+  const agentSet = { lead: fizz, teammates: [honey, bumble] };
+  const finished = await welcomeKickoffAlreadyFinished(
+    "channel-1",
+    kickoffOpener,
+    agentSet,
+    {
+      closerExists: async () => false,
+      fetchReplies: async () => ({
+        events: [introReply("honey-intro", honey.pubkey, kickoffOpener.id)],
+        nextCursor: null,
+      }),
+    },
+  );
+
+  assert.equal(finished, false);
+});
+
+test("a closer marker still short-circuits the finished check", async () => {
+  // The failure paths and the solo opener still carry the marker, so that
+  // evidence must keep working without a thread fetch at all.
+  let fetched = false;
+  const finished = await welcomeKickoffAlreadyFinished(
+    "channel-1",
+    kickoffOpener,
+    { lead: fizz, teammates: [honey, bumble] },
+    {
+      closerExists: async () => true,
+      fetchReplies: async () => {
+        fetched = true;
+        return { events: [], nextCursor: null };
+      },
+    },
+  );
+
+  assert.equal(finished, true);
+  assert.equal(fetched, false);
+});
+
+test("no opener means the kickoff has not finished", async () => {
+  const finished = await welcomeKickoffAlreadyFinished(
+    "channel-1",
+    null,
+    { lead: fizz, teammates: [honey, bumble] },
+    { closerExists: async () => false },
+  );
+
+  assert.equal(finished, false);
 });
 
 test("merging the opener subtree never double-counts an already-visible reply", () => {
