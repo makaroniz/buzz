@@ -6135,12 +6135,11 @@ mod tests {
         );
     }
 
-    // ── Quinn review probes (PR #1981 @ eca05aa25) ─────────────────────────
-    // Reviewer-authored, NOT for merge as-is: empirical proofs for the
-    // pool-affinity / LRU-eviction / respawn edges Eva flagged unwritten.
-    // Run in a DETACHED scratch worktree at the reviewed SHA.
+    // ── Pool affinity / LRU-eviction / respawn regressions ─────────────────
+    // Deterministic coverage for reservation pruning, strict owner affinity,
+    // unrelated-root progress, and worker replacement.
 
-    async fn quinn_probe_agent(index: usize) -> OwnedAgent {
+    async fn probe_agent(index: usize) -> OwnedAgent {
         let acp = AcpClient::spawn(
             "bash",
             &["-c".to_string(), "sleep 30".to_string()],
@@ -6169,12 +6168,10 @@ mod tests {
     // dropped and the session-holding slot is reused. Two slots make the two
     // outcomes observably distinct (non-vacuous: fails if prune is neutered).
     #[tokio::test]
-    async fn quinn_lru_evict_stale_reservation_does_not_beat_real_session_holder() {
+    async fn lru_evict_stale_reservation_does_not_beat_real_session_holder() {
         let channel_id = Uuid::new_v4();
-        let mut pool = AgentPool::from_slots(vec![
-            Some(quinn_probe_agent(0).await),
-            Some(quinn_probe_agent(1).await),
-        ]);
+        let mut pool =
+            AgentPool::from_slots(vec![Some(probe_agent(0).await), Some(probe_agent(1).await)]);
         let key = ConversationSessionKey {
             channel_id,
             root_event_id: Some("root-k".into()),
@@ -6219,9 +6216,9 @@ mod tests {
     // Q1b: sanity — a bare stale reservation (no other holder) is dropped by prune
     // and falls through to a clean Pass 2 claim without phantom session content.
     #[tokio::test]
-    async fn quinn_bare_stale_reservation_is_pruned() {
+    async fn bare_stale_reservation_is_pruned() {
         let channel_id = Uuid::new_v4();
-        let mut pool = AgentPool::from_slots(vec![Some(quinn_probe_agent(0).await)]);
+        let mut pool = AgentPool::from_slots(vec![Some(probe_agent(0).await)]);
         let key = ConversationSessionKey {
             channel_id,
             root_event_id: Some("root-b".into()),
@@ -6237,12 +6234,10 @@ mod tests {
     // returns BusyOwner (never migrates to another idle slot, never Exhausted),
     // and an UNRELATED root can still claim a different idle slot concurrently.
     #[tokio::test]
-    async fn quinn_busy_owner_does_not_block_unrelated_root() {
+    async fn busy_owner_does_not_block_unrelated_root() {
         let channel_id = Uuid::new_v4();
-        let mut pool = AgentPool::from_slots(vec![
-            Some(quinn_probe_agent(0).await),
-            Some(quinn_probe_agent(1).await),
-        ]);
+        let mut pool =
+            AgentPool::from_slots(vec![Some(probe_agent(0).await), Some(probe_agent(1).await)]);
         let root_a = ConversationSessionKey {
             channel_id,
             root_event_id: Some("root-a".into()),
@@ -6292,9 +6287,9 @@ mod tests {
     // slot must NOT survive: prune drops it (fresh state has no session, no live
     // task), so the root re-claims cleanly instead of binding a phantom session.
     #[tokio::test]
-    async fn quinn_respawn_clears_stale_reservation() {
+    async fn respawn_clears_stale_reservation() {
         let channel_id = Uuid::new_v4();
-        let mut pool = AgentPool::from_slots(vec![Some(quinn_probe_agent(0).await)]);
+        let mut pool = AgentPool::from_slots(vec![Some(probe_agent(0).await)]);
         let root = ConversationSessionKey {
             channel_id,
             root_event_id: Some("root-x".into()),
@@ -6313,7 +6308,7 @@ mod tests {
         assert!(pool.agents[0].is_none(), "slot empty after death");
 
         // Respawn: fresh default-state agent at the same index (mirrors lib.rs:1731).
-        pool.return_agent(quinn_probe_agent(0).await);
+        pool.return_agent(probe_agent(0).await);
 
         match pool.try_claim(Some(&root)) {
             ClaimOutcome::Claimed(a) => assert!(

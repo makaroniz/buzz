@@ -5685,6 +5685,44 @@ mod dispatch_scope_tests {
     }
 
     #[tokio::test]
+    async fn one_slot_a_then_b_then_a_reclaims_retained_provider_session() {
+        let mut pool = AgentPool::from_slots(vec![Some(dummy_agent(0).await)]);
+        let ch = Uuid::new_v4();
+        let a = key(ch, "root-a");
+        let b = key(ch, "root-b");
+
+        let mut first_a = pool
+            .try_claim(Some(&a))
+            .claimed()
+            .expect("first A dispatch");
+        first_a
+            .state
+            .insert_session(a.clone(), "provider-session-a".into());
+        let a_owner = first_a.index;
+        pool.return_agent(first_a);
+
+        let mut dispatched_b = pool
+            .try_claim(Some(&b))
+            .claimed()
+            .expect("B dispatches after A completes");
+        assert_eq!(dispatched_b.index, a_owner);
+        dispatched_b
+            .state
+            .insert_session(b.clone(), "provider-session-b".into());
+        pool.return_agent(dispatched_b);
+
+        let later_a = pool
+            .try_claim(Some(&a))
+            .claimed()
+            .expect("later A dispatch");
+        assert_eq!(later_a.index, a_owner);
+        assert!(
+            later_a.state.contains_session(&a),
+            "A must reclaim its retained provider session after B used the slot"
+        );
+    }
+
+    #[tokio::test]
     async fn pool_exhaustion_restores_undispatched_batch_losslessly() {
         let mut pool = AgentPool::from_slots(vec![Some(dummy_agent(0).await)]);
         let mut queue = EventQueue::new(DedupMode::Queue);

@@ -1788,6 +1788,90 @@ mod tests {
         !q.in_flight_scopes.is_empty()
     }
 
+    fn rooted(ch: Uuid, root: &str, content: &str) -> QueuedEvent {
+        let mut event = make_queued(ch, content);
+        event.conversation_root = Some(root.into());
+        event
+    }
+
+    fn root_scope(ch: Uuid, root: &str) -> ConversationSessionKey {
+        ConversationSessionKey {
+            channel_id: ch,
+            root_event_id: Some(root.into()),
+        }
+    }
+
+    #[test]
+    fn same_channel_root_retry_metadata_is_isolated() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let a = root_scope(ch, "root-a");
+        let b = root_scope(ch, "root-b");
+        q.push(rooted(ch, "root-a", "A"));
+        q.push(rooted(ch, "root-b", "B"));
+        let batch_a = q.flush_next().expect("flush A");
+        let batch_b = q.flush_next().expect("flush B");
+
+        q.requeue(batch_b);
+        let b_count = q.retry_counts[&b];
+        let b_retry_after = q.retry_after[&b];
+        q.requeue(batch_a);
+
+        assert_eq!(q.retry_counts[&a], 1);
+        assert_eq!(q.retry_counts[&b], b_count);
+        assert_eq!(q.retry_after[&b], b_retry_after);
+    }
+
+    #[test]
+    fn same_channel_root_deadline_expiry_preserves_sibling_state() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let a = root_scope(ch, "root-a");
+        let b = root_scope(ch, "root-b");
+        q.push(rooted(ch, "root-a", "A"));
+        q.push(rooted(ch, "root-b", "B"));
+        q.flush_next().expect("flush A");
+        q.flush_next().expect("flush B");
+        let b_deadline = Instant::now() + Duration::from_secs(60);
+        let b_retry_after = Instant::now() + Duration::from_secs(30);
+        q.in_flight_deadlines.insert(a.clone(), Instant::now());
+        q.in_flight_deadlines.insert(b.clone(), b_deadline);
+        q.retry_counts.insert(b.clone(), 2);
+        q.retry_after.insert(b.clone(), b_retry_after);
+
+        q.expire_stuck_in_flight(Instant::now() + Duration::from_millis(1));
+
+        assert!(!q.in_flight_scopes.contains(&a));
+        assert!(q.in_flight_scopes.contains(&b));
+        assert_eq!(q.in_flight_deadlines[&b], b_deadline);
+        assert_eq!(q.retry_counts[&b], 2);
+        assert_eq!(q.retry_after[&b], b_retry_after);
+    }
+
+    #[test]
+    fn same_channel_mark_complete_preserves_sibling_lifecycle_state() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let a = root_scope(ch, "root-a");
+        let b = root_scope(ch, "root-b");
+        q.push(rooted(ch, "root-a", "A"));
+        q.push(rooted(ch, "root-b", "B"));
+        q.flush_next().expect("flush A");
+        q.flush_next().expect("flush B");
+        let b_deadline = q.in_flight_deadlines[&b];
+        let b_retry_after = Instant::now() + Duration::from_secs(30);
+        q.retry_counts.insert(b.clone(), 3);
+        q.retry_after.insert(b.clone(), b_retry_after);
+
+        q.mark_complete(&a);
+
+        assert!(!q.in_flight_scopes.contains(&a));
+        assert!(q.in_flight_scopes.contains(&b));
+        assert_eq!(q.in_flight_deadlines[&b], b_deadline);
+        assert_eq!(q.retry_counts[&b], 3);
+        assert_eq!(q.retry_after[&b], b_retry_after);
+    }
+
     #[test]
     fn test_base_section_prepends_header_and_trims_trailing_whitespace() {
         // Trailing whitespace/newlines are stripped; the [Base] header is
