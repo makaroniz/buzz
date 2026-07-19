@@ -308,6 +308,36 @@ pub async fn query_relay_at(
     parse_json_response(response).await
 }
 
+pub async fn query_relay_at_with_keys(
+    state: &AppState,
+    api_base_url: &str,
+    filters: &[serde_json::Value],
+    keys: &Keys,
+    auth_tag: Option<&str>,
+) -> Result<Vec<nostr::Event>, String> {
+    let url = format!("{}/query", api_base_url);
+    let body_bytes =
+        serde_json::to_vec(filters).map_err(|e| format!("filter serialization failed: {e}"))?;
+    let auth = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body_bytes)?;
+    let mut request = state
+        .http_client
+        .post(&url)
+        .header("Authorization", auth)
+        .header("Content-Type", "application/json");
+    if let Some(tag) = auth_tag {
+        request = request.header("x-auth-tag", tag);
+    }
+    let response = request
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| classify_request_error(&e))?;
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+    parse_json_response(response).await
+}
+
 // ── Command response parsing ────────────────────────────────────────────────
 
 /// Parse a command-event OK message of the form `"response:<json>"`.

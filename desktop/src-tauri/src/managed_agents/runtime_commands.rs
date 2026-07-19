@@ -173,28 +173,98 @@ pub fn restart_managed_agent_runtime(
     start_pair(pubkey, relay_url, true, app)
 }
 
+async fn discover_agent_membership(
+    state: &AppState,
+    record: super::ManagedAgentRecord,
+    requested_relay_url: String,
+) -> Result<Option<(super::ManagedAgentRecord, ManagedAgentRuntimeKey, String)>, String> {
+    let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &requested_relay_url)?;
+    let keys = nostr::Keys::parse(record.private_key_nsec.trim())
+        .map_err(|error| format!("invalid managed-agent key: {error}"))?;
+    let api_base = crate::relay::relay_http_base_url(&key.relay_url);
+    let events = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::relay::query_relay_at_with_keys(
+            state,
+            &api_base,
+            &[serde_json::json!({"kinds": [39002], "#p": [record.pubkey]})],
+            &keys,
+            record.auth_tag.as_deref(),
+        ),
+    )
+    .await
+    .map_err(|_| "membership discovery timed out".to_string())??;
+    Ok((!events.is_empty()).then_some((record, key, requested_relay_url)))
+}
+
 #[tauri::command]
 pub async fn reconcile_managed_agent_runtimes(
     communities: Vec<super::ManagedAgentCommunityTarget>,
     app: AppHandle,
 ) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
-    // Discovery is Rust-owned. Until membership has been authenticated, never
-    // infer an empty membership set as success: return explicit failed rows.
+    use futures_util::{stream, StreamExt};
+
     let records = load_managed_agents(&app)?;
-    let mut rows = Vec::new();
+    let mut jobs = Vec::new();
     for community in communities {
-        for record in records.iter().filter(|record| record.backend == BackendKind::Local) {
-            let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &community.relay_url)?;
-            let mut row = status_for(
-                &app,
-                record,
-                &key,
-                None,
-                Some(community.relay_url.clone()),
-            );
-            row.lifecycle = ManagedAgentRuntimeLifecycle::Failed;
-            row.error = Some("authenticated membership discovery is not yet available".into());
-            rows.push(row);
+        for record in records
+            .iter()
+            .filter(|record| record.backend == BackendKind::Local)
+        {
+            jobs.push((record.clone(), community.relay_url.clone()));
+        }
+    }
+    let discoveries: Vec<_> = stream::iter(jobs)
+        .map(|(record, requested)| {
+            let state = app.state::<AppState>();
+            async move {
+                let fallback_record = record.clone();
+                let fallback_requested = requested.clone();
+                discover_agent_membership(&state, record, requested)
+                    .await
+                    .map_err(|error| (fallback_record, fallback_requested, error))
+            }
+        })
+        .buffer_unordered(6)
+        .collect()
+        .await;
+
+    let mut rows = Vec::new();
+    for discovery in discoveries {
+        match discovery {
+            Ok(Some((record, key, requested))) => {
+                match start_pair(
+                    record.pubkey.clone(),
+                    key.relay_url.clone(),
+                    true,
+                    app.clone(),
+                ) {
+                    Ok(mut status) => {
+                        status.requested_relay_url = Some(requested);
+                        rows.push(status);
+                    }
+                    Err(error) => {
+                        let mut status = status_for(
+                            &app,
+                            &record,
+                            &key,
+                            None,
+                            Some(requested),
+                        );
+                        status.lifecycle = ManagedAgentRuntimeLifecycle::Failed;
+                        status.error = Some(error);
+                        rows.push(status);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err((record, requested, error)) => {
+                let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &requested)?;
+                let mut status = status_for(&app, &record, &key, None, Some(requested));
+                status.lifecycle = ManagedAgentRuntimeLifecycle::Failed;
+                status.error = Some(error);
+                rows.push(status);
+            }
         }
     }
     Ok(rows)
