@@ -114,10 +114,25 @@ pub async fn restore_managed_agents_on_launch(
         changed |=
             kill_stale_tracked_processes(&mut records, &runtimes, &super::current_instance_id(app));
 
-        let tracked_pids: Vec<u32> = records
-            .iter()
-            .filter_map(|r| r.runtime_pid)
-            .chain(runtimes.values().map(|rt| rt.child.id()))
+        let tracked_pids: Vec<u32> = runtimes
+            .values()
+            .map(|runtime| runtime.child.id())
+            .chain(
+                super::read_all_agent_runtime_receipts(app)
+                    .into_iter()
+                    .filter_map(|(_, receipt)| {
+                        let canonical = super::ManagedAgentRuntimeKey::new(
+                            receipt.key.pubkey.clone(),
+                            &receipt.key.relay_url,
+                        )
+                        .ok()?;
+                        (canonical == receipt.key
+                            && receipt.desktop_instance_id == super::current_instance_id(app)
+                            && super::process_is_running(receipt.pid)
+                            && super::process_belongs_to_us(receipt.pid))
+                        .then_some(receipt.pid)
+                    }),
+            )
             .collect();
         super::sweep_orphaned_agent_processes(app, &tracked_pids);
 

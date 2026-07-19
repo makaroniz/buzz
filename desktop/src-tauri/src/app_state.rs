@@ -248,6 +248,12 @@ impl AppState {
         }
     }
 
+    pub fn clear_agent_session_cache(&self, key: &ManagedAgentRuntimeKey) {
+        if let Ok(mut map) = self.session_config_cache.lock() {
+            map.remove(key);
+        }
+    }
+
     pub fn clear_agent_session_caches(&self, pubkey: &str) {
         if let Ok(mut map) = self.session_config_cache.lock() {
             map.retain(|key, _| key.pubkey != pubkey);

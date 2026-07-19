@@ -628,7 +628,13 @@ pub fn remove_agent_runtime_receipt(app: &AppHandle, key: &ManagedAgentRuntimeKe
     }
 }
 
-pub fn read_all_agent_runtime_receipts(app: &AppHandle) -> Vec<ManagedAgentRuntimeReceipt> {
+pub fn remove_agent_runtime_receipt_path(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+pub fn read_all_agent_runtime_receipts(
+    app: &AppHandle,
+) -> Vec<(PathBuf, ManagedAgentRuntimeReceipt)> {
     let Ok(dir) = agent_pids_dir(app) else {
         return Vec::new();
     };
@@ -638,8 +644,13 @@ pub fn read_all_agent_runtime_receipts(app: &AppHandle) -> Vec<ManagedAgentRunti
     entries
         .flatten()
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|entry| fs::read(entry.path()).ok())
-        .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let bytes = fs::read(&path).ok()?;
+            serde_json::from_slice(&bytes)
+                .ok()
+                .map(|receipt| (path, receipt))
+        })
         .collect()
 }
 

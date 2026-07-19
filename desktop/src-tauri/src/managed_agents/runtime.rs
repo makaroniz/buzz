@@ -409,20 +409,46 @@ fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
 /// `skip_pids` are PIDs already handled by the tracked-agent path.
 #[cfg(unix)]
 pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32]) {
-    let entries = super::read_all_agent_pid_files(app);
+    let legacy_entries = super::read_all_agent_pid_files(app);
+    let instance_id = current_instance_id(app);
+    let receipt_entries: Vec<_> = super::read_all_agent_runtime_receipts(app)
+        .into_iter()
+        .filter_map(|(path, receipt)| {
+            let canonical = ManagedAgentRuntimeKey::new(
+                receipt.key.pubkey.clone(),
+                &receipt.key.relay_url,
+            )
+            .ok();
+            let valid = canonical.as_ref() == Some(&receipt.key)
+                && path.file_name().and_then(|name| name.to_str())
+                    == Some(&format!("{}.json", receipt.key.runtime_id()))
+                && receipt.desktop_instance_id == instance_id
+                && process_is_running(receipt.pid)
+                && process_belongs_to_us(receipt.pid)
+                && process_has_buzz_marker(receipt.pid, &receipt.desktop_instance_id);
+            if valid {
+                Some((path, receipt))
+            } else {
+                super::remove_agent_runtime_receipt_path(&path);
+                None
+            }
+        })
+        .collect();
     // Collect live orphans AND dead-leader groups into a single kill batch.
     // Dead leaders: PGID may have been recycled, but the window is narrow
     // (PID files are from this session) and the cost of missing surviving
     // group members outweighs the recycling risk.
-    let targets: Vec<i32> = entries
+    let targets: Vec<i32> = legacy_entries
         .iter()
-        .filter(|(_, pid)| {
+        .map(|(_, pid)| *pid)
+        .chain(receipt_entries.iter().map(|(_, receipt)| receipt.pid))
+        .filter(|pid| {
             if skip_pids.contains(pid) {
                 return false;
             }
             (process_is_running(*pid) && process_belongs_to_us(*pid)) || !process_is_running(*pid)
         })
-        .map(|(_, pid)| *pid as i32)
+        .map(|pid| pid as i32)
         .collect();
 
     if !targets.is_empty() {
@@ -430,12 +456,20 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
     }
 
     // Clean up PID files for processes we just killed or that are already gone.
-    for (pubkey, pid) in &entries {
+    for (pubkey, pid) in &legacy_entries {
         if skip_pids.contains(pid) {
             continue;
         }
         if !process_is_running(*pid) || !process_belongs_to_us(*pid) {
             super::remove_agent_pid_file(app, pubkey);
+        }
+    }
+    for (_, receipt) in &receipt_entries {
+        if skip_pids.contains(&receipt.pid) {
+            continue;
+        }
+        if !process_is_running(receipt.pid) || !process_belongs_to_us(receipt.pid) {
+            super::remove_agent_runtime_receipt(app, &receipt.key);
         }
     }
 }
