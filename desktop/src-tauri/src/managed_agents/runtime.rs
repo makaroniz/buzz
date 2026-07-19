@@ -169,7 +169,7 @@ fn buzz_marker_entry(instance_id: &str) -> Vec<u8> {
 /// is this desktop instance's id. A process stamped with a *different* instance
 /// id belongs to another live Buzz app and must never be reaped here.
 #[cfg(target_os = "macos")]
-fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
+pub(crate) fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
     let marker = buzz_marker_entry(instance_id);
     let Some(buf) = sweep::procargs2_buffer(pid) else {
         return false;
@@ -213,7 +213,7 @@ fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
+pub(crate) fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
     let marker = buzz_marker_entry(instance_id);
     let Ok(data) = std::fs::read(format!("/proc/{pid}/environ")) else {
         return false;
@@ -222,7 +222,7 @@ fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
 }
 
 #[cfg(not(unix))]
-fn process_has_buzz_marker(_pid: u32, _instance_id: &str) -> bool {
+pub(crate) fn process_has_buzz_marker(_pid: u32, _instance_id: &str) -> bool {
     false
 }
 

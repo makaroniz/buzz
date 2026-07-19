@@ -129,7 +129,11 @@ pub async fn restore_managed_agents_on_launch(
                         (canonical == receipt.key
                             && receipt.desktop_instance_id == super::current_instance_id(app)
                             && super::process_is_running(receipt.pid)
-                            && super::process_belongs_to_us(receipt.pid))
+                            && super::process_belongs_to_us(receipt.pid)
+                            && super::process_has_buzz_marker(
+                                receipt.pid,
+                                &receipt.desktop_instance_id,
+                            ))
                         .then_some(receipt.pid)
                     }),
             )
