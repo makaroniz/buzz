@@ -343,6 +343,9 @@ pub(super) async fn start_local_agent_pairs_with_preflight(
             }
         }
         save_managed_agents(app, &records)?;
+        if let Some(saved_record) = records.iter().find(|record| record.pubkey == pubkey) {
+            retain_managed_agent_pending(app, state, saved_record);
+        }
     }
 
     let mut errors = Vec::new();
