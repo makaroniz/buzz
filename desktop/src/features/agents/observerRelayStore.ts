@@ -4,6 +4,7 @@ import { subscribeToAgentObserverFrames } from "@/shared/api/observerRelay";
 import type { RelayEvent, ManagedAgent } from "@/shared/api/types";
 import type { ControlResultFrame } from "@/shared/api/types";
 import { putAgentSessionConfig } from "@/shared/api/tauri";
+import { putManagedAgentRuntimeLifecycle } from "@/shared/api/tauriManagedAgents";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
 import {
@@ -402,6 +403,8 @@ async function handleRelayObserverEvent(
       onSessionConfigCaptured?.(agentPubkey);
     } else if (parsed.kind === "control_result") {
       dispatchControlResult(agentPubkey, parsed.payload);
+    } else if (parsed.kind === "managed_agent_runtime_lifecycle") {
+      void putManagedAgentRuntimeLifecycle(agentPubkey, parsed.payload);
     }
   } catch (error) {
     if (activeGeneration !== generation) {
