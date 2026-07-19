@@ -48,6 +48,8 @@ import {
   MODAL_SEARCH_SHELL_CLASS,
 } from "@/shared/ui/modalSearchStyles";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
+import { useManagedAgentRuntimesQuery } from "@/features/agents/managedAgentRuntimeHooks";
+import { findManagedAgentRuntime } from "@/features/agents/managedAgentRuntimeStatus";
 import { EditRespondToDialog } from "./EditRespondToDialog";
 import { useMembersSidebarActions } from "./useMembersSidebarActions";
 import { useMembersSidebarModeration } from "./useMembersSidebarModeration";
@@ -122,6 +124,7 @@ type MembersSidebarProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onViewActivity?: (pubkey: string) => void;
+  relayUrl?: string;
 };
 
 export function MembersSidebar({
@@ -130,8 +133,12 @@ export function MembersSidebar({
   open,
   onOpenChange,
   onViewActivity,
+  relayUrl,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
+  const managedAgentRuntimesQuery = useManagedAgentRuntimesQuery({
+    enabled: open,
+  });
   const queryClient = useQueryClient();
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -568,6 +575,15 @@ export function MembersSidebar({
           managedAgent={
             memberIsBot
               ? managedAgentByPubkey.get(normalizePubkey(member.pubkey))
+              : undefined
+          }
+          managedAgentRuntime={
+            memberIsBot && relayUrl
+              ? findManagedAgentRuntime(
+                  managedAgentRuntimesQuery.data ?? [],
+                  member.pubkey,
+                  relayUrl,
+                )
               : undefined
           }
           member={member}

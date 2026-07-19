@@ -314,6 +314,29 @@ export type RelayAgent = {
   respondToAllowlist: string[];
 };
 
+export type ManagedAgentRuntimeLifecycle =
+  | "starting"
+  | "listening"
+  | "waking"
+  | "ready"
+  | "failed"
+  | "stopped";
+
+export type ManagedAgentRuntimeStatus = {
+  /** Opaque backend-owned identity for this canonical agent + relay pair. */
+  runtimeId: string;
+  pubkey: string;
+  /** Original community descriptor, present on startup reconciliation results. */
+  requestedRelayUrl?: string;
+  /** Canonical, backend-owned pair identity component. Do not normalize in TS. */
+  relayUrl: string;
+  localSetup: boolean;
+  lifecycle: ManagedAgentRuntimeLifecycle;
+  pid: number | null;
+  error: string | null;
+  logPath: string | null;
+};
+
 export type ManagedAgentBackend =
   | { type: "local" }
   | { type: "provider"; id: string; config: Record<string, unknown> };

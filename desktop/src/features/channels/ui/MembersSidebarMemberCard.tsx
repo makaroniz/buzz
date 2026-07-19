@@ -20,13 +20,16 @@ import {
 } from "@/features/agents/lib/managedAgentControlActions";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { agentCommunityAvailability } from "@/features/agents/managedAgentRuntimeStatus";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 import type {
   ChannelMember,
   ManagedAgent,
+  ManagedAgentRuntimeStatus,
   PresenceStatus,
 } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { Badge } from "@/shared/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,6 +48,7 @@ type MembersSidebarMemberCardProps = {
   isActionPending: boolean;
   isArchived: boolean;
   managedAgent?: ManagedAgent;
+  managedAgentRuntime?: ManagedAgentRuntimeStatus;
   member: ChannelMember;
   memberAvatarLabel: string;
   memberIsBot: boolean;
@@ -104,19 +108,6 @@ function formatRespondToLabel(agent: ManagedAgent) {
   }
 }
 
-function formatManagedAgentStatus(agent: ManagedAgent) {
-  switch (agent.status) {
-    case "running":
-      return "Running";
-    case "stopped":
-      return "Stopped";
-    case "deployed":
-      return "Deployed";
-    case "not_deployed":
-      return "Not deployed";
-  }
-}
-
 export function MembersSidebarMemberCard({
   canChangeRole,
   canModerate,
@@ -124,6 +115,7 @@ export function MembersSidebarMemberCard({
   isActionPending,
   isArchived,
   managedAgent,
+  managedAgentRuntime,
   member,
   memberAvatarLabel,
   memberIsBot,
@@ -205,13 +197,21 @@ export function MembersSidebarMemberCard({
             ) : null}
           </div>
         )}
-        {managedAgent ? (
-          <span
-            className="sr-only"
+        {managedAgentRuntime || managedAgent ? (
+          <Badge
+            className="mt-1 normal-case tracking-normal"
             data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
+            variant={
+              managedAgentRuntime &&
+              agentCommunityAvailability(managedAgentRuntime) === "Here"
+                ? "default"
+                : "secondary"
+            }
           >
-            {formatManagedAgentStatus(managedAgent)}
-          </span>
+            {managedAgentRuntime
+              ? agentCommunityAvailability(managedAgentRuntime)
+              : "Unavailable"}
+          </Badge>
         ) : null}
         {managedAgent ? (
           <span
