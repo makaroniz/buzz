@@ -160,13 +160,21 @@ pub fn list_managed_agent_runtimes(
     Ok(statuses)
 }
 
+pub(crate) fn start_managed_agent_runtime_pair_lazy(
+    pubkey: String,
+    relay_url: String,
+    app: AppHandle,
+) -> Result<ManagedAgentRuntimeStatus, String> {
+    start_pair(pubkey, relay_url, true, None, app)
+}
+
 #[tauri::command]
 pub fn start_managed_agent_runtime(
     pubkey: String,
     relay_url: String,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
-    start_pair(pubkey, relay_url, true, None, app)
+    start_managed_agent_runtime_pair_lazy(pubkey, relay_url, app)
 }
 
 fn start_pair(

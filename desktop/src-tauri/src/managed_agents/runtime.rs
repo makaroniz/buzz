@@ -18,6 +18,7 @@ mod path;
 pub(in crate::managed_agents) use path::build_augmented_path;
 
 mod stop;
+pub(crate) use stop::managed_agent_runtime_keys;
 pub use stop::stop_managed_agent_process;
 
 mod sweep;

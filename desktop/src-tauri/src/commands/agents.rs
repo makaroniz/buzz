@@ -307,6 +307,78 @@ async fn ensure_relay_mesh_for_record(
     Ok(())
 }
 
+pub(super) async fn start_local_agent_pairs_with_preflight(
+    app: &AppHandle,
+    state: &AppState,
+    pubkey: &str,
+    relay_urls: &[String],
+) -> Result<ManagedAgentSummary, String> {
+    let record_snapshot = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        load_managed_agents(app)?
+            .into_iter()
+            .find(|record| record.pubkey == pubkey)
+            .ok_or_else(|| format!("agent {pubkey} not found"))?
+    };
+    if record_snapshot.backend != BackendKind::Local {
+        return Err(format!("agent {pubkey} is not a local agent"));
+    }
+    ensure_relay_mesh_for_record(app, &record_snapshot, false).await?;
+
+    {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let mut records = load_managed_agents(app)?;
+        let record = find_managed_agent_mut(&mut records, pubkey)?;
+        let personas = load_personas(app).unwrap_or_default();
+        if let Some(persona_id) = record.persona_id.clone() {
+            if let Some(persona) = personas.iter().find(|persona| persona.id == persona_id) {
+                crate::managed_agents::persona_events::apply_persona_snapshot(record, persona);
+                record.updated_at = crate::util::now_iso();
+            }
+        }
+        save_managed_agents(app, &records)?;
+    }
+
+    let mut errors = Vec::new();
+    for relay_url in relay_urls {
+        if let Err(error) = crate::managed_agents::start_managed_agent_runtime_pair_lazy(
+            pubkey.to_string(),
+            relay_url.clone(),
+            app.clone(),
+        ) {
+            errors.push(format!("{relay_url}: {error}"));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(format!(
+            "failed to restart one or more managed-agent runtime pairs: {}",
+            errors.join("; ")
+        ));
+    }
+
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let records = load_managed_agents(app)?;
+    let runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let personas = load_personas(app).unwrap_or_default();
+    let record = records
+        .iter()
+        .find(|record| record.pubkey == pubkey)
+        .ok_or_else(|| format!("agent {pubkey} not found"))?;
+    build_managed_agent_summary(app, record, &runtimes, &personas)
+}
+
 pub(super) async fn start_local_agent_with_preflight(
     app: &AppHandle,
     state: &AppState,

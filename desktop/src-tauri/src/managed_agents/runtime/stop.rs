@@ -8,7 +8,7 @@ use super::{
     ManagedAgentRecord, ManagedAgentRuntimeKey,
 };
 
-fn managed_agent_runtime_keys<T>(
+pub(crate) fn managed_agent_runtime_keys<T>(
     runtimes: &HashMap<ManagedAgentRuntimeKey, T>,
     pubkey: &str,
 ) -> Vec<ManagedAgentRuntimeKey> {
@@ -16,6 +16,17 @@ fn managed_agent_runtime_keys<T>(
         .keys()
         .filter(|key| key.pubkey.eq_ignore_ascii_case(pubkey))
         .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn managed_agent_runtime_relay_urls<T>(
+    runtimes: &HashMap<ManagedAgentRuntimeKey, T>,
+    pubkey: &str,
+) -> Vec<String> {
+    managed_agent_runtime_keys(runtimes, pubkey)
+        .into_iter()
+        .map(|key| key.relay_url)
         .collect()
 }
 
@@ -67,7 +78,7 @@ pub fn stop_managed_agent_process(
                 .map_err(|error| format!("failed to wait for agent shutdown: {error}"))?;
             record.last_exit_code = status.code();
             super::super::remove_agent_runtime_receipt(app, &key);
-            append_log_marker(
+            if let Err(error) = append_log_marker(
                 &runtime.log_path,
                 &format!(
                     "=== stopped {} ({}) at {} ===",
@@ -75,7 +86,13 @@ pub fn stop_managed_agent_process(
                     record.pubkey,
                     now_iso()
                 ),
-            )
+            ) {
+                eprintln!(
+                    "buzz-desktop: failed to append stop marker for {} on {}: {error}",
+                    record.pubkey, key.relay_url
+                );
+            }
+            Ok(())
         })();
         if let Err(error) = result {
             errors.push(format!("{}: {error}", key.relay_url));
@@ -105,6 +122,26 @@ pub fn stop_managed_agent_process(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pair_preserving_restart_targets_exact_original_relays() {
+        let agent = "aa".repeat(32);
+        let other = "bb".repeat(32);
+        let first = ManagedAgentRuntimeKey::new(&agent, "wss://one.example").unwrap();
+        let second = ManagedAgentRuntimeKey::new(&agent, "wss://two.example").unwrap();
+        let unrelated = ManagedAgentRuntimeKey::new(other, "wss://fallback.example").unwrap();
+        let runtimes = HashMap::from([(first, ()), (second, ()), (unrelated, ())]);
+
+        let mut relays = managed_agent_runtime_relay_urls(&runtimes, &agent);
+        relays.sort();
+        assert_eq!(
+            relays,
+            vec![
+                "wss://one.example".to_string(),
+                "wss://two.example".to_string()
+            ]
+        );
+    }
 
     #[test]
     fn agent_wide_selection_drains_every_pair_only_for_that_agent() {
