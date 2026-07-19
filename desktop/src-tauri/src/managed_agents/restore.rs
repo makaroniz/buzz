@@ -120,20 +120,12 @@ pub async fn restore_managed_agents_on_launch(
             .chain(
                 super::read_all_agent_runtime_receipts(app)
                     .into_iter()
-                    .filter_map(|(_, receipt)| {
-                        let canonical = super::ManagedAgentRuntimeKey::new(
-                            receipt.key.pubkey.clone(),
-                            &receipt.key.relay_url,
+                    .filter_map(|(path, receipt)| {
+                        super::valid_agent_runtime_receipt(
+                            &path,
+                            &receipt,
+                            &super::current_instance_id(app),
                         )
-                        .ok()?;
-                        (canonical == receipt.key
-                            && receipt.desktop_instance_id == super::current_instance_id(app)
-                            && super::process_is_running(receipt.pid)
-                            && super::process_belongs_to_us(receipt.pid)
-                            && super::process_has_buzz_marker(
-                                receipt.pid,
-                                &receipt.desktop_instance_id,
-                            ))
                         .then_some(receipt.pid)
                     }),
             )

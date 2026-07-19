@@ -47,12 +47,10 @@ fn emit_status(app: &AppHandle, status: &ManagedAgentRuntimeStatus) {
     let _ = app.emit(STATUS_EVENT, status);
 }
 
-#[tauri::command]
-pub fn put_managed_agent_runtime_lifecycle(
-    outer_pubkey: String,
-    payload: super::ManagedAgentRuntimeLifecycleObserverPayload,
-    app: AppHandle,
-) -> Result<ManagedAgentRuntimeStatus, String> {
+fn observer_lifecycle_key(
+    outer_pubkey: &str,
+    payload: &super::ManagedAgentRuntimeLifecycleObserverPayload,
+) -> Result<ManagedAgentRuntimeKey, String> {
     if outer_pubkey.to_ascii_lowercase() != payload.pubkey.to_ascii_lowercase() {
         return Err("observer signer does not match lifecycle payload pubkey".into());
     }
@@ -68,19 +66,35 @@ pub fn put_managed_agent_runtime_lifecycle(
     if payload.lifecycle != ManagedAgentRuntimeLifecycle::Failed && payload.error.is_some() {
         return Err("lifecycle error is only valid for failed".into());
     }
+    ManagedAgentRuntimeKey::new(payload.pubkey.clone(), &payload.relay_url)
+}
 
+#[tauri::command]
+pub fn put_managed_agent_runtime_lifecycle(
+    outer_pubkey: String,
+    payload: super::ManagedAgentRuntimeLifecycleObserverPayload,
+    app: AppHandle,
+) -> Result<ManagedAgentRuntimeStatus, String> {
+    let key = observer_lifecycle_key(&outer_pubkey, &payload)?;
     let state = app.state::<AppState>();
-    let key = ManagedAgentRuntimeKey::new(payload.pubkey, &payload.relay_url)?;
     let records = load_managed_agents(&app)?;
     let record = records
         .iter()
         .find(|record| record.pubkey.eq_ignore_ascii_case(&key.pubkey))
         .ok_or_else(|| format!("agent {} not found", key.pubkey))?;
-    let mut runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
     let runtime = runtimes
         .get_mut(&key)
         .ok_or_else(|| "lifecycle frame does not match a tracked runtime pair".to_string())?;
-    if runtime.child.try_wait().map_err(|e| e.to_string())?.is_some() {
+    if runtime
+        .child
+        .try_wait()
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
         return Err("lifecycle frame arrived after process exit".into());
     }
     runtime.lifecycle = payload.lifecycle;
@@ -91,10 +105,15 @@ pub fn put_managed_agent_runtime_lifecycle(
 }
 
 #[tauri::command]
-pub fn list_managed_agent_runtimes(app: AppHandle) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
+pub fn list_managed_agent_runtimes(
+    app: AppHandle,
+) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
     let state = app.state::<AppState>();
     let records = load_managed_agents(&app)?;
-    let runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
+    let runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
     Ok(runtimes
         .iter()
         .filter_map(|(key, runtime)| {
@@ -127,23 +146,34 @@ fn start_pair(
     if state.shutdown_started.load(Ordering::Acquire) {
         return Err("desktop shutdown has started".into());
     }
-    let _store = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+    let _store = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
     let mut records = load_managed_agents(&app)?;
     let record = find_managed_agent_mut(&mut records, &pubkey)?;
     if record.backend != BackendKind::Local {
         return Err("managed runtime pairs require a local agent".into());
     }
     let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
-    let mut runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
-    if runtimes.get_mut(&key).is_some_and(|runtime| {
-        runtime.child.try_wait().ok().flatten().is_none()
-    }) {
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
+    if runtimes
+        .get_mut(&key)
+        .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none())
+    {
         let status = status_for(&app, record, &key, runtimes.get(&key), None);
         return Ok(status);
     }
     runtimes.remove(&key);
 
-    let owner = state.keys.lock().ok().map(|keys| keys.public_key().to_hex());
+    let owner = state
+        .keys
+        .lock()
+        .ok()
+        .map(|keys| keys.public_key().to_hex());
     let mut process = spawn_agent_child(&app, record, &key.relay_url, lazy, owner.as_deref())?;
     let now = crate::util::now_iso();
     let receipt = ManagedAgentRuntimeReceipt {
@@ -181,11 +211,17 @@ pub fn stop_managed_agent_runtime(
         .managed_agent_runtime_transition
         .lock()
         .map_err(|e| e.to_string())?;
-    let _store = state.managed_agents_store_lock.lock().map_err(|e| e.to_string())?;
+    let _store = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
     let mut records = load_managed_agents(&app)?;
     let record = find_managed_agent_mut(&mut records, &pubkey)?;
     let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
-    let mut runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
     if let Some(mut runtime) = runtimes.remove(&key) {
         if process_is_running(runtime.child.id()) {
             terminate_process(runtime.child.id())?;
@@ -287,13 +323,7 @@ pub async fn reconcile_managed_agent_runtimes(
                         rows.push(status);
                     }
                     Err(error) => {
-                        let mut status = status_for(
-                            &app,
-                            &record,
-                            &key,
-                            None,
-                            Some(requested),
-                        );
+                        let mut status = status_for(&app, &record, &key, None, Some(requested));
                         status.lifecycle = ManagedAgentRuntimeLifecycle::Failed;
                         status.error = Some(error);
                         rows.push(status);
@@ -311,4 +341,75 @@ pub async fn reconcile_managed_agent_runtimes(
         }
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload(
+        relay_url: &str,
+        lifecycle: ManagedAgentRuntimeLifecycle,
+        error: Option<&str>,
+    ) -> super::super::ManagedAgentRuntimeLifecycleObserverPayload {
+        super::super::ManagedAgentRuntimeLifecycleObserverPayload {
+            pubkey: "aa".repeat(32),
+            relay_url: relay_url.into(),
+            lifecycle,
+            error: error.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn observer_lifecycle_key_preserves_exact_canonical_pair() {
+        let first = payload(
+            "WSS://Relay.Example:443/",
+            ManagedAgentRuntimeLifecycle::Ready,
+            None,
+        );
+        let key = observer_lifecycle_key(&first.pubkey, &first).unwrap();
+        assert_eq!(key.pubkey, first.pubkey);
+        assert_eq!(key.relay_url, "wss://relay.example");
+
+        let other = payload(
+            "wss://other.example",
+            ManagedAgentRuntimeLifecycle::Ready,
+            None,
+        );
+        assert_ne!(key, observer_lifecycle_key(&other.pubkey, &other).unwrap());
+    }
+
+    #[test]
+    fn observer_lifecycle_rejects_cross_agent_and_desktop_states() {
+        let ready = payload(
+            "wss://relay.example",
+            ManagedAgentRuntimeLifecycle::Ready,
+            None,
+        );
+        assert!(observer_lifecycle_key(&"bb".repeat(32), &ready).is_err());
+
+        let stopped = payload(
+            "wss://relay.example",
+            ManagedAgentRuntimeLifecycle::Stopped,
+            None,
+        );
+        assert!(observer_lifecycle_key(&stopped.pubkey, &stopped).is_err());
+    }
+
+    #[test]
+    fn observer_lifecycle_enforces_failed_error_contract() {
+        let failed = payload(
+            "wss://relay.example",
+            ManagedAgentRuntimeLifecycle::Failed,
+            None,
+        );
+        assert!(observer_lifecycle_key(&failed.pubkey, &failed).is_err());
+
+        let ready_with_error = payload(
+            "wss://relay.example",
+            ManagedAgentRuntimeLifecycle::Ready,
+            Some("unexpected"),
+        );
+        assert!(observer_lifecycle_key(&ready_with_error.pubkey, &ready_with_error).is_err());
+    }
 }

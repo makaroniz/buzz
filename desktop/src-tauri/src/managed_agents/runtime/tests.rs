@@ -799,3 +799,44 @@ fn own_group_grandchild_detected_by_ancestor_walk() {
     unsafe { libc::kill(-(intermediate_pid as i32), libc::SIGKILL) };
     let _ = intermediate.wait();
 }
+
+// ── pair receipt validation tests ───────────────────────────────────────
+
+fn receipt_fixture(
+    key: crate::managed_agents::ManagedAgentRuntimeKey,
+) -> crate::managed_agents::ManagedAgentRuntimeReceipt {
+    crate::managed_agents::ManagedAgentRuntimeReceipt {
+        key,
+        pid: std::process::id(),
+        desktop_instance_id: "test-instance".into(),
+        started_at: "now".into(),
+    }
+}
+
+#[test]
+fn receipt_validation_rejects_noncanonical_identity() {
+    let mut receipt = receipt_fixture(
+        crate::managed_agents::ManagedAgentRuntimeKey::new("aa".repeat(32), "wss://relay.example")
+            .unwrap(),
+    );
+    receipt.key.relay_url = "WSS://RELAY.EXAMPLE/".into();
+    let path = std::path::PathBuf::from(format!("{}.json", receipt.key.runtime_id()));
+    assert!(!super::valid_agent_runtime_receipt(
+        &path,
+        &receipt,
+        "test-instance"
+    ));
+}
+
+#[test]
+fn receipt_validation_rejects_wrong_pair_filename() {
+    let receipt = receipt_fixture(
+        crate::managed_agents::ManagedAgentRuntimeKey::new("aa".repeat(32), "wss://relay.example")
+            .unwrap(),
+    );
+    assert!(!super::valid_agent_runtime_receipt(
+        std::path::Path::new("corrupted.json"),
+        &receipt,
+        "test-instance"
+    ));
+}

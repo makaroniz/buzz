@@ -401,6 +401,25 @@ fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
     sigterm_then_sigkill(&unique);
 }
 
+pub(crate) fn valid_agent_runtime_receipt(
+    path: &std::path::Path,
+    receipt: &super::ManagedAgentRuntimeReceipt,
+    instance_id: &str,
+) -> bool {
+    let Ok(canonical) =
+        ManagedAgentRuntimeKey::new(receipt.key.pubkey.clone(), &receipt.key.relay_url)
+    else {
+        return false;
+    };
+    canonical == receipt.key
+        && path.file_name().and_then(|name| name.to_str())
+            == Some(&format!("{}.json", receipt.key.runtime_id()))
+        && receipt.desktop_instance_id == instance_id
+        && process_is_running(receipt.pid)
+        && process_belongs_to_us(receipt.pid)
+        && process_has_buzz_marker(receipt.pid, &receipt.desktop_instance_id)
+}
+
 /// Kill orphaned agent processes using PID file receipts. Reads all files from
 /// `agent-pids/`, verifies each PID still belongs to a known agent binary,
 /// then resolves each candidate's actual PGID and signals the process group.
@@ -414,19 +433,7 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
     let receipt_entries: Vec<_> = super::read_all_agent_runtime_receipts(app)
         .into_iter()
         .filter_map(|(path, receipt)| {
-            let canonical = ManagedAgentRuntimeKey::new(
-                receipt.key.pubkey.clone(),
-                &receipt.key.relay_url,
-            )
-            .ok();
-            let valid = canonical.as_ref() == Some(&receipt.key)
-                && path.file_name().and_then(|name| name.to_str())
-                    == Some(&format!("{}.json", receipt.key.runtime_id()))
-                && receipt.desktop_instance_id == instance_id
-                && process_is_running(receipt.pid)
-                && process_belongs_to_us(receipt.pid)
-                && process_has_buzz_marker(receipt.pid, &receipt.desktop_instance_id);
-            if valid {
+            if valid_agent_runtime_receipt(&path, &receipt, &instance_id) {
                 Some((path, receipt))
             } else {
                 super::remove_agent_runtime_receipt_path(&path);
