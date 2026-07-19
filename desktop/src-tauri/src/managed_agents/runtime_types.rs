@@ -13,8 +13,12 @@ pub struct ManagedAgentRuntimeKey {
 
 impl ManagedAgentRuntimeKey {
     pub fn new(pubkey: impl Into<String>, relay_url: &str) -> Result<Self, String> {
+        let pubkey = pubkey.into();
+        if pubkey.len() != 64 || !pubkey.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("managed-agent pubkey must be 64 hexadecimal characters".into());
+        }
         Ok(Self {
-            pubkey: pubkey.into(),
+            pubkey: pubkey.to_ascii_lowercase(),
             relay_url: buzz_core_pkg::relay::normalize_relay_url(relay_url)
                 .map_err(|error| error.to_string())?,
         })
@@ -43,6 +47,9 @@ pub struct ManagedAgentPairRuntime {
     pub process: ManagedAgentProcess,
     pub lifecycle: ManagedAgentRuntimeLifecycle,
     pub error: Option<String>,
+    /// Unpredictable identity for this exact harness generation. Lifecycle
+    /// frames from prior processes are rejected even when the pair is live.
+    pub start_nonce: String,
 }
 
 impl std::ops::Deref for ManagedAgentPairRuntime {
@@ -61,10 +68,12 @@ impl std::ops::DerefMut for ManagedAgentPairRuntime {
 
 impl ManagedAgentPairRuntime {
     pub fn starting(process: ManagedAgentProcess) -> Self {
+        let start_nonce = process.start_nonce.clone();
         Self {
             process,
             lifecycle: ManagedAgentRuntimeLifecycle::Starting,
             error: None,
+            start_nonce,
         }
     }
 }
@@ -90,15 +99,9 @@ pub struct ManagedAgentRuntimeStatus {
 pub struct ManagedAgentRuntimeLifecycleObserverPayload {
     pub pubkey: String,
     pub relay_url: String,
+    pub start_nonce: String,
     pub lifecycle: ManagedAgentRuntimeLifecycle,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedAgentRuntimeTarget {
-    pub pubkey: String,
-    pub relay_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

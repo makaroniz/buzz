@@ -1955,13 +1955,11 @@ pub fn spawn_agent_child(
         }
     }
 
-    // Mark as Buzz-managed *and* which desktop instance owns us, so the
-    // system-wide orphan sweep only reaps this instance's own agents and never
-    // another live Buzz's (e.g. a `just dev` build won't kill a DMG build's
-    // agents). Propagates automatically through the full tree (buzz-acp →
-    // goose → MCP servers) because neither buzz-acp nor goose calls
-    // env_clear().
-    command.env("BUZZ_MANAGED_AGENT", current_instance_id(app));
+    // Stamp desktop ownership and an unpredictable harness-generation identity.
+    let start_nonce = uuid::Uuid::new_v4().simple().to_string();
+    command
+        .env("BUZZ_MANAGED_AGENT", current_instance_id(app))
+        .env("BUZZ_MANAGED_AGENT_START_NONCE", &start_nonce);
 
     // Spawn the harness in its own process group so we can kill the entire
     // tree (harness + MCP servers + agent subprocesses) on shutdown.
@@ -2025,6 +2023,7 @@ pub fn spawn_agent_child(
         spawn_config_hash,
         spawned_setup_mode,
         spawned_adapter_availability,
+        start_nonce,
         &record.name,
     ));
     #[cfg(not(windows))]
@@ -2034,6 +2033,7 @@ pub fn spawn_agent_child(
         spawn_config_hash,
         setup_mode: spawned_setup_mode,
         adapter_availability: spawned_adapter_availability,
+        start_nonce,
     })
 }
 

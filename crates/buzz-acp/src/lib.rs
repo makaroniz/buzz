@@ -92,6 +92,7 @@ async fn publish_presence(
 
 fn emit_runtime_lifecycle(
     observer: Option<&observer::ObserverHandle>,
+    start_nonce: &str,
     pubkey: &str,
     relay_url: &str,
     lifecycle: &str,
@@ -105,6 +106,7 @@ fn emit_runtime_lifecycle(
             serde_json::json!({
                 "pubkey": pubkey,
                 "relayUrl": relay_url,
+                "startNonce": start_nonce,
                 "lifecycle": lifecycle,
                 "error": error,
             }),
@@ -1450,6 +1452,7 @@ async fn tokio_main() -> Result<()> {
         ));
     }
 
+    let runtime_start_nonce = std::env::var("BUZZ_MANAGED_AGENT_START_NONCE").unwrap_or_default();
     let dedup_mode = config.dedup_mode;
     let mut queue =
         EventQueue::new(dedup_mode).with_in_flight_deadline(config.max_turn_duration_secs);
@@ -1467,6 +1470,7 @@ async fn tokio_main() -> Result<()> {
     if config.lazy_pool {
         emit_runtime_lifecycle(
             observer.as_ref(),
+            &runtime_start_nonce,
             &pubkey_hex,
             &config.relay_url,
             "listening",
@@ -1658,6 +1662,7 @@ async fn tokio_main() -> Result<()> {
             {
                 emit_runtime_lifecycle(
                     observer.as_ref(),
+                    &runtime_start_nonce,
                     &pubkey_hex,
                     &config.relay_url,
                     "waking",
@@ -1802,6 +1807,7 @@ async fn tokio_main() -> Result<()> {
                         ) {
                             emit_runtime_lifecycle(
                                 observer.as_ref(),
+                                &runtime_start_nonce,
                                 &pubkey_hex,
                                 &config.relay_url,
                                 "failed",
@@ -2474,6 +2480,7 @@ async fn tokio_main() -> Result<()> {
                         pool_ready = true;
                         emit_runtime_lifecycle(
                             observer.as_ref(),
+                            &runtime_start_nonce,
                             &pubkey_hex,
                             &config.relay_url,
                             "ready",
@@ -2489,6 +2496,7 @@ async fn tokio_main() -> Result<()> {
                         debug_assert_eq!(pool_lifecycle.failed_error(), Some(error.as_str()));
                         emit_runtime_lifecycle(
                             observer.as_ref(),
+                            &runtime_start_nonce,
                             &pubkey_hex,
                             &config.relay_url,
                             "failed",

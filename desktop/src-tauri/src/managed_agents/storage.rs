@@ -654,13 +654,6 @@ pub fn read_all_agent_runtime_receipts(
         .collect()
 }
 
-/// Write a legacy PID file for a spawned agent. Retained only for migration.
-pub fn write_agent_pid_file(app: &AppHandle, pubkey: &str, pid: u32) -> Result<(), String> {
-    let path = agent_pids_dir(app)?.join(format!("{pubkey}.pid"));
-    fs::write(&path, pid.to_string())
-        .map_err(|error| format!("failed to write PID file {}: {error}", path.display()))
-}
-
 /// Remove the PID file for an agent (e.g. on normal stop).
 pub fn remove_agent_pid_file(app: &AppHandle, pubkey: &str) {
     if let Ok(dir) = agent_pids_dir(app) {

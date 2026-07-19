@@ -52,7 +52,7 @@ fn observer_lifecycle_key(
     outer_pubkey: &str,
     payload: &super::ManagedAgentRuntimeLifecycleObserverPayload,
 ) -> Result<ManagedAgentRuntimeKey, String> {
-    if outer_pubkey.to_ascii_lowercase() != payload.pubkey.to_ascii_lowercase() {
+    if !outer_pubkey.eq_ignore_ascii_case(&payload.pubkey) {
         return Err("observer signer does not match lifecycle payload pubkey".into());
     }
     if matches!(
@@ -90,6 +90,9 @@ pub fn put_managed_agent_runtime_lifecycle(
     let runtime = runtimes
         .get_mut(&key)
         .ok_or_else(|| "lifecycle frame does not match a tracked runtime pair".to_string())?;
+    if runtime.start_nonce != payload.start_nonce {
+        return Err("lifecycle frame does not match the current harness generation".into());
+    }
     if runtime
         .child
         .try_wait()
@@ -110,18 +113,51 @@ pub fn list_managed_agent_runtimes(
     app: AppHandle,
 ) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
     let state = app.state::<AppState>();
-    let records = load_managed_agents(&app)?;
-    let runtimes = state
+    let _transition = state
+        .managed_agent_runtime_transition
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let _store = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let mut records = load_managed_agents(&app)?;
+    let mut runtimes = state
         .managed_agent_processes
         .lock()
         .map_err(|e| e.to_string())?;
-    Ok(runtimes
-        .iter()
-        .filter_map(|(key, runtime)| {
-            let record = records.iter().find(|record| record.pubkey == key.pubkey)?;
-            Some(status_for(&app, record, key, Some(runtime), None))
+    let exited_keys: Vec<_> = runtimes
+        .iter_mut()
+        .filter_map(|(key, runtime)| match runtime.child.try_wait() {
+            Ok(Some(_)) | Err(_) => Some(key.clone()),
+            Ok(None) => None,
         })
-        .collect())
+        .collect();
+    let mut statuses = Vec::new();
+    for key in exited_keys {
+        runtimes.remove(&key);
+        super::remove_agent_runtime_receipt(&app, &key);
+        state.clear_agent_session_cache(&key);
+        if let Some(record) = records
+            .iter_mut()
+            .find(|record| record.pubkey.eq_ignore_ascii_case(&key.pubkey))
+        {
+            record.updated_at = crate::util::now_iso();
+            record.last_stopped_at = Some(record.updated_at.clone());
+            let status = status_for(&app, record, &key, None, None);
+            emit_status(&app, &status);
+            statuses.push(status);
+        }
+    }
+    statuses.extend(runtimes.iter().filter_map(|(key, runtime)| {
+        let record = records
+            .iter()
+            .find(|record| record.pubkey.eq_ignore_ascii_case(&key.pubkey))?;
+        Some(status_for(&app, record, key, Some(runtime), None))
+    }));
+    drop(runtimes);
+    save_managed_agents(&app, &records)?;
+    Ok(statuses)
 }
 
 #[tauri::command]
@@ -130,13 +166,14 @@ pub fn start_managed_agent_runtime(
     relay_url: String,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
-    start_pair(pubkey, relay_url, true, app)
+    start_pair(pubkey, relay_url, true, None, app)
 }
 
 fn start_pair(
     pubkey: String,
     relay_url: String,
     lazy: bool,
+    expected_updated_at: Option<&str>,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
     let state = app.state::<AppState>();
@@ -155,6 +192,9 @@ fn start_pair(
     let record = find_managed_agent_mut(&mut records, &pubkey)?;
     if record.backend != BackendKind::Local {
         return Err("managed runtime pairs require a local agent".into());
+    }
+    if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
+        return Err("managed agent changed while runtime reconciliation was in flight".into());
     }
     let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
     let mut runtimes = state
@@ -251,7 +291,7 @@ pub fn restart_managed_agent_runtime(
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
     stop_managed_agent_runtime(pubkey.clone(), relay_url.clone(), app.clone())?;
-    start_pair(pubkey, relay_url, true, app)
+    start_pair(pubkey, relay_url, true, None, app)
 }
 
 async fn discover_agent_membership(
@@ -290,7 +330,7 @@ pub async fn reconcile_managed_agent_runtimes(
     for community in communities {
         for record in records
             .iter()
-            .filter(|record| record.backend == BackendKind::Local)
+            .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
         {
             jobs.push((record.clone(), community.relay_url.clone()));
         }
@@ -318,6 +358,7 @@ pub async fn reconcile_managed_agent_runtimes(
                     record.pubkey.clone(),
                     key.relay_url.clone(),
                     true,
+                    Some(&record.updated_at),
                     app.clone(),
                 ) {
                     Ok(mut status) => {
@@ -357,9 +398,22 @@ mod tests {
         super::super::ManagedAgentRuntimeLifecycleObserverPayload {
             pubkey: "aa".repeat(32),
             relay_url: relay_url.into(),
+            start_nonce: "test-generation".into(),
             lifecycle,
             error: error.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn runtime_key_rejects_non_hex_pubkeys() {
+        assert!(ManagedAgentRuntimeKey::new("../not-a-key", "wss://relay.example").is_err());
+        assert!(ManagedAgentRuntimeKey::new("gg".repeat(32), "wss://relay.example").is_err());
+    }
+
+    #[test]
+    fn runtime_key_canonicalizes_hex_pubkeys() {
+        let key = ManagedAgentRuntimeKey::new("AA".repeat(32), "wss://relay.example").unwrap();
+        assert_eq!(key.pubkey, "aa".repeat(32));
     }
 
     #[test]
