@@ -404,7 +404,11 @@ async function handleRelayObserverEvent(
     } else if (parsed.kind === "control_result") {
       dispatchControlResult(agentPubkey, parsed.payload);
     } else if (parsed.kind === "managed_agent_runtime_lifecycle") {
-      void putManagedAgentRuntimeLifecycle(agentPubkey, parsed.payload);
+      void putManagedAgentRuntimeLifecycle(agentPubkey, parsed.payload).catch(
+        (error) => {
+          console.debug("Late/untracked lifecycle frame dropped:", error);
+        },
+      );
     }
   } catch (error) {
     if (activeGeneration !== generation) {
