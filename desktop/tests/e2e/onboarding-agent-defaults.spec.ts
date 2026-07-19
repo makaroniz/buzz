@@ -1005,9 +1005,9 @@ test("community setup back button returns to agent defaults", async ({
   await navigateToConfigPage(page);
   await page.getByTestId("onboarding-finish").click();
 
-  await expect(page.getByText("Join or create a community")).toBeVisible();
+  await expect(page.getByTestId("community-home")).toBeVisible();
 
-  await page.getByTestId("welcome-setup-back").click();
+  await page.getByRole("button", { name: "Identity settings" }).click();
   await expect(page.getByTestId("onboarding-page-config")).toBeVisible();
 });
 
