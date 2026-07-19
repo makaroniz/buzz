@@ -87,6 +87,15 @@ pub struct ManagedAgentRuntimeStatus {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManagedAgentRuntimeLifecycleObserverPayload {
+    pub pubkey: String,
+    pub relay_url: String,
+    pub lifecycle: ManagedAgentRuntimeLifecycle,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ManagedAgentRuntimeTarget {
     pub pubkey: String,
     pub relay_url: String,

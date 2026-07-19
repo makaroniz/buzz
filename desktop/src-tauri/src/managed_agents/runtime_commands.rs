@@ -48,6 +48,49 @@ fn emit_status(app: &AppHandle, status: &ManagedAgentRuntimeStatus) {
 }
 
 #[tauri::command]
+pub fn put_managed_agent_runtime_lifecycle(
+    outer_pubkey: String,
+    payload: super::ManagedAgentRuntimeLifecycleObserverPayload,
+    app: AppHandle,
+) -> Result<ManagedAgentRuntimeStatus, String> {
+    if outer_pubkey.to_ascii_lowercase() != payload.pubkey.to_ascii_lowercase() {
+        return Err("observer signer does not match lifecycle payload pubkey".into());
+    }
+    if matches!(
+        payload.lifecycle,
+        ManagedAgentRuntimeLifecycle::Starting | ManagedAgentRuntimeLifecycle::Stopped
+    ) {
+        return Err("observer cannot author starting or stopped lifecycle".into());
+    }
+    if payload.lifecycle == ManagedAgentRuntimeLifecycle::Failed && payload.error.is_none() {
+        return Err("failed lifecycle requires an error".into());
+    }
+    if payload.lifecycle != ManagedAgentRuntimeLifecycle::Failed && payload.error.is_some() {
+        return Err("lifecycle error is only valid for failed".into());
+    }
+
+    let state = app.state::<AppState>();
+    let key = ManagedAgentRuntimeKey::new(payload.pubkey, &payload.relay_url)?;
+    let records = load_managed_agents(&app)?;
+    let record = records
+        .iter()
+        .find(|record| record.pubkey.eq_ignore_ascii_case(&key.pubkey))
+        .ok_or_else(|| format!("agent {} not found", key.pubkey))?;
+    let mut runtimes = state.managed_agent_processes.lock().map_err(|e| e.to_string())?;
+    let runtime = runtimes
+        .get_mut(&key)
+        .ok_or_else(|| "lifecycle frame does not match a tracked runtime pair".to_string())?;
+    if runtime.child.try_wait().map_err(|e| e.to_string())?.is_some() {
+        return Err("lifecycle frame arrived after process exit".into());
+    }
+    runtime.lifecycle = payload.lifecycle;
+    runtime.error = payload.error;
+    let status = status_for(&app, record, &key, Some(runtime), None);
+    emit_status(&app, &status);
+    Ok(status)
+}
+
+#[tauri::command]
 pub fn list_managed_agent_runtimes(app: AppHandle) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
     let state = app.state::<AppState>();
     let records = load_managed_agents(&app)?;
