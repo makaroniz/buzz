@@ -20,6 +20,12 @@ export class TwoRelayHarness {
   readonly relays: readonly [RelaySpec, RelaySpec];
   private readonly processes: OwnedProcess[] = [];
 
+  get ownedPids(): number[] {
+    return this.processes.flatMap(({ child }) =>
+      child.pid ? [child.pid] : [],
+    );
+  }
+
   private constructor(root: string, relays: readonly [RelaySpec, RelaySpec]) {
     this.root = root;
     this.relays = relays;
@@ -52,9 +58,11 @@ export class TwoRelayHarness {
     return this.spawnOwned(name, binary, [], {
       BUZZ_RELAY_URL: relayWsUrl,
       BUZZ_PRIVATE_KEY: privateKey,
-      BUZZ_ACP_LAZY_POOL: "1",
+      BUZZ_AUTH_TAG: "",
+      BUZZ_ACP_LAZY_POOL: "true",
       BUZZ_ACP_AGENT_COMMAND: process.execPath,
       BUZZ_ACP_AGENT_ARGS: resolve("tests/e2e/fixtures/fake-acp-agent.mjs"),
+      BUZZ_E2E_CLI_BIN: process.env.BUZZ_E2E_CLI_BIN,
       ...extraEnv,
     });
   }

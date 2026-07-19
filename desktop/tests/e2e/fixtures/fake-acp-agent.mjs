@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /** Deterministic ACP fixture for agents-everywhere live tests. */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createInterface } from "node:readline";
+
+const exec = promisify(execFile);
 
 const wakeDelayMs = Number.parseInt(
   process.env.BUZZ_E2E_FAKE_ACP_WAKE_MS ?? "0",
@@ -50,6 +54,7 @@ for await (const line of input) {
       const ids = [...prompt.matchAll(/\bAE-ID:([A-Za-z0-9._:-]+)\b/g)].map(
         (match) => match[1],
       );
+      const ack = `AE-ACK:${ids.join(",")}`;
       write({
         jsonrpc: "2.0",
         method: "session/update",
@@ -57,10 +62,25 @@ for await (const line of input) {
           sessionId: request.params?.sessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: `AE-ACK:${ids.join(",")}` },
+            content: { type: "text", text: ack },
           },
         },
       });
+      const channel = prompt.match(/^Channel: .+ \(#([^)]+)\)$/m)?.[1];
+      const replyTo = prompt.match(/--reply-to ([0-9a-f]{64})/)?.[1];
+      const cli = process.env.BUZZ_E2E_CLI_BIN;
+      if (cli && channel) {
+        const args = [
+          "messages",
+          "send",
+          "--channel",
+          channel,
+          "--content",
+          ack,
+        ];
+        if (replyTo) args.push("--reply-to", replyTo);
+        await exec(cli, args, { env: process.env });
+      }
       write({
         jsonrpc: "2.0",
         id: request.id,
