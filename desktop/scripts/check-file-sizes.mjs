@@ -55,7 +55,9 @@ const overrides = new Map([
   // builderlab.rs; this narrowly ratchets the command wiring while lib.rs is
   // queued for a broader composition-root split. Bumped for the
   // archive/unarchive/transfer community-management commands (web parity).
-  ["src-tauri/src/lib.rs", 1013],
+  // agents-everywhere: pair-scoped runtime commands registered in the Tauri
+  // composition root (+11; wiring only, logic lives in managed_agents/).
+  ["src-tauri/src/lib.rs", 1024],
   // persona-events rebase: build_deploy_payload threads `state` for the
   // read-time relay-URL workspace fallback while keeping the create-time env
   // pin (the credential-leak guard). Load-bearing feature growth from the
@@ -114,7 +116,10 @@ const overrides = new Map([
   // keyring-dev-isolation: agent key migration added copy_agent_keys_between_stores
   // and load_readonly support; file grew past 1000 default. Queued to split.
   // +7 for try_delete_agent_key result-returning seam (snapshot-import rollback).
-  ["src-tauri/src/managed_agents/storage.rs", 1335],
+  // agents-everywhere: per-(agent, community) runtime receipts — pair-keyed
+  // receipt read/write/remove + runtime log path helpers (+55). Load-bearing
+  // for pair-scoped restore/replacement; queued to split with the rest.
+  ["src-tauri/src/managed_agents/storage.rs", 1390],
   // harness-persona-sync: persona-runtime resolution threaded into the spawn
   // path here. Load-bearing feature growth; queued to split in the resolver
   // unify refactor followup. +26 for resolve_effective_prompt_model_provider
@@ -127,7 +132,9 @@ const overrides = new Map([
   // record_provider param + applies persona_field_with_record_fallback. +5 lines.
   // global-agent-config: spawn_agent_child loads global config and merges as
   // lowest env layer (+8 lines). Queued to split.
-  ["src-tauri/src/managed_agents/runtime.rs", 2216],
+  // agents-everywhere: pair-scoped replacement seam — injectable
+  // terminate_runtime_receipt_with (fail-closed replace-before-spawn) (+5).
+  ["src-tauri/src/managed_agents/runtime.rs", 2221],
   // config-bridge setup-payload env-boundary fix adds readiness wiring in
   // spawn_agent_child; load-bearing security fix, queued to split.
   ["src-tauri/src/managed_agents/config_bridge/reader.rs", 1016],
@@ -380,7 +387,9 @@ const overrides = new Map([
   // +5 (1068 -> 1073): merge with main, which independently added the
   // managed_agent_profile_reconcile_enabled flag (field + doc + init) under
   // its own 1042-line override. Union of two separately approved additions.
-  ["src-tauri/src/app_state.rs", 1073],
+  // +8: agents-everywhere re-keys the session cache from pubkey to
+  // ManagedAgentRuntimeKey (per-pair caches + pubkey-wide clear helper).
+  ["src-tauri/src/app_state.rs", 1081],
   // multi-slot splitting + no-op suppression (#1309): the ReadStateManager
   // class grew from ~700 lines to ~1019 with the addition of
   // splitContextsIntoBudgetedSlots (pure fn + 5 tests), publishSplitSlots,
@@ -450,7 +459,9 @@ const overrides = new Map([
   // is_safe_to_reveal allowlist + baked_env_thinking_effort_is_unmasked test.
   // +1: doctor-install-reliability: login_hint: None added to goose_runtime test stub.
   // +1: doctor-install-reliability review fixes: auth_probe_args: None added to stub.
-  ["src-tauri/src/commands/agent_config.rs", 1021],
+  // +11: agents-everywhere threads the pair-scoped runtime key through the
+  // session-config command surface (per-(agent, community) cache addressing).
+  ["src-tauri/src/commands/agent_config.rs", 1032],
   // codex-install-auto-restart review-fixes: should_restart_after_install
   // takes pid_alive:bool (pure predicate, no OS-dependent call); 3 racy
   // cache tests replaced with 6 pure availability_drift predicate tests;
