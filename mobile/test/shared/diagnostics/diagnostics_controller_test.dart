@@ -207,7 +207,7 @@ void main() {
     expect(reporter.initializeCalls, 1);
   });
 
-  test('close failure preserves persisted revocation', () async {
+  test('close failure preserves revocation and retries teardown', () async {
     final controller = await createController(
       storedValues: {diagnosticsConsentPreferenceKey: true},
     );
@@ -219,6 +219,17 @@ void main() {
     expect(controller.consentGranted, isFalse);
     expect(preferences.getBool(diagnosticsConsentPreferenceKey), isFalse);
     expect(reporter.closeCalls, 1);
+
+    reporter.closeError = null;
+    await controller.setConsent(false);
+
+    expect(controller.consentGranted, isFalse);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isFalse);
+    expect(reporter.closeCalls, 2);
+    expect(
+      logs,
+      contains('Diagnostics disabled: user consent is off; Sentry closed.'),
+    );
   });
 
   test('continues accepting changes after a failed operation', () async {

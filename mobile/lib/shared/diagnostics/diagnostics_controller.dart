@@ -61,6 +61,12 @@ class DiagnosticsController extends ChangeNotifier {
   Future<void> setConsent(bool granted) {
     return _serialize(() async {
       if (_consentGranted == granted) {
+        // A failed close keeps the runtime initialized even though the
+        // persisted preference and visible control are already off. Allow the
+        // same revocation to retry teardown until it succeeds.
+        if (!granted && _initialized) {
+          await _applyCurrentConsent();
+        }
         return;
       }
 
