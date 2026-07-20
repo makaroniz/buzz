@@ -273,12 +273,25 @@ pub fn stop_managed_agent_runtime(
         .lock()
         .map_err(|e| e.to_string())?;
     if let Some(mut runtime) = runtimes.remove(&key) {
-        if process_is_running(runtime.child.id()) {
-            terminate_process(runtime.child.id())?;
+        let stop_result = if process_is_running(runtime.child.id()) {
+            terminate_process(runtime.child.id())
+        } else {
+            Ok(())
         }
-        let status = runtime.child.wait().map_err(|e| e.to_string())?;
-        record.last_exit_code = status.code();
-        let _ = append_log_marker(&runtime.log_path, "=== stopped pair runtime ===");
+        .and_then(|()| runtime.child.wait().map_err(|e| e.to_string()));
+        match stop_result {
+            Ok(status) => {
+                record.last_exit_code = status.code();
+                let _ = append_log_marker(&runtime.log_path, "=== stopped pair runtime ===");
+            }
+            Err(error) => {
+                // Keep failed teardown visible/manageable instead of
+                // orphaning it: the child stays tracked and the receipt
+                // stays on disk until a stop actually succeeds.
+                runtimes.insert(key, runtime);
+                return Err(error);
+            }
+        }
     }
     super::remove_agent_runtime_receipt(&app, &key);
     state.clear_agent_session_cache(&key);
