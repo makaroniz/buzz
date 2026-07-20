@@ -16,6 +16,8 @@ name: Auto-tag on Release PR Merge
 # buzz-release-bot GitHub App. GitHub attributes the ref creation to that
 # App, so the consumer's `on.push.tags` trigger runs normally. The workflow's
 # default GITHUB_TOKEN remains read-only and is never used to create a tag.
+# A manual dispatch may recover a missed tag only from the recorded merge commit
+# of an internal, merged release PR. It cannot select an arbitrary ref.
 #
 # The mobile lane is push-only by infosec necessity: OSS `block/buzz` CI must
 # not trigger CI in the private `buzz-releases` repo, so auto-dispatch across
@@ -27,27 +29,97 @@ on:
   pull_request:
     types: [closed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: Merged release pull request number to recover
+        required: true
+        type: string
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   auto-tag:
     if: >
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve merged release pull request
+        id: pull-request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pull_request_number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PR_NUMBER="$DISPATCH_PR_NUMBER"
+          else
+            PR_NUMBER="$EVENT_PR_NUMBER"
+          fi
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid pull request number: '$PR_NUMBER'"
+            exit 1
+          fi
+
+          if ! pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" 2>/dev/null)"; then
+            echo "::error::Pull request #$PR_NUMBER was not found in $GITHUB_REPOSITORY"
+            exit 1
+          fi
+          state="$(jq -er '.state' <<< "$pr_json")"
+          merged="$(jq -r '.merged | tostring' <<< "$pr_json")"
+          base_repo="$(jq -er '.base.repo.full_name' <<< "$pr_json")"
+          base_ref="$(jq -er '.base.ref' <<< "$pr_json")"
+          head_repo="$(jq -r '.head.repo.full_name // ""' <<< "$pr_json")"
+          head_ref="$(jq -er '.head.ref' <<< "$pr_json")"
+          merge_sha="$(jq -r '.merge_commit_sha // ""' <<< "$pr_json")"
+
+          if [ "$state" != "closed" ] || [ "$merged" != "true" ]; then
+            echo "::error::Pull request #$PR_NUMBER is not merged"
+            exit 1
+          fi
+          if [ "$base_repo" != "$GITHUB_REPOSITORY" ] || [ "$base_ref" != "main" ]; then
+            echo "::error::Pull request #$PR_NUMBER did not merge into $GITHUB_REPOSITORY:main"
+            exit 1
+          fi
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Pull request #$PR_NUMBER came from '$head_repo', not the release repository"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            case "$head_ref" in
+              version-bump/*|relay-release/*|chart-release/*|push-chart-release/*|mobile-release/*) ;;
+              *)
+                echo "::error::Pull request #$PR_NUMBER head '$head_ref' is not an explicit release branch"
+                exit 1 ;;
+            esac
+          fi
+          if ! [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Pull request #$PR_NUMBER has invalid merge commit '$merge_sha'"
+            exit 1
+          fi
+
+          {
+            echo "number=$PR_NUMBER"
+            echo "branch=$head_ref"
+            echo "merge_sha=$merge_sha"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ steps.pull-request.outputs.merge_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve release lane and version
         id: release
         env:
-          BRANCH: ${{ github.event.pull_request.head.ref }}
+          BRANCH: ${{ steps.pull-request.outputs.branch }}
         run: |
           # Explicit release branches retain their established behavior. For an
           # ordinary internal PR, publish only when Chart.yaml itself changed
@@ -103,21 +175,22 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.release-tagger.outputs.token }}
           TAG: ${{ steps.release.outputs.tag }}
+          TARGET_SHA: ${{ steps.pull-request.outputs.merge_sha }}
         run: |
           set -euo pipefail
           # Check gh's exit status, not its output. A missing ref returns a 404
           # JSON body on stdout, which must not be mistaken for an existing tag.
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
             EXISTING_SHA="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
-            if [ "$EXISTING_SHA" = "$GITHUB_SHA" ]; then
-              echo "Tag $TAG already exists at $GITHUB_SHA — skipping tag creation"
+            if [ "$EXISTING_SHA" = "$TARGET_SHA" ]; then
+              echo "Tag $TAG already exists at $TARGET_SHA — skipping tag creation"
               exit 0
             else
-              echo "::error::Tag $TAG already exists at $EXISTING_SHA (expected $GITHUB_SHA)"
+              echo "::error::Tag $TAG already exists at $EXISTING_SHA (expected $TARGET_SHA)"
               exit 1
             fi
           fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
             -f ref="refs/tags/$TAG" \
-            -f sha="$GITHUB_SHA" \
+            -f sha="$TARGET_SHA" \
             --silent

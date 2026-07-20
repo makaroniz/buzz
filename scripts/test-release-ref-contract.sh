@@ -61,6 +61,17 @@ grep -q 'permission-contents: write' "$auto_tag"
 grep -q 'GH_TOKEN:.*steps\.release-tagger\.outputs\.token' "$auto_tag"
 grep -Fq 'git/refs' "$auto_tag"
 grep -Fq 'if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then' "$auto_tag"
+grep -q 'workflow_dispatch:' "$auto_tag"
+grep -q 'pull_request_number:' "$auto_tag"
+grep -Fq 'gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"' "$auto_tag"
+grep -Fq 'if [ "$state" != "closed" ] || [ "$merged" != "true" ]; then' "$auto_tag"
+grep -Fq 'if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then' "$auto_tag"
+grep -Fq 'if [ "$EVENT_NAME" = "workflow_dispatch" ]; then' "$auto_tag"
+grep -Fq 'version-bump/*|relay-release/*|chart-release/*|push-chart-release/*|mobile-release/*' "$auto_tag"
+grep -Fq 'ref: ${{ steps.pull-request.outputs.merge_sha }}' "$auto_tag"
+grep -Fq 'BRANCH: ${{ steps.pull-request.outputs.branch }}' "$auto_tag"
+grep -Fq 'TARGET_SHA: ${{ steps.pull-request.outputs.merge_sha }}' "$auto_tag"
+grep -Fq -- '-f sha="$TARGET_SHA"' "$auto_tag"
 if grep -F 'git/ref/tags/$TAG' "$auto_tag" | grep -Fq '|| true'; then
   echo "auto-tag ignores a failed tag lookup, so a 404 body can look like an existing tag" >&2
   exit 1
