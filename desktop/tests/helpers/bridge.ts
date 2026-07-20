@@ -90,6 +90,18 @@ type MockPersonaSeed = {
   isActive?: boolean;
   sourceTeam?: string | null;
   envVars?: Record<string, string>;
+  /**
+   * Runtime the persona is pinned to (e.g. "goose", "codex", "claude"). Lets a
+   * spec seed a CLI-login runtime whose provider picker is hidden, so the Edit
+   * dialog's provider-aware submit gate can be driven end-to-end. Omitted →
+   * null (definition inherits the app default at open).
+   */
+  runtime?: string | null;
+  /** Model pinned on the persona (a custom model id for Customize mode). */
+  model?: string | null;
+  /** Provider pinned on the persona. Leave empty for Codex/Claude runtimes. */
+  provider?: string | null;
+  namePool?: string[];
 };
 
 type MockTeamSeed = {
@@ -115,11 +127,26 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
+  builderlabAuth?: { email?: string; name?: string; expiresAt: string } | null;
+  /** Bound Builderlab Nostr identity. Null/omitted = not linked yet. */
+  builderlabIdentity?: { npub?: string; pubkey_hex?: string } | null;
+  /** Communities owned by the mocked Builderlab account. */
+  builderlabCommunities?: Array<{
+    id?: string;
+    name?: string;
+    slug?: string;
+    normalized_host?: string;
+    archived_at?: string | null;
+  }>;
   acpRuntimesCatalog?: Record<string, unknown>[];
+  acpRuntimesDelayMs?: number;
   acpAuthMethods?: Record<string, { methods: Record<string, unknown>[] }>;
+  acpAuthMethodsError?: string;
   connectAcpRuntimeResult?: { launched: boolean };
   connectAcpRuntimeDelayMs?: number;
   connectAcpRuntimeError?: string;
+  installAcpRuntimeDelayMs?: number;
   /** Override the result returned by the `install_acp_runtime` mock command.
    *  Pass `{ success: false, steps: [...] }` to exercise error/Retry states. */
   installAcpRuntimeResult?: {
@@ -184,6 +211,8 @@ type MockBridgeOptions = {
   applyCommunityDelayMs?: number;
   openDmDelayMs?: number;
   sendMessageDelayMs?: number;
+  /** Close the first channel-window live REQ; its retry is accepted. */
+  closeChannelLiveSubscriptionOnce?: boolean;
   /** Reject successive kind-9 sends with these messages, then resume. */
   sendMessageErrors?: string[];
   /** Reject successive managed-agent starts, then resume. */
@@ -242,6 +271,8 @@ type MockBridgeOptions = {
    * (owner-path branch of the gate).
    */
   oaOwnerIsMe?: boolean;
+  /** Whether the mock relay advertises NIP-43 membership support. Defaults to false. */
+  relayRequiresMembership?: boolean;
   /**
    * Active identity's role in the seeded `mockRelayMembers`. `null` removes
    * the active identity from the membership list entirely (admin-path branch
@@ -344,6 +375,8 @@ type MockBridgeOptions = {
     masked: boolean;
     value: string;
   }>;
+  /** Delay (ms) for `get_baked_build_env` so specs can verify load gating. */
+  bakedBuildEnvDelayMs?: number;
   /** Delay (ms) for `set_global_agent_config` — hold saves open in tests.
    *  Alias of `globalConfigSaveDelayMs` (kept for onboarding specs). */
   setGlobalAgentConfigDelayMs?: number;
@@ -360,13 +393,13 @@ type MockBridgeOptions = {
   /**
    * The `restarted_count` returned by `set_global_agent_config`. Defaults to
    * 0 (no agents restarted). Set to a positive integer to drive the
-   * "Saved. Restarted N agent(s)." status text in GlobalAgentConfigSettingsCard.
+   * "Saved. Restarted N agent(s)." status text in AgentDefaultsSettingsCard.
    */
   globalConfigRestartedCount?: number;
   /**
    * The `failed_restart_count` returned by `set_global_agent_config`. Defaults
    * to 0. Set to a positive integer to drive the "failed to restart — check
-   * the Agents tab." status text in GlobalAgentConfigSettingsCard.
+   * the Agents tab." status text in AgentDefaultsSettingsCard.
    */
   globalConfigFailedRestartCount?: number;
   /**

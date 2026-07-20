@@ -13,10 +13,12 @@ import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { PROJECT_PANEL_ACTION_BUTTON_CLASS } from "./projectPanelStyles";
 
 /** Branch picker shared by the readme and files panel headers. */
 export function RepositoryBranchDropdown({
@@ -46,14 +48,14 @@ export function RepositoryBranchDropdown({
         <Button
           className={
             compact
-              ? "h-6 max-w-full gap-1 px-1.5 font-mono text-xs font-medium"
-              : "h-6 max-w-full gap-1.5 px-2 font-mono text-sm font-semibold"
+              ? "h-7 max-w-full gap-1.5 rounded-md px-3 font-mono text-sm font-medium hover:border-input"
+              : "h-6 max-w-full gap-1.5 px-2 font-mono text-sm font-semibold hover:border-input"
           }
           size="sm"
           type="button"
-          variant="ghost"
+          variant="outline"
         >
-          <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <GitBranch className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="truncate">{branch}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         </Button>
@@ -81,6 +83,9 @@ export type RepoSourceHeaderControls = {
   localDisabled: boolean;
   localLabel: string;
   remoteLabel: string;
+  /** Clones the repository when no local checkout is available. */
+  onCloneLocal?: () => void;
+  clonePending?: boolean;
   /** Push of local commits, available when the local checkout is ahead. */
   canPush?: boolean;
   onPush?: () => void;
@@ -109,17 +114,18 @@ export function RepoSourceDropdown({
   controls: RepoSourceHeaderControls;
 }) {
   const isLocal = controls.source === "local";
+  const cloneLocal = controls.localDisabled && controls.onCloneLocal;
   const SourceIcon = isLocal ? HardDrive : Cloud;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          className="h-6 max-w-full shrink-0 gap-1 px-1.5 text-xs font-medium"
+          className="h-7 max-w-full shrink-0 gap-1.5 rounded-md px-3 text-sm font-medium hover:border-input"
           size="sm"
           type="button"
-          variant="ghost"
+          variant="outline"
         >
-          <SourceIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <SourceIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="truncate">
             {isLocal ? controls.localLabel : controls.remoteLabel}
           </span>
@@ -137,14 +143,33 @@ export function RepoSourceDropdown({
             <Cloud className="mr-1.5 h-3.5 w-3.5 text-muted-foreground" />
             {controls.remoteLabel}
           </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem
-            disabled={controls.localDisabled}
-            value="local"
-          >
-            <HardDrive className="mr-1.5 h-3.5 w-3.5 text-muted-foreground" />
-            {controls.localLabel}
-          </DropdownMenuRadioItem>
+          {!cloneLocal ? (
+            <DropdownMenuRadioItem
+              disabled={controls.localDisabled}
+              value="local"
+            >
+              <HardDrive className="mr-1.5 h-3.5 w-3.5 text-muted-foreground" />
+              {controls.localLabel}
+            </DropdownMenuRadioItem>
+          ) : null}
         </DropdownMenuRadioGroup>
+        {cloneLocal ? (
+          <DropdownMenuItem
+            className="group"
+            disabled={controls.clonePending}
+            onSelect={controls.onCloneLocal}
+          >
+            {controls.clonePending ? (
+              <Loader2 className="animate-spin text-muted-foreground" />
+            ) : (
+              <DownloadCloud className="text-muted-foreground" />
+            )}
+            <span className="text-muted-foreground">{controls.localLabel}</span>
+            <span className="ml-auto rounded-md border border-input/60 bg-background px-2 py-0.5 text-xs font-medium text-foreground shadow-xs group-focus:border-input">
+              {controls.clonePending ? "Cloning…" : "Clone"}
+            </span>
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -164,7 +189,7 @@ export function RepoSyncActionButton({
     const count = controls.behindCount ?? 0;
     return (
       <Button
-        className="h-6 shrink-0 gap-1 rounded-full px-2.5 text-xs"
+        className={PROJECT_PANEL_ACTION_BUTTON_CLASS}
         disabled={controls.pullDisabled}
         onClick={controls.onPull}
         size="sm"
@@ -172,9 +197,9 @@ export function RepoSyncActionButton({
         variant="ghost"
       >
         {controls.pullPending ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
+          <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
-          <DownloadCloud className="h-3 w-3" />
+          <DownloadCloud className="h-4 w-4" />
         )}
         Pull{count > 0 ? ` ${count}` : ""}
       </Button>
@@ -182,10 +207,9 @@ export function RepoSyncActionButton({
   }
 
   if (push) {
-    const count = controls.aheadCount ?? 0;
     return (
       <Button
-        className="h-6 shrink-0 gap-1 rounded-full px-2.5 text-xs"
+        className={PROJECT_PANEL_ACTION_BUTTON_CLASS}
         disabled={controls.pushDisabled}
         onClick={controls.onPush}
         size="sm"
@@ -193,11 +217,11 @@ export function RepoSyncActionButton({
         variant="ghost"
       >
         {controls.pushPending ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
+          <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
-          <UploadCloud className="h-3 w-3" />
+          <UploadCloud className="h-4 w-4" />
         )}
-        Push{count > 0 ? ` ${count}` : ""}
+        Push
       </Button>
     );
   }
@@ -205,7 +229,7 @@ export function RepoSyncActionButton({
   if (!controls.onFetch) return null;
   return (
     <Button
-      className="h-6 shrink-0 gap-1 rounded-full px-2.5 text-xs"
+      className={PROJECT_PANEL_ACTION_BUTTON_CLASS}
       disabled={controls.fetchPending}
       onClick={controls.onFetch}
       size="sm"
@@ -213,9 +237,9 @@ export function RepoSyncActionButton({
       variant="ghost"
     >
       {controls.fetchPending ? (
-        <Loader2 className="h-3 w-3 animate-spin" />
+        <Loader2 className="h-4 w-4 animate-spin" />
       ) : (
-        <RefreshCw className="h-3 w-3" />
+        <RefreshCw className="h-4 w-4" />
       )}
       Fetch
     </Button>

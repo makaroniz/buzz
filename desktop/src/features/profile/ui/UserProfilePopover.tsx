@@ -55,6 +55,8 @@ type UserProfilePopoverProps = {
   children: React.ReactNode;
   pubkey: string;
   triggerElement?: "div" | "span";
+  /** Accessible name for interactive trigger content that is visually hidden. */
+  triggerAriaLabel?: string;
   /** Set false when the trigger is inside another interactive control. */
   enableProfilePanel?: boolean;
   /** When set to "bot", a BotIdenticon badge renders next to the display name. */
@@ -169,6 +171,7 @@ export function UserProfilePopover({
   children,
   pubkey,
   triggerElement = "div",
+  triggerAriaLabel,
   enableProfilePanel = true,
   role,
   botIdenticonValue,
@@ -531,7 +534,7 @@ export function UserProfilePopover({
             className="mt-0.5 truncate text-xs leading-4 text-muted-foreground"
             data-testid={`user-profile-popover-owner-${pubkey}`}
           >
-            owned by {ownerLabel}
+            managed by {ownerLabel}
           </p>
         ) : null}
         {profileSubheader ? (
@@ -550,6 +553,7 @@ export function UserProfilePopover({
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverAnchor asChild>
         <TriggerElement
+          aria-label={triggerAriaLabel}
           role={canOpenProfilePanel ? "button" : undefined}
           tabIndex={canOpenProfilePanel ? 0 : undefined}
           onClick={handleTriggerClick}

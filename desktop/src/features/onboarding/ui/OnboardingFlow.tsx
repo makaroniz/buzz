@@ -7,13 +7,13 @@ import {
 } from "@/features/profile/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
+import { isRelayUnreachableError } from "@/shared/lib/relayError";
 import {
   getIdentity,
   importIdentity,
   persistCurrentIdentity,
 } from "@/shared/api/tauriIdentity";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
-import { forceFreshOnboarding } from "@/features/onboarding/devFreshOnboarding";
 import { Button } from "@/shared/ui/button";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { AvatarStep } from "./AvatarStep";
@@ -58,6 +58,10 @@ async function checkMembershipStatus(): Promise<MembershipCheckResult> {
     return "ok";
   } catch (error) {
     if (isRelayMembershipDeniedError(error)) return "denied";
+    // Native Tauri commands report connectivity failures with the stable
+    // "relay unreachable:" prefix (see desktop/src-tauri/src/relay.rs), which
+    // the legacy browser-fetch substrings below do not match.
+    if (isRelayUnreachableError(error)) return "unreachable";
     if (error instanceof Error) {
       const msg = error.message.toLowerCase();
       if (
@@ -513,7 +517,7 @@ export function OnboardingFlow({
                 }}
                 direction={transitionDirection}
                 state={profileStepState}
-                usesExistingIdentity={forceFreshOnboarding}
+                usesExistingIdentity
               />
             ) : currentPage === "key-import" ? (
               <OnboardingSlideTransition

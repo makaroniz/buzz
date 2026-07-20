@@ -25,6 +25,16 @@ export const ONBOARDING_PRIMARY_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} text-[var(-
 export const ONBOARDING_LANDING_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} text-[var(--buzz-welcome-chartreuse)]`;
 
 /**
+ * Icon-control styling for onboarding surfaces that sit on the textured card:
+ * olive backup ink (`--buzz-onboarding-backup-ink`) with a plain
+ * brighten-to-foreground hover (no hover pill, which would read as a floating
+ * box on the texture). Used by the identity-help dialog close button and the
+ * key-import reveal toggle.
+ */
+export const ONBOARDING_INK_ICON_CLASS =
+  "text-[color:var(--buzz-onboarding-backup-ink)] hover:bg-transparent hover:text-foreground";
+
+/**
  * Shared onboarding chrome shown on every page after the landing screen: a
  * static Buzz mark pinned to the top-left, and a centered pagination track that
  * sits above the page title. The active page reads as a longer bar; inactive
@@ -40,7 +50,7 @@ export function OnboardingChrome({
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed inset-x-0 top-14 z-10 flex items-center px-6 text-foreground"
+      className="pointer-events-none fixed inset-x-0 top-12 z-10 flex items-center px-6 text-foreground"
     >
       <span className="block w-11" data-testid="onboarding-logo">
         <BuzzMark className="h-auto w-full" />

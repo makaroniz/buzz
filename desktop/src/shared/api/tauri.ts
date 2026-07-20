@@ -54,7 +54,9 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
-  channel_type: string;
+  // Native FeedItemInfo.channel_type is Option<String>: serde emits `null`,
+  // never omits the key.
+  channel_type: string | null;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -172,6 +174,9 @@ export type RawAcpRuntimeCatalogEntry = {
   binary_path: string | null;
   default_args: string[];
   mcp_command: string | null;
+  model_env_var?: string | null;
+  provider_env_var?: string | null;
+  thinking_env_var?: string | null;
   install_hint: string;
   install_instructions_url: string;
   can_auto_install: boolean;
@@ -239,13 +244,24 @@ type RawSetCanvasResult = {
   event_id: string;
 };
 
+/** Error normalized from a rejected Tauri invocation with its wire payload. */
+export class TauriInvokeError extends Error {
+  readonly payload: unknown;
+
+  constructor(message: string, payload: unknown) {
+    super(message);
+    this.name = "TauriInvokeError";
+    this.payload = payload;
+  }
+}
+
 function toTauriError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }
 
   if (typeof error === "string") {
-    return new Error(error);
+    return new TauriInvokeError(error, error);
   }
 
   if (
@@ -254,13 +270,13 @@ function toTauriError(error: unknown): Error {
     "message" in error &&
     typeof error.message === "string"
   ) {
-    return new Error(error.message);
+    return new TauriInvokeError(error.message, error);
   }
 
   try {
-    return new Error(JSON.stringify(error));
+    return new TauriInvokeError(JSON.stringify(error), error);
   } catch {
-    return new Error("Unknown Tauri error");
+    return new TauriInvokeError("Unknown Tauri error", error);
   }
 }
 
@@ -275,7 +291,7 @@ export async function invokeTauri<T>(
   }
 }
 
-function fromRawFeedItem(item: RawFeedItem) {
+export function fromRawFeedItem(item: RawFeedItem) {
   return {
     id: item.id,
     kind: item.kind,
@@ -284,7 +300,10 @@ function fromRawFeedItem(item: RawFeedItem) {
     createdAt: item.created_at,
     channelId: item.channel_id,
     channelName: item.channel_name,
-    channelType: item.channel_type,
+    // Canonicalize the wire `null` to undefined so FeedItem's optional
+    // channelType contract holds at runtime (enrichment and the DM
+    // notification filter both key off `=== undefined`).
+    channelType: item.channel_type ?? undefined,
     tags: item.tags,
     category: item.category,
   };
@@ -694,6 +713,9 @@ function fromRawAcpRuntimeCatalogEntry(
     binaryPath: entry.binary_path,
     defaultArgs: entry.default_args,
     mcpCommand: entry.mcp_command,
+    modelEnvVar: entry.model_env_var ?? null,
+    providerEnvVar: entry.provider_env_var ?? null,
+    thinkingEnvVar: entry.thinking_env_var ?? null,
     installHint: entry.install_hint,
     installInstructionsUrl: entry.install_instructions_url,
     canAutoInstall: entry.can_auto_install,

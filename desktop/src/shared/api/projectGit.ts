@@ -1,13 +1,15 @@
 import type {
   ProjectLocalRepository,
   ProjectLocalRepoSnapshot,
+  ProjectRepoCloneResult,
   ProjectRepoDiff,
+  ProjectRepoMergeResult,
   ProjectRepoPullResult,
   ProjectRepoPushResult,
   ProjectRepoSnapshot,
   ProjectRepoSyncStatus,
 } from "@/shared/api/types";
-import { invokeTauri } from "@/shared/api/tauri";
+import { invokeTauri, TauriInvokeError } from "@/shared/api/tauri";
 
 type RawProjectRepoCommit = {
   hash: string;
@@ -70,6 +72,7 @@ type RawProjectRepoSyncStatus = {
   remote_branch: string | null;
   remote_head: string | null;
   remote_short_head: string | null;
+  merge_base: string | null;
   ahead_count: number;
   behind_count: number;
   has_uncommitted_changes: boolean;
@@ -83,6 +86,9 @@ type RawProjectRepoSyncStatus = {
 type RawProjectRepoPushResult = {
   pushed: boolean;
   message: string;
+  branch: string;
+  commit: string;
+  merge_base: string | null;
 };
 
 type RawProjectRepoPullResult = {
@@ -273,6 +279,7 @@ function fromRawProjectRepoSyncStatus(
     remoteBranch: status.remote_branch,
     remoteHead: status.remote_head,
     remoteShortHead: status.remote_short_head,
+    mergeBase: status.merge_base,
     aheadCount: status.ahead_count,
     behindCount: status.behind_count,
     hasUncommittedChanges: status.has_uncommitted_changes,
@@ -288,7 +295,8 @@ export async function getProjectRepoSyncStatus(input: {
   reposDir?: string | null;
   projectDtag: string;
   cloneUrl: string;
-  defaultBranch?: string | null;
+  branchName?: string | null;
+  baseBranch?: string | null;
 }): Promise<ProjectRepoSyncStatus> {
   const status = await invokeTauri<RawProjectRepoSyncStatus>(
     "get_project_repo_sync_status",
@@ -296,7 +304,8 @@ export async function getProjectRepoSyncStatus(input: {
       reposDir: input.reposDir ?? null,
       projectDtag: input.projectDtag,
       cloneUrl: input.cloneUrl,
-      defaultBranch: input.defaultBranch ?? null,
+      branchName: input.branchName ?? null,
+      baseBranch: input.baseBranch ?? null,
     },
   );
   return fromRawProjectRepoSyncStatus(status);
@@ -328,11 +337,40 @@ export async function openProjectTerminal(input: {
   };
 }
 
+export async function openProjectMergeRecoveryTerminal(input: {
+  reposDir?: string | null;
+  projectDtag: string;
+  targetCloneUrl: string;
+  sourceCloneUrl: string;
+  targetBranch: string;
+  sourceBranch: string;
+  expectedCommit: string;
+}): Promise<{
+  path: string;
+  cloned: boolean;
+  recoveryRef: string;
+  targetRef: string;
+}> {
+  const result = await invokeTauri<{
+    path: string;
+    cloned: boolean;
+    recoveryRef: string;
+    targetRef: string;
+  }>("open_project_merge_recovery_terminal", {
+    input: {
+      ...input,
+      reposDir: input.reposDir ?? null,
+    },
+  });
+  return result;
+}
+
 export async function pushProjectLocalRepository(input: {
   reposDir?: string | null;
   projectDtag: string;
   cloneUrl: string;
-  defaultBranch?: string | null;
+  branchName?: string | null;
+  baseBranch?: string | null;
 }): Promise<ProjectRepoPushResult> {
   const result = await invokeTauri<RawProjectRepoPushResult>(
     "push_project_local_repository",
@@ -340,12 +378,16 @@ export async function pushProjectLocalRepository(input: {
       reposDir: input.reposDir ?? null,
       projectDtag: input.projectDtag,
       cloneUrl: input.cloneUrl,
-      defaultBranch: input.defaultBranch ?? null,
+      branchName: input.branchName ?? null,
+      baseBranch: input.baseBranch ?? null,
     },
   );
   return {
     pushed: result.pushed,
     message: result.message,
+    branch: result.branch,
+    commit: result.commit,
+    mergeBase: result.merge_base,
   };
 }
 
@@ -353,7 +395,7 @@ export async function pullProjectLocalRepository(input: {
   reposDir?: string | null;
   projectDtag: string;
   cloneUrl: string;
-  defaultBranch?: string | null;
+  branchName?: string | null;
 }): Promise<ProjectRepoPullResult> {
   const result = await invokeTauri<RawProjectRepoPullResult>(
     "pull_project_local_repository",
@@ -361,11 +403,162 @@ export async function pullProjectLocalRepository(input: {
       reposDir: input.reposDir ?? null,
       projectDtag: input.projectDtag,
       cloneUrl: input.cloneUrl,
-      defaultBranch: input.defaultBranch ?? null,
+      branchName: input.branchName ?? null,
     },
   );
   return {
     pulled: result.pulled,
     message: result.message,
   };
+}
+
+export async function cloneProjectRepository(input: {
+  reposDir?: string | null;
+  projectDtag: string;
+  cloneUrl: string;
+  defaultBranch?: string | null;
+}): Promise<ProjectRepoCloneResult> {
+  return invokeTauri<ProjectRepoCloneResult>("clone_project_repository", {
+    reposDir: input.reposDir ?? null,
+    projectDtag: input.projectDtag,
+    cloneUrl: input.cloneUrl,
+    defaultBranch: input.defaultBranch ?? null,
+  });
+}
+
+type RawProjectRepoMergeResult = {
+  message: string;
+  merge_commit: string;
+  status_event: string;
+  status_publication_error: string | null;
+};
+
+export type ProjectPullRequestMergeRecovery = {
+  action: "open_terminal";
+  targetBranch: string;
+  sourceBranch: string;
+};
+
+/** Machine-readable pull-request merge failure returned by the desktop shell. */
+export class ProjectPullRequestMergeError extends Error {
+  readonly code: string;
+  readonly recovery: ProjectPullRequestMergeRecovery | null;
+
+  constructor(
+    code: string,
+    message: string,
+    recovery: ProjectPullRequestMergeRecovery | null,
+  ) {
+    super(message);
+    this.name = "ProjectPullRequestMergeError";
+    this.code = code;
+    this.recovery = recovery;
+  }
+}
+
+function mergeErrorPayload(error: unknown): unknown {
+  const payload = error instanceof TauriInvokeError ? error.payload : error;
+  if (typeof payload !== "string") return payload;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a structured native merge error without classifying generic failures. */
+export function parseProjectPullRequestMergeError(
+  error: unknown,
+): ProjectPullRequestMergeError | null {
+  const payload = mergeErrorPayload(error);
+  if (!payload || typeof payload !== "object") return null;
+  const candidate = payload as {
+    code?: unknown;
+    message?: unknown;
+    recovery?: unknown;
+  };
+  if (
+    typeof candidate.code !== "string" ||
+    typeof candidate.message !== "string"
+  ) {
+    return null;
+  }
+  let recovery: ProjectPullRequestMergeRecovery | null = null;
+  if (candidate.recovery !== null && candidate.recovery !== undefined) {
+    if (typeof candidate.recovery !== "object") return null;
+    const value = candidate.recovery as {
+      action?: unknown;
+      sourceBranch?: unknown;
+      targetBranch?: unknown;
+    };
+    if (
+      value.action !== "open_terminal" ||
+      typeof value.targetBranch !== "string" ||
+      typeof value.sourceBranch !== "string"
+    ) {
+      return null;
+    }
+    recovery = {
+      action: value.action,
+      sourceBranch: value.sourceBranch,
+      targetBranch: value.targetBranch,
+    };
+  }
+  return new ProjectPullRequestMergeError(
+    candidate.code,
+    candidate.message,
+    recovery,
+  );
+}
+
+export async function mergeProjectPullRequest(input: {
+  targetCloneUrl: string;
+  sourceCloneUrl: string;
+  targetOwner: string;
+  repoAddress: string;
+  pullRequestId: string;
+  pullRequestAuthor: string;
+  statusCreatedAt: number;
+  targetBranch: string;
+  sourceBranch: string;
+  expectedCommit: string;
+}): Promise<ProjectRepoMergeResult> {
+  let result: RawProjectRepoMergeResult;
+  try {
+    result = await invokeTauri<RawProjectRepoMergeResult>(
+      "merge_project_pull_request",
+      {
+        input,
+      },
+    );
+  } catch (error) {
+    throw parseProjectPullRequestMergeError(error) ?? error;
+  }
+  return {
+    message: result.message,
+    mergeCommit: result.merge_commit,
+    statusEvent: result.status_event,
+    statusPublicationError: result.status_publication_error,
+  };
+}
+
+export async function signProjectPullRequestReviewRequest(input: {
+  targetOwner: string;
+  repoAddress: string;
+  pullRequestId: string;
+  reviewers: string[];
+  reviewerLabel: string;
+}): Promise<void> {
+  await invokeTauri<void>("sign_project_pull_request_review_request", {
+    input,
+  });
+}
+
+export async function publishProjectPullRequestMergedStatus(input: {
+  targetOwner: string;
+  statusEvent: string;
+}): Promise<void> {
+  await invokeTauri<void>("publish_project_pull_request_merged_status", {
+    input,
+  });
 }

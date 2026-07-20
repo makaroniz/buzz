@@ -21,9 +21,9 @@ import { getBakedBuildEnv, type BakedEnvEntry } from "@/shared/api/tauri";
 import { globalAgentConfigQueryKey } from "@/features/agents/useGlobalAgentConfig";
 import { useAcpRuntimesQuery } from "@/features/agents/hooks";
 import {
-  GlobalAgentConfigFields,
+  AgentConfigFields,
   EMPTY_GLOBAL_CONFIG,
-} from "@/features/agents/ui/GlobalAgentConfigFields";
+} from "@/features/agents/ui/AgentConfigFields";
 import { Button } from "@/shared/ui/button";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -32,19 +32,19 @@ export type GlobalAgentConfigSaveResult = Awaited<
   ReturnType<typeof setGlobalAgentConfig>
 >;
 
-type GlobalAgentConfigEditorProps = {
+type AgentDefaultsEditorProps = {
   onDirtyChange?: (dirty: boolean) => void;
   onSaveSuccess?: (result: GlobalAgentConfigSaveResult) => void;
   onSavingChange?: (saving: boolean) => void;
   secondaryAction?: React.ReactNode;
 };
 
-export function GlobalAgentConfigEditor({
+export function AgentDefaultsEditor({
   onDirtyChange,
   onSaveSuccess,
   onSavingChange,
   secondaryAction,
-}: GlobalAgentConfigEditorProps) {
+}: AgentDefaultsEditorProps) {
   const [config, setConfig] =
     React.useState<GlobalAgentConfig>(EMPTY_GLOBAL_CONFIG);
   const configRef = React.useRef(config);
@@ -111,6 +111,11 @@ export function GlobalAgentConfigEditor({
     () => (runtimesQuery.data ?? []).find((r) => r.id === "buzz-agent"),
     [runtimesQuery.data],
   );
+  const configSurfaceLoading = isLoading || runtimesQuery.isLoading;
+  const configSurfaceError =
+    loadError ||
+    runtimesQuery.isError ||
+    (!configSurfaceLoading && buzzAgentRuntime === undefined);
 
   function handleConfigChange(next: GlobalAgentConfig) {
     configRef.current = next;
@@ -167,20 +172,20 @@ export function GlobalAgentConfigEditor({
 
   return (
     <div className="min-w-0 space-y-4">
-      {isLoading ? (
+      {configSurfaceLoading ? (
         <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
           <Loader className="size-4 animate-spin" />
           Loading…
         </div>
-      ) : loadError ? (
+      ) : configSurfaceError ? (
         <div className="flex items-center gap-2 py-4 text-sm text-destructive">
           <AlertCircle className="size-4" />
           Couldn't load agent defaults. Restart the app to try again.
         </div>
       ) : (
-        <GlobalAgentConfigFields
+        <AgentConfigFields
           bakedEnv={bakedEnv}
-          buzzAgentRuntime={buzzAgentRuntime}
+          selectedRuntime={buzzAgentRuntime}
           config={config}
           isCustomModelEditing={isCustomModelEditing}
           isCustomProvider={isCustomProvider}
@@ -192,7 +197,7 @@ export function GlobalAgentConfigEditor({
       )}
 
       {/* Save bar */}
-      {!isLoading && !loadError && (
+      {!configSurfaceLoading && !configSurfaceError && (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {saveState === "saved" && (
             <span className="flex min-w-0 items-center gap-1 text-sm text-green-600 dark:text-green-400">

@@ -812,10 +812,17 @@ test("routes an agent mention from an existing DM to the expanded conversation",
   );
 });
 
-test("routes a relay-agent mention from an existing DM to the expanded conversation", async ({
+test("routes a managed relay-agent mention from an existing DM to the expanded conversation", async ({
   page,
 }) => {
   await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: DM_RELAY_AGENT_PUBKEY,
+        name: "quinn",
+        status: "stopped",
+      },
+    ],
     relayAgents: [
       {
         pubkey: DM_RELAY_AGENT_PUBKEY,
@@ -856,15 +863,13 @@ test("routes a relay-agent mention from an existing DM to the expanded conversat
     page.locator("[data-active='true'][data-channel-id]"),
   ).toHaveAttribute("data-channel-id", sentChannelId ?? "");
   await expect(page.getByTestId("chat-title")).toContainText("alice");
-  await expect(page.getByTestId("chat-title")).toContainText(
-    DM_RELAY_AGENT_PUBKEY.slice(0, 8),
-  );
+  await expect(page.getByTestId("chat-title")).toContainText("quinn");
 
   const sendCommands = (await readCommandPayloadLog(page)).slice(
     baselineCommands.length,
   );
   expect(sendCommands.map((entry) => entry.command)).toContain("open_dm");
-  expect(sendCommands.map((entry) => entry.command)).not.toContain(
+  expect(sendCommands.map((entry) => entry.command)).toContain(
     "start_managed_agent",
   );
   expect(sendCommands.map((entry) => entry.command)).not.toContain(
@@ -2530,9 +2535,14 @@ test("home inbox manage affordance opens management without leaving home", async
   }
   expect(detailBox.x + detailBox.width).toBeLessThanOrEqual(sheetBox.x + 1);
   expect(sheetBox.width).toBeGreaterThanOrEqual(300);
-  await page
-    .getByTestId("home-inbox-list")
-    .click({ position: { x: 24, y: 80 } });
+  const inboxList = page.getByTestId("home-inbox-list");
+  const inboxListBox = await inboxList.boundingBox();
+  if (!inboxListBox) {
+    throw new Error("Expected the home inbox list box.");
+  }
+  await inboxList.click({
+    position: { x: 24, y: inboxListBox.height - 24 },
+  });
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
@@ -2549,7 +2559,18 @@ test("home inbox manage affordance opens management without leaving home", async
   await expect(page).not.toHaveURL(/#\/channels\//);
 });
 
-test("members sidebar can invite and remove members", async ({ page }) => {
+test("members sidebar can invite and remove managed agents", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: TEST_IDENTITIES.charlie.pubkey,
+        name: "charlie",
+        status: "stopped",
+      },
+    ],
+  });
   await page.goto("/");
   await openMembersSidebar(page, "general");
   const initialMemberCount = await readMembersTriggerCount(page);
@@ -2773,6 +2794,21 @@ test("channel header omits the add agent action", async ({ page }) => {
   await expect(page.getByTestId("channel-management-trigger")).toBeVisible();
 });
 
+test("channel header actions show tooltips", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+
+  for (const [testId, label] of [
+    ["channel-members-trigger", "Channel members"],
+    ["channel-huddle-tooltip-trigger", "Huddle"],
+    ["channel-management-trigger", "Channel settings"],
+  ] as const) {
+    await page.getByTestId(testId).hover();
+    await expect(page.getByRole("tooltip", { name: label })).toBeVisible();
+  }
+});
+
 test("members sidebar collapses same-persona managed agents", async ({
   page,
 }) => {
@@ -2827,9 +2863,18 @@ test("members sidebar collapses same-persona managed agents", async ({
   await expect(page.getByText("Pinky", { exact: true })).toHaveCount(1);
 });
 
-test("private-channel members can add members and bots without admin", async ({
+test("private-channel members can add people and managed agents without admin", async ({
   page,
 }) => {
+  await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: TEST_IDENTITIES.charlie.pubkey,
+        name: "charlie",
+        status: "stopped",
+      },
+    ],
+  });
   await page.goto("/");
   // secret-projects is a private (non-DM) channel where the current user is a
   // plain member, not owner/admin. They should still be able to add members

@@ -10,8 +10,8 @@ import {
   formatModelDiscoveryErrorStatus,
   type PersonaModelDiscoveryStatus,
 } from "./personaModelDiscoveryStatus";
-import type { PersonaModelOption } from "./personaDialogPickers";
-import { providerRequiresExplicitModel } from "./personaDialogPickers";
+import type { PersonaModelOption } from "./agentConfigOptions";
+import { providerRequiresExplicitModel } from "./agentConfigOptions";
 
 export const MODEL_DISCOVERY_LOADING_VALUE = "__model_discovery_loading__";
 
@@ -25,7 +25,18 @@ function stableModelDiscoveryEnvKey(envVars: EnvVarsValue): string {
   );
 }
 
-function getDiscoveredPersonaModelOptions(
+/**
+ * True when a harness catalog entry is the harness's own "use my default"
+ * row (e.g. Claude Code ships a literal `default` model id). Such entries
+ * mean the same thing as leaving the model unset, so the UI merges them
+ * into the single canonical default row instead of showing two rows for
+ * one idea.
+ */
+function isHarnessDefaultModelEntry(model: { id: string }) {
+  return model.id.trim().toLowerCase() === "default";
+}
+
+export function getDiscoveredPersonaModelOptions(
   response: AgentModelsResponse | null,
   provider: string,
 ): readonly PersonaModelOption[] | null {
@@ -33,23 +44,38 @@ function getDiscoveredPersonaModelOptions(
     return null;
   }
 
-  const defaultModelOption = providerRequiresExplicitModel(provider)
-    ? []
-    : [
-        {
-          id: "",
-          label:
-            provider === "relay-mesh"
-              ? "Default (auto)"
-              : response.agentDefaultModel?.trim()
-                ? `Default model (${response.agentDefaultModel})`
-                : "Default model",
-        },
-      ];
+  // One row per idea: the harness's own default catalog entry (if any) is
+  // absorbed into the canonical default row. Selecting it keeps the stored
+  // model unset — behaviorally identical, and it avoids two saved states
+  // ("default" vs unset) that mean the same thing.
+  const explicitModels = response.models.filter(
+    (model) => !isHarnessDefaultModelEntry(model),
+  );
+  const harnessDefaultEntry = response.models.find(isHarnessDefaultModelEntry);
+  const agentDefaultModel = response.agentDefaultModel?.trim();
+
+  const defaultModelOption =
+    providerRequiresExplicitModel(provider) && harnessDefaultEntry === undefined
+      ? []
+      : [
+          {
+            id: "",
+            label:
+              provider === "relay-mesh"
+                ? "Default (auto)"
+                : agentDefaultModel
+                  ? `Default model (${agentDefaultModel})`
+                  : "Default model",
+          },
+        ];
+
+  if (explicitModels.length === 0 && defaultModelOption.length === 0) {
+    return null;
+  }
 
   return [
     ...defaultModelOption,
-    ...response.models.map((model) => ({
+    ...explicitModels.map((model) => ({
       id: model.id,
       label: model.name?.trim() || model.id,
     })),
@@ -73,8 +99,14 @@ export function usePersonaModelDiscovery({
 }) {
   const [modelDiscoveryData, setModelDiscoveryData] =
     React.useState<AgentModelsResponse | null>(null);
+  const [modelDiscoveryDataKey, setModelDiscoveryDataKey] = React.useState<
+    string | null
+  >(null);
   const [modelDiscoveryStatus, setModelDiscoveryStatus] =
     React.useState<PersonaModelDiscoveryStatus | null>(null);
+  const [modelDiscoveryStatusKey, setModelDiscoveryStatusKey] = React.useState<
+    string | null
+  >(null);
   const [modelDiscoveryLoading, setModelDiscoveryLoading] =
     React.useState(false);
   const modelDiscoveryCacheRef = React.useRef(
@@ -129,6 +161,7 @@ export function usePersonaModelDiscovery({
     if (modelDiscoveryKey === null || discoveryAgentCommand === null) {
       modelDiscoveryRequestRef.current += 1;
       setModelDiscoveryData(null);
+      setModelDiscoveryDataKey(null);
       // When the runtime exists but is not available, surface a status message
       // so the model dropdown explains why no live models can be loaded.
       if (
@@ -141,8 +174,10 @@ export function usePersonaModelDiscovery({
             trimmedProvider,
           ),
         );
+        setModelDiscoveryStatusKey(null);
       } else {
         setModelDiscoveryStatus(null);
+        setModelDiscoveryStatusKey(null);
       }
       setModelDiscoveryLoading(false);
       return;
@@ -155,13 +190,17 @@ export function usePersonaModelDiscovery({
     const cached = modelDiscoveryCacheRef.current.get(activeModelDiscoveryKey);
     if (cached) {
       setModelDiscoveryData(cached);
+      setModelDiscoveryDataKey(activeModelDiscoveryKey);
       setModelDiscoveryStatus(null);
+      setModelDiscoveryStatusKey(activeModelDiscoveryKey);
       setModelDiscoveryLoading(false);
       return;
     }
 
     setModelDiscoveryData(null);
+    setModelDiscoveryDataKey(null);
     setModelDiscoveryStatus(null);
+    setModelDiscoveryStatusKey(activeModelDiscoveryKey);
     setModelDiscoveryLoading(true);
     function runModelDiscovery() {
       void discoverAgentModels({
@@ -176,16 +215,20 @@ export function usePersonaModelDiscovery({
           }
           modelDiscoveryCacheRef.current.set(activeModelDiscoveryKey, response);
           setModelDiscoveryData(response);
+          setModelDiscoveryDataKey(activeModelDiscoveryKey);
           setModelDiscoveryStatus(null);
+          setModelDiscoveryStatusKey(activeModelDiscoveryKey);
         })
         .catch((error) => {
           if (modelDiscoveryRequestRef.current !== requestId) {
             return;
           }
           setModelDiscoveryData(null);
+          setModelDiscoveryDataKey(null);
           setModelDiscoveryStatus(
             formatModelDiscoveryErrorStatus(error, trimmedProvider),
           );
+          setModelDiscoveryStatusKey(activeModelDiscoveryKey);
         })
         .finally(() => {
           if (modelDiscoveryRequestRef.current === requestId) {
@@ -221,17 +264,36 @@ export function usePersonaModelDiscovery({
     trimmedProvider,
   ]);
 
+  const activeModelDiscoveryData =
+    modelDiscoveryKey !== null && modelDiscoveryDataKey === modelDiscoveryKey
+      ? modelDiscoveryData
+      : null;
+  const activeModelDiscoveryStatus =
+    modelDiscoveryKey === null
+      ? modelDiscoveryStatus
+      : modelDiscoveryStatusKey === modelDiscoveryKey
+        ? modelDiscoveryStatus
+        : null;
   const discoveredModelOptions = React.useMemo(
-    () => getDiscoveredPersonaModelOptions(modelDiscoveryData, trimmedProvider),
-    [modelDiscoveryData, trimmedProvider],
+    () =>
+      getDiscoveredPersonaModelOptions(
+        activeModelDiscoveryData,
+        trimmedProvider,
+      ),
+    [activeModelDiscoveryData, trimmedProvider],
   );
+  const modelDiscoveryPending =
+    modelDiscoveryLoading ||
+    (modelDiscoveryKey !== null &&
+      activeModelDiscoveryData === null &&
+      activeModelDiscoveryStatus === null);
 
   return {
     discoveredModelOptions,
-    modelDiscoveryLoading,
+    modelDiscoveryLoading: modelDiscoveryPending,
     modelDiscoveryStatus:
-      modelDiscoveryLoading || discoveredModelOptions !== null
+      modelDiscoveryPending || discoveredModelOptions !== null
         ? null
-        : modelDiscoveryStatus,
+        : activeModelDiscoveryStatus,
   };
 }

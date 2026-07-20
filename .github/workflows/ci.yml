@@ -241,8 +241,8 @@ jobs:
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
-      - name: Desktop build
-        run: just desktop-build
+      - name: Desktop E2E build
+        run: pnpm -C desktop build:e2e
       - name: Desktop smoke e2e
         run: cd desktop && pnpm exec playwright test --project=smoke --shard=${{ matrix.shard }}/4
       - name: Summarize flaky tests
@@ -393,8 +393,8 @@ jobs:
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
-      - name: Desktop build
-        run: just desktop-build
+      - name: Desktop E2E build
+        run: pnpm -C desktop build:e2e
       - name: Wait for integration services
         run: |
           wait_healthy() {
@@ -690,6 +690,7 @@ jobs:
         run: |
           cargo test -p buzz-test-client --test e2e_persona --test e2e_nostr_interop -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay invite -- --ignored --nocapture
+          cargo test -p buzz-test-client --test e2e_relay nip43_membership_snapshots_are_rejected -- --ignored --nocapture
         env:
           RELAY_URL: ws://localhost:3000
           GIT_CREDENTIAL_NOSTR_BIN: ${{ github.workspace }}/target/ci/git-credential-nostr

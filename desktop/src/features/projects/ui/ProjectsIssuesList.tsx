@@ -1,10 +1,11 @@
-import { CircleCheck, CircleDot, CircleX, MessageSquare } from "lucide-react";
+import { Eye, MessageSquare } from "lucide-react";
 
 import type {
   Project,
   ProjectIssue,
   ProjectIssueListItem,
 } from "@/features/projects/hooks";
+import type { ProjectWorkItemSection } from "@/features/projects/projectWorkItems";
 import {
   resolveUserLabel,
   type UserProfileLookup,
@@ -12,10 +13,28 @@ import {
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
+import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
+import { ProjectEventTypeIcon } from "./ProjectEventTypeIcon";
+import { ProjectListRowMenu } from "./ProjectListRowMenu";
+import { ProjectsWorkItemsLoadNotice } from "./ProjectsWorkItemsLoadNotice";
+import {
+  PROJECT_LIST_CONTAINER_CLASS,
+  PROJECT_LIST_ROW_CLASS,
+  PROJECT_LIST_ROW_CONTENT_CLASS,
+  PROJECT_LIST_ROW_DATE_CLASS,
+  PROJECT_LIST_ROW_STATUS_CLASS,
+  PROJECT_LIST_ROW_SUBTEXT_CLASS,
+  PROJECT_LIST_ROW_TITLE_CLASS,
+  PROJECT_LIST_ROW_TRAILING_CLASS,
+} from "./projectListRowStyles";
 
 type ProjectsIssuesListProps = {
+  error: unknown;
+  failedSections: ProjectWorkItemSection[];
   isLoading: boolean;
+  isRetrying: boolean;
   onOpen: (project: Project, issue: ProjectIssue) => void;
+  onRetry: () => void;
   profiles?: UserProfileLookup;
   issues: ProjectIssueListItem[];
   viewMode: "grid" | "list";
@@ -40,16 +59,6 @@ function formatRelativeTime(createdAt: number) {
   return `${value} ${unit.label}${value === 1 ? "" : "s"} ago`;
 }
 
-function issueStatusVisual(status: ProjectIssue["status"]) {
-  if (status === "Done") {
-    return { className: "text-purple-400", icon: CircleCheck };
-  }
-  if (status === "Closed") {
-    return { className: "text-destructive", icon: CircleX };
-  }
-  return { className: "text-green-500", icon: CircleDot };
-}
-
 function nextStepLabel(status: ProjectIssue["status"]) {
   if (status === "Done" || status === "Closed") return "View issue";
   if (status === "In Review") return "Review issue";
@@ -58,27 +67,29 @@ function nextStepLabel(status: ProjectIssue["status"]) {
 }
 
 function IssueHeader({
+  includeDate = true,
   issue,
   profiles,
   project,
 }: {
+  includeDate?: boolean;
   issue: ProjectIssue;
   profiles?: UserProfileLookup;
   project: Project;
 }) {
   const authorLabel = resolveUserLabel({ profiles, pubkey: issue.author });
-  const status = issueStatusVisual(issue.status);
 
   return (
-    <div className="min-w-0 flex-1 space-y-1">
+    <div className="-mt-0.5 min-w-0 flex-1">
       <div className="flex min-w-0 items-center gap-1.5">
-        <p className="truncate text-sm font-semibold text-foreground">
-          {issue.title}
-        </p>
-        <status.icon className={`h-3.5 w-3.5 shrink-0 ${status.className}`} />
+        <p className={PROJECT_LIST_ROW_TITLE_CLASS}>{issue.title}</p>
       </div>
-      <p className="truncate text-xs text-muted-foreground">
-        {project.name} · created {formatRelativeTime(issue.createdAt)} by{" "}
+      <p className={`truncate ${PROJECT_LIST_ROW_SUBTEXT_CLASS}`}>
+        {project.name}
+        {includeDate
+          ? ` · created ${formatRelativeTime(issue.createdAt)}`
+          : null}{" "}
+        · by{" "}
         <UserProfilePopover pubkey={issue.author} triggerElement="span">
           <button
             className="relative z-10 rounded-sm hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
@@ -87,6 +98,14 @@ function IssueHeader({
             {authorLabel}
           </button>
         </UserProfilePopover>
+        {includeDate ? (
+          ` · ${issue.status}`
+        ) : (
+          <>
+            <span className="md:hidden"> · </span>
+            <span className="md:hidden">{issue.status}</span>
+          </>
+        )}
       </p>
     </div>
   );
@@ -114,6 +133,7 @@ function IssueGridCard({
       </button>
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="flex min-w-0 items-start gap-3">
+          <ProjectEventTypeIcon className="h-5 w-5" kind="issue" />
           <IssueHeader issue={issue} profiles={profiles} project={project} />
           <Button
             className="relative z-10 h-7 shrink-0 px-2.5"
@@ -165,7 +185,10 @@ function IssueListRow({
   project: Project;
 }) {
   return (
-    <div className="group relative px-4 py-2.5 transition-colors duration-150 hover:bg-muted/20">
+    <div
+      className={PROJECT_LIST_ROW_CLASS}
+      data-testid={`projects-issue-row-${issue.id}`}
+    >
       <button
         className="absolute inset-0"
         onClick={() => onOpen(project, issue)}
@@ -173,21 +196,37 @@ function IssueListRow({
       >
         <span className="sr-only">View {issue.title}</span>
       </button>
-      <div className="flex min-w-0 items-start gap-3">
-        <IssueHeader issue={issue} profiles={profiles} project={project} />
-        <div className="relative z-10 flex shrink-0 items-center gap-2">
-          <Button
-            className="h-7 px-2.5"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen(project, issue);
-            }}
-            size="xs"
-            type="button"
-            variant="outline"
+      <div className={PROJECT_LIST_ROW_CONTENT_CLASS}>
+        <ProjectEventTypeIcon className="h-5 w-5" kind="issue" />
+        <IssueHeader
+          includeDate={false}
+          issue={issue}
+          profiles={profiles}
+          project={project}
+        />
+        <div className={PROJECT_LIST_ROW_TRAILING_CLASS}>
+          <span className={PROJECT_LIST_ROW_STATUS_CLASS}>{issue.status}</span>
+          <div className="hidden w-14 shrink-0 justify-end md:flex">
+            {issue.comments.length > 0 ? (
+              <span className="flex items-center gap-1 text-2xs leading-3 text-muted-foreground">
+                <MessageSquare className="h-3.5 w-3.5" />
+                {issue.comments.length}
+              </span>
+            ) : null}
+          </div>
+          <span
+            className={PROJECT_LIST_ROW_DATE_CLASS}
+            data-testid="projects-row-date"
+            title={new Date(issue.createdAt * 1_000).toLocaleString()}
           >
-            {nextStepLabel(issue.status)}
-          </Button>
+            {formatRelativeTime(issue.createdAt)}
+          </span>
+          <ProjectListRowMenu label={`More options for ${issue.title}`}>
+            <DropdownMenuItem onSelect={() => onOpen(project, issue)}>
+              <Eye className="h-4 w-4" />
+              {nextStepLabel(issue.status)}
+            </DropdownMenuItem>
+          </ProjectListRowMenu>
         </div>
       </div>
     </div>
@@ -195,9 +234,13 @@ function IssueListRow({
 }
 
 export function ProjectsIssuesList({
+  error,
+  failedSections,
   isLoading,
+  isRetrying,
   issues,
   onOpen,
+  onRetry,
   profiles,
   viewMode,
 }: ProjectsIssuesListProps) {
@@ -209,19 +252,56 @@ export function ProjectsIssuesList({
     );
   }
 
+  const loadNotice = (
+    <ProjectsWorkItemsLoadNotice
+      error={error}
+      failedSections={failedSections}
+      isRetrying={isRetrying}
+      onRetry={onRetry}
+      subject="issues"
+    />
+  );
+
+  if (error && issues.length === 0) {
+    return loadNotice;
+  }
+
   if (issues.length === 0) {
     return (
-      <div className="border border-dashed border-border/60 px-4 py-12 text-center text-sm text-muted-foreground">
-        No issues yet.
+      <div className="space-y-3">
+        {loadNotice}
+        <div className="border border-dashed border-border/60 px-4 py-12 text-center text-sm text-muted-foreground">
+          No issues yet.
+        </div>
       </div>
     );
   }
 
   if (viewMode === "grid") {
     return (
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <div className="space-y-3">
+        {loadNotice}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {issues.map(({ project, issue }) => (
+            <IssueGridCard
+              issue={issue}
+              key={issue.id}
+              onOpen={onOpen}
+              profiles={profiles}
+              project={project}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {loadNotice}
+      <div className={PROJECT_LIST_CONTAINER_CLASS}>
         {issues.map(({ project, issue }) => (
-          <IssueGridCard
+          <IssueListRow
             issue={issue}
             key={issue.id}
             onOpen={onOpen}
@@ -230,20 +310,6 @@ export function ProjectsIssuesList({
           />
         ))}
       </div>
-    );
-  }
-
-  return (
-    <div className="-mx-4 divide-y divide-border/60 border-y border-border/60 bg-card">
-      {issues.map(({ project, issue }) => (
-        <IssueListRow
-          issue={issue}
-          key={issue.id}
-          onOpen={onOpen}
-          profiles={profiles}
-          project={project}
-        />
-      ))}
     </div>
   );
 }

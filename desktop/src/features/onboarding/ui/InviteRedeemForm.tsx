@@ -11,13 +11,28 @@ import {
   isJoinPolicyDiscoveryCandidate,
   type JoinPolicy,
 } from "@/shared/api/invites";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { Spinner } from "@/shared/ui/spinner";
 import { JoinPolicyNotice } from "./JoinPolicyNotice";
+import {
+  ONBOARDING_KEY_ROW_CLASS,
+  ONBOARDING_KEY_TEXT_CLASS,
+} from "./NsecMaskedDisplay";
+import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
+import { OnboardingFooter } from "./OnboardingFooter";
 
 const POLICY_DISCOVERY_DELAY_MS = 250;
 const POLICY_REVEAL_EASE = [0.23, 1, 0.32, 1] as const;
+const SPOTLIGHT_TEXTURE_CONTENT_CLASS = "mx-auto w-full max-w-[920px]";
+const SPOTLIGHT_OVERFLOW_FADE = {
+  WebkitMaskImage:
+    "linear-gradient(to right, transparent, black 2rem, black calc(100% - 2rem), transparent)",
+  maskImage:
+    "linear-gradient(to right, transparent, black 2rem, black calc(100% - 2rem), transparent)",
+};
 
 type InviteRedeemFormProps = {
   /**
@@ -31,6 +46,7 @@ type InviteRedeemFormProps = {
   isRedeeming: boolean;
   onCancel: () => void;
   onRedeem: (relayWsUrl: string, code: string, policyReceipt?: string) => void;
+  variant?: "default" | "onboarding-spotlight";
 };
 
 export function InviteRedeemForm({
@@ -39,7 +55,9 @@ export function InviteRedeemForm({
   isRedeeming,
   onCancel,
   onRedeem,
+  variant = "default",
 }: InviteRedeemFormProps) {
+  const formId = React.useId();
   const [inviteInput, setInviteInput] = React.useState("");
   const [bareCodeRelayUrl, setBareCodeRelayUrl] = React.useState(
     defaultRelayUrl ?? "",
@@ -96,6 +114,9 @@ export function InviteRedeemForm({
     parsed !== null &&
     ("relayWsUrl" in parsed ||
       (isBareCode && bareCodeRelayUrl.trim().length > 0));
+  const isOnboardingSpotlight = variant === "onboarding-spotlight";
+  const showInvalidInviteTip =
+    isOnboardingSpotlight && inviteInput.trim().length > 0 && !canSubmit;
 
   const handleSubmit = React.useCallback(
     async (event: React.FormEvent) => {
@@ -164,40 +185,168 @@ export function InviteRedeemForm({
     ],
   );
 
-  return (
-    <form className="flex w-full flex-col gap-3" onSubmit={handleSubmit}>
-      <div className="space-y-1.5 text-left">
-        <label
-          className="text-sm font-medium text-foreground"
-          htmlFor="invite-input"
-        >
-          Invite link or code
-        </label>
-        <Input
-          autoComplete="off"
-          autoCorrect="off"
-          autoFocus
-          className="h-10 bg-background"
-          data-testid="invite-redeem-input"
-          disabled={isRedeeming}
-          id="invite-input"
-          onChange={(event) => {
-            setInviteInput(event.target.value);
-            setJoinPolicy(null);
-            setPolicyInvite(null);
-            setAgeConfirmed(false);
-            setAgreementConfirmed(false);
-            setPolicyError(null);
-          }}
-          placeholder="https://relay.example.com/invite/abc123 or paste a code"
-          spellCheck={false}
-          type="text"
-          value={inviteInput}
+  const handleInviteInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    setInviteInput(event.target.value);
+    setJoinPolicy(null);
+    setPolicyInvite(null);
+    setAgeConfirmed(false);
+    setAgreementConfirmed(false);
+    setPolicyError(null);
+  };
+
+  const handleRelayInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    setBareCodeRelayUrl(event.target.value);
+    setJoinPolicy(null);
+    setPolicyInvite(null);
+    setAgeConfirmed(false);
+    setAgreementConfirmed(false);
+    setPolicyError(null);
+  };
+
+  const submitButton = (
+    <Button
+      className={
+        isOnboardingSpotlight ? ONBOARDING_PRIMARY_CTA_CLASS : "h-10 w-full"
+      }
+      data-testid="invite-redeem-submit"
+      disabled={
+        !canSubmit ||
+        isRedeeming ||
+        isLoadingPolicy ||
+        Boolean(joinPolicy?.ageAttestationRequired && !ageConfirmed) ||
+        Boolean(
+          joinPolicy &&
+            (joinPolicy.termsMarkdown || joinPolicy.privacyMarkdown) &&
+            !agreementConfirmed,
+        )
+      }
+      form={formId}
+      type="submit"
+    >
+      {isRedeeming || isLoadingPolicy ? (
+        <Spinner
+          aria-label={isRedeeming ? "Redeeming invite" : "Loading policy"}
+          className="h-4 w-4 border-2"
         />
-      </div>
+      ) : isOnboardingSpotlight ? (
+        "Next"
+      ) : joinPolicy ? (
+        "Accept and redeem invite"
+      ) : (
+        "Redeem invite"
+      )}
+    </Button>
+  );
+
+  const cancelButton = (
+    <Button
+      className={
+        isOnboardingSpotlight
+          ? "h-9 rounded-full bg-foreground/10 px-6 hover:bg-foreground/15"
+          : "h-10 w-full text-muted-foreground hover:text-accent-foreground"
+      }
+      disabled={isRedeeming}
+      onClick={onCancel}
+      type="button"
+      variant="ghost"
+    >
+      {isOnboardingSpotlight ? "Back" : "Cancel"}
+    </Button>
+  );
+
+  return (
+    <form
+      className={cn(
+        "flex w-full flex-col",
+        isOnboardingSpotlight ? "relative items-center" : "gap-3",
+      )}
+      id={formId}
+      onSubmit={handleSubmit}
+    >
+      {isOnboardingSpotlight ? (
+        <Card
+          className="w-[min(calc(100%+12rem),calc(100vw-2rem))] max-w-[1120px] translate-y-8 px-8 py-6"
+          data-testid="invite-redeem-input-frame"
+          variant="textured"
+        >
+          <div
+            className={SPOTLIGHT_TEXTURE_CONTENT_CLASS}
+            style={SPOTLIGHT_OVERFLOW_FADE}
+          >
+            <label className="block w-full" htmlFor="invite-input">
+              <span className="sr-only">Invite link or code</span>
+              <span className={ONBOARDING_KEY_ROW_CLASS}>
+                <input
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  className={cn(
+                    ONBOARDING_KEY_TEXT_CLASS,
+                    "block border-0 bg-transparent p-0 text-center shadow-none outline-none placeholder:text-[var(--buzz-onboarding-backup-ink)] placeholder:opacity-40 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+                  )}
+                  data-testid="invite-redeem-input"
+                  disabled={isRedeeming}
+                  id="invite-input"
+                  onChange={handleInviteInputChange}
+                  placeholder="https://relay.example.com/invite/abc123"
+                  spellCheck={false}
+                  type="text"
+                  value={inviteInput}
+                />
+              </span>
+            </label>
+          </div>
+        </Card>
+      ) : (
+        <div className="space-y-1.5 text-left">
+          <label
+            className="text-sm font-medium text-foreground"
+            htmlFor="invite-input"
+          >
+            Invite link or code
+          </label>
+          <Input
+            autoComplete="off"
+            autoCorrect="off"
+            autoFocus
+            className="h-10 bg-background"
+            data-testid="invite-redeem-input"
+            disabled={isRedeeming}
+            id="invite-input"
+            onChange={handleInviteInputChange}
+            placeholder="https://relay.example.com/invite/abc123 or paste a code"
+            spellCheck={false}
+            type="text"
+            value={inviteInput}
+          />
+        </div>
+      )}
+
+      {isOnboardingSpotlight ? (
+        <p
+          aria-hidden={!showInvalidInviteTip}
+          aria-live="polite"
+          className={cn(
+            "absolute top-[calc(100%+2rem)] mt-4 min-h-5 w-full max-w-4xl text-center text-sm text-[#717106] transition-opacity duration-150 ease-out",
+            showInvalidInviteTip ? "opacity-100" : "opacity-0",
+          )}
+          data-testid="invalid-invite-tip"
+        >
+          Please enter a valid invite link
+        </p>
+      ) : null}
 
       {needsRelayField ? (
-        <div className="space-y-1.5 text-left">
+        <div
+          className={cn(
+            "space-y-1.5 text-left",
+            isOnboardingSpotlight && "w-full max-w-[500px]",
+          )}
+        >
           <label
             className="text-sm font-medium text-foreground"
             htmlFor="invite-relay-url"
@@ -208,14 +357,7 @@ export function InviteRedeemForm({
             className="h-10 bg-background"
             disabled={isRedeeming}
             id="invite-relay-url"
-            onChange={(event) => {
-              setBareCodeRelayUrl(event.target.value);
-              setJoinPolicy(null);
-              setPolicyInvite(null);
-              setAgeConfirmed(false);
-              setAgreementConfirmed(false);
-              setPolicyError(null);
-            }}
+            onChange={handleRelayInputChange}
             placeholder="wss://relay.example.com"
             type="text"
             value={bareCodeRelayUrl}
@@ -286,43 +428,17 @@ export function InviteRedeemForm({
         ) : null}
       </AnimatePresence>
 
-      <Button
-        className="h-10 w-full"
-        data-testid="invite-redeem-submit"
-        disabled={
-          !canSubmit ||
-          isRedeeming ||
-          isLoadingPolicy ||
-          Boolean(joinPolicy?.ageAttestationRequired && !ageConfirmed) ||
-          Boolean(
-            joinPolicy &&
-              (joinPolicy.termsMarkdown || joinPolicy.privacyMarkdown) &&
-              !agreementConfirmed,
-          )
-        }
-        type="submit"
-      >
-        {isRedeeming || isLoadingPolicy ? (
-          <Spinner
-            aria-label={isRedeeming ? "Redeeming invite" : "Loading policy"}
-            className="h-4 w-4 border-2"
-          />
-        ) : joinPolicy ? (
-          "Accept and redeem invite"
-        ) : (
-          "Redeem invite"
-        )}
-      </Button>
-
-      <Button
-        className="h-10 w-full text-muted-foreground hover:text-accent-foreground"
-        disabled={isRedeeming}
-        onClick={onCancel}
-        type="button"
-        variant="ghost"
-      >
-        Cancel
-      </Button>
+      {isOnboardingSpotlight ? (
+        <OnboardingFooter>
+          {submitButton}
+          {cancelButton}
+        </OnboardingFooter>
+      ) : (
+        <>
+          {submitButton}
+          {cancelButton}
+        </>
+      )}
     </form>
   );
 }

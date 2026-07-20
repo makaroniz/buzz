@@ -192,9 +192,11 @@ export type {
   ProjectLocalRepoSnapshot,
   ProjectRepoCommit,
   ProjectRepoContributor,
+  ProjectRepoCloneResult,
   ProjectRepoDiff,
   ProjectRepoDiffFile,
   ProjectRepoFile,
+  ProjectRepoMergeResult,
   ProjectRepoPullResult,
   ProjectRepoPushResult,
   ProjectRepoSnapshot,
@@ -515,6 +517,12 @@ export type AcpRuntimeCatalogEntry = {
   binaryPath: string | null;
   defaultArgs: string[];
   mcpCommand: string | null;
+  /** Environment variable used to apply the initial model, when supported. */
+  modelEnvVar: string | null;
+  /** Environment variable used to apply the selected LLM provider, when supported. */
+  providerEnvVar: string | null;
+  /** Environment variable used to apply thinking effort, when supported. */
+  thinkingEnvVar: string | null;
   installHint: string;
   installInstructionsUrl: string;
   canAutoInstall: boolean;

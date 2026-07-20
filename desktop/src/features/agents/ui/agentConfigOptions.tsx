@@ -12,7 +12,7 @@ export { getDefaultPersonaRuntime } from "../lib/resolvePersonaRuntime";
  *
  * All three dialog sites that show a provider picker import this constant —
  * `AgentDefinitionDialog`, `AgentInstanceEditDialog`, and
- * `GlobalAgentConfigSettingsCard` — making it the single source of truth for
+ * `AgentDefaultsSettingsCard` — making it the single source of truth for
  * which provider ids to suppress on Block builds.
  */
 export const BLOCK_BUILD_HIDDEN_PROVIDER_IDS: ReadonlySet<string> = new Set([
@@ -112,7 +112,7 @@ const DEFAULT_MODEL_OPTION: PersonaModelOption = {
   label: "Default model",
 };
 
-const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
+export const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
   { id: "anthropic", label: "Anthropic" },
   { id: "openai", label: "OpenAI" },
   { id: "openai-compat", label: "OpenAI-compatible" },
