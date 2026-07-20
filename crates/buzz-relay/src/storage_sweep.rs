@@ -166,17 +166,23 @@ pub async fn maybe_spawn_sweep<Fut>(
         match handle.await {
             Ok(attempt) => {
                 let ok = attempt.result.is_ok();
-                if let Ok(snapshot) = attempt.result {
-                    state.cached = Some(CachedSnapshot {
-                        data: snapshot,
-                        completed_at: Instant::now(),
-                    });
-                } else if !ok {
-                    // Warm-cache-on-failure (F5): keep the previous
-                    // successful snapshot; only the health gauges regress.
-                }
-                if !ok {
-                    state.failures_total += 1;
+                match attempt.result {
+                    Ok(snapshot) => {
+                        state.cached = Some(CachedSnapshot {
+                            data: snapshot,
+                            // Stamped at harvest, not sweep completion — exported
+                            // age/cadence may lag by ≤1 usage tick.
+                            completed_at: Instant::now(),
+                        });
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "storage sweep failed; verify s3:ListBucket \
+                             (or MinIO list) permission is granted on the bucket"
+                        );
+                        state.failures_total += 1;
+                    }
                 }
                 state.last_attempt = Some(LastAttempt {
                     ok,
@@ -231,6 +237,7 @@ pub async fn emit_storage_metrics(
 
     let ok = state.last_attempt.is_some_and(|a| a.ok);
     metrics::gauge!("buzz_storage_sweep_ok").set(if ok { 1.0 } else { 0.0 });
+    // Process-local gauge: resets/jumps on leader failover — not a global counter.
     metrics::gauge!("buzz_storage_sweep_failures_total").set(state.failures_total as f64);
     if let Some(attempt) = state.last_attempt {
         metrics::gauge!("buzz_storage_sweep_duration_seconds").set(attempt.duration.as_secs_f64());

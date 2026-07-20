@@ -352,6 +352,10 @@ pub enum SweepError {
     /// currency the whole sweep pipeline reasons about.
     #[error("sweep timed out after {0:?}")]
     Timeout(std::time::Duration),
+    /// A listing page reported `is_truncated=true` but supplied no
+    /// continuation token — a malformed S3 response that cannot be resumed.
+    #[error("truncated listing page with no continuation token")]
+    MalformedPage,
 }
 
 /// One page of a bucket listing, decoupled from any S3 crate type so the
@@ -399,9 +403,7 @@ where
         }
         match page.next_continuation_token {
             Some(token) => continuation_token = Some(token),
-            // Defensive: truncated with no token to resume from is a
-            // malformed response, not an infinite-loop invitation.
-            None => break,
+            None => return Err(SweepError::MalformedPage),
         }
     }
 
@@ -733,5 +735,21 @@ mod tests {
         })
         .await;
         assert!(matches!(result, Err(SweepError::Storage(_))));
+    }
+
+    #[tokio::test]
+    async fn truncated_page_with_no_continuation_token_fails_the_sweep() {
+        let result = fold_bucket_listing(100, |_token| async {
+            Ok(Page {
+                objects: vec![("some-key".to_string(), 1)],
+                next_continuation_token: None,
+                is_truncated: true,
+            })
+        })
+        .await;
+        assert!(
+            matches!(result, Err(SweepError::MalformedPage)),
+            "truncated page without a continuation token must fail, not return partial data"
+        );
     }
 }
