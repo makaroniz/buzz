@@ -8,10 +8,11 @@ use crate::{
         ensure_persona_is_active, find_managed_agent_mut, load_managed_agents, load_personas,
         load_teams, managed_agent_avatar_url, managed_agents_base_dir, normalize_agent_args,
         provider_deploy, resolve_provider_binary, save_managed_agents, start_managed_agent_process,
-        stop_managed_agent_process, sync_managed_agent_processes, try_regenerate_nest,
-        validate_provider_config, BackendKind, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentRecord, ManagedAgentSummary, RelayMeshConfig,
-        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        stop_managed_agent_process, stop_managed_agent_workspace_pair,
+        sync_managed_agent_processes, try_regenerate_nest, validate_provider_config, BackendKind,
+        CreateManagedAgentRequest, CreateManagedAgentResponse, ManagedAgentRecord,
+        ManagedAgentSummary, RelayMeshConfig, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
@@ -1215,9 +1216,10 @@ pub async fn stop_managed_agent(
                     "remote agents are stopped via !shutdown message, not this command".to_string(),
                 );
             }
-            stop_managed_agent_process(&app, record, &mut runtimes)?;
+            // Pair-scoped: stops only the active workspace's pair; delete and
+            // the config-restart flows still drain every pair.
+            stop_managed_agent_workspace_pair(&app, record, &mut runtimes)?;
         }
-        state.clear_agent_session_caches(&pubkey);
         save_managed_agents(&app, &records)?;
         let record = records
             .iter()

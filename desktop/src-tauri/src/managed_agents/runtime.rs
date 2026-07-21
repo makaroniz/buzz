@@ -19,7 +19,7 @@ pub(in crate::managed_agents) use path::build_augmented_path;
 
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
-pub use stop::stop_managed_agent_process;
+pub use stop::{stop_managed_agent_process, stop_managed_agent_workspace_pair};
 
 mod sweep;
 pub(crate) use sweep::sweep_untracked_bundle_harnesses;
@@ -1337,6 +1337,36 @@ fn persona_drift_state(
     (out_of_date, false)
 }
 
+/// Resolve the runtime-pair key this record maps to for the active
+/// workspace: an explicit per-record relay pin wins, otherwise the active
+/// workspace relay. Returns `None` for records that cannot form a valid
+/// pair key yet (e.g. key-less agents that mint keys on first start).
+pub(crate) fn workspace_pair_key(
+    app: &AppHandle,
+    record: &ManagedAgentRecord,
+) -> Option<ManagedAgentRuntimeKey> {
+    use tauri::Manager;
+    let state = app.state::<crate::app_state::AppState>();
+    resolve_workspace_pair_key(
+        &record.pubkey,
+        &record.relay_url,
+        &crate::relay::relay_ws_url_with_override(&state),
+    )
+}
+
+/// Pure core of [`workspace_pair_key`]: pin-else-workspace relay precedence
+/// plus canonical key construction, kept `AppHandle`-free so summary/stop
+/// scoping semantics are unit-testable.
+pub(crate) fn resolve_workspace_pair_key(
+    pubkey: &str,
+    record_relay_url: &str,
+    workspace_relay_url: &str,
+) -> Option<ManagedAgentRuntimeKey> {
+    let effective_relay =
+        crate::relay::effective_agent_relay_url(record_relay_url, workspace_relay_url);
+    ManagedAgentRuntimeKey::new(pubkey.to_string(), &effective_relay).ok()
+}
+
 pub fn build_managed_agent_summary(
     app: &AppHandle,
     record: &ManagedAgentRecord,
@@ -1344,6 +1374,14 @@ pub fn build_managed_agent_summary(
     personas: &[crate::managed_agents::types::AgentDefinition],
 ) -> Result<ManagedAgentSummary, String> {
     use crate::managed_agents::BackendKind;
+
+    // Community-scoped truth: this summary describes the pair for the relay
+    // the record resolves to right now (pin, else active workspace). An agent
+    // running only in another community must read as stopped here — matching
+    // by pubkey alone would show every community a green light as long as any
+    // pair anywhere is alive.
+    let pair_key = workspace_pair_key(app, record);
+    let pair_runtime = pair_key.as_ref().and_then(|key| runtimes.get(key));
 
     let (status, pid, log_path) = if record.backend != BackendKind::Local {
         // Two-axis status model for remote agents:
@@ -1369,11 +1407,7 @@ pub fn build_managed_agent_summary(
         (status, None, String::new())
     } else {
         let persisted_pid = record.runtime_pid.filter(|pid| process_is_running(*pid));
-        if let Some(runtime) = runtimes
-            .iter()
-            .find(|(key, _)| key.pubkey == record.pubkey)
-            .map(|(_, runtime)| runtime)
-        {
+        if let Some(runtime) = pair_runtime {
             (
                 "running".to_string(),
                 Some(runtime.child.id()),
@@ -1405,22 +1439,22 @@ pub fn build_managed_agent_summary(
     let (persona_out_of_date, persona_orphaned) = persona_drift_state(record, personas);
 
     // Restart badge: the running process stamped its effective spawn config
-    // at launch; recompute from current disk state and flag drift. Only a
-    // tracked live process can drift — stopped agents spawn fresh, and
-    // adopted (runtime_pid-only) processes have no stamped hash to compare.
+    // at launch; recompute from current disk state and flag drift. Only the
+    // tracked live pair for THIS workspace can drift — stopped agents spawn
+    // fresh, adopted (runtime_pid-only) processes have no stamped hash to
+    // compare, and pairs running for other communities are judged in their
+    // own community (hashing them against this workspace's relay would flag
+    // a spurious restart on every community switch).
     //
     // Additionally, for runtimes with an adapter version gate (codex only),
     // check whether the cached adapter availability has drifted from the value
     // stamped at spawn.  This catches out-of-band adapter changes (manual
     // npm install/downgrade) that Phase-1 auto-restart doesn't cover.  The
     // cache is read-only here — no subprocess is spawned.
-    let needs_restart = runtimes
-        .iter()
-        .find(|(key, _)| key.pubkey == record.pubkey)
-        .map(|(_, runtime)| runtime)
-        .is_some_and(|runtime| {
-            use tauri::Manager;
-            let state = app.state::<crate::app_state::AppState>();
+    let needs_restart = pair_key
+        .as_ref()
+        .and_then(|key| runtimes.get(key).map(|runtime| (key, runtime)))
+        .is_some_and(|(key, runtime)| {
             let global_for_hash =
                 crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
             let teams_for_hash = crate::managed_agents::load_teams(app).unwrap_or_default();
@@ -1429,7 +1463,7 @@ pub fn build_managed_agent_summary(
                     record,
                     personas,
                     &teams_for_hash,
-                    &crate::relay::relay_ws_url_with_override(&state),
+                    &key.relay_url,
                     &global_for_hash,
                 );
             let availability_drift = super::availability_drift(

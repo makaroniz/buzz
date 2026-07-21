@@ -10097,6 +10097,9 @@ export function maybeInstallE2eTauriMocks() {
           "restart",
           payload as { pubkey: string; relayUrl: string },
         );
+      case "reconcile_managed_agent_runtimes":
+        // Post-create bootstrap reconcile: no new pairs in the mock world.
+        return [];
       case "set_agent_managed_profiles":
         return undefined;
       case "set_managed_agent_auto_restart":

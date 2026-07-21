@@ -896,3 +896,51 @@ fn replacement_failure_keeps_receipt() {
     assert_eq!(error, "signal failed");
     assert!(!removed.get());
 }
+
+// ── workspace pair-key resolution (summary/stop scoping) ────────────────
+
+#[test]
+fn unpinned_record_resolves_pair_key_per_workspace() {
+    // Community-scoped truth: an unpinned agent running only on relay A must
+    // read as running in workspace A and stopped in workspace B — the pair
+    // key the summary looks up differs per workspace.
+    let pubkey = "aa".repeat(32);
+    let key_a = super::resolve_workspace_pair_key(&pubkey, "", "wss://one.example").unwrap();
+    let key_b = super::resolve_workspace_pair_key(&pubkey, "", "wss://two.example").unwrap();
+
+    let runtimes = std::collections::HashMap::from([(key_a.clone(), ())]);
+    assert!(runtimes.contains_key(&key_a));
+    assert!(!runtimes.contains_key(&key_b));
+}
+
+#[test]
+fn pinned_record_resolves_to_pin_in_every_workspace() {
+    // A pin means "this agent lives on that relay": the same pair is
+    // resolved (and judged for drift) no matter which community is viewed.
+    let pubkey = "aa".repeat(32);
+    let from_a =
+        super::resolve_workspace_pair_key(&pubkey, "wss://pinned.example", "wss://one.example")
+            .unwrap();
+    let from_b =
+        super::resolve_workspace_pair_key(&pubkey, "wss://pinned.example", "wss://two.example")
+            .unwrap();
+    assert_eq!(from_a, from_b);
+    assert_eq!(from_a.relay_url, "wss://pinned.example");
+}
+
+#[test]
+fn workspace_pair_key_is_canonical() {
+    // Spawn stamps the canonical key; lookup must hit the same entry even
+    // when the workspace relay is written in a non-canonical form.
+    let pubkey = "aa".repeat(32);
+    let stamped = super::resolve_workspace_pair_key(&pubkey, "", "wss://one.example").unwrap();
+    let viewed = super::resolve_workspace_pair_key(&pubkey, "", "WSS://One.Example:443/").unwrap();
+    assert_eq!(stamped, viewed);
+}
+
+#[test]
+fn invalid_pubkey_resolves_no_pair_key() {
+    // Key-less records (keys minted on first start) cannot form a pair key;
+    // the summary must fall back to the stopped/legacy-pid path, not panic.
+    assert!(super::resolve_workspace_pair_key("not-a-key", "", "wss://one.example").is_none());
+}

@@ -5,8 +5,10 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
+import { loadCommunities } from "@/features/communities/communityStorage";
 import {
   listManagedAgentRuntimes,
+  reconcileManagedAgentRuntimes,
   restartManagedAgentRuntime,
   startManagedAgentRuntime,
   stopManagedAgentRuntime,
@@ -59,6 +61,36 @@ export function cacheReconciledManagedAgentRuntimes(
     managedAgentRuntimesQueryKey,
     (current) => mergeManagedAgentRuntimeStatuses(baseline, current, runtimes),
   );
+}
+
+/**
+ * Bootstrap runtime pairs in every configured community (fire-and-forget).
+ *
+ * Called after an agent create: the create command spawns only the active
+ * community's pair, and the startup reconcile won't run again until the next
+ * launch or community switch, so without this kick a brand-new agent stays
+ * deaf in every other community. Idempotent — live pairs are skipped and
+ * missing ones spawn lazily (warm socket, no LLM until first mention).
+ */
+export function bootstrapManagedAgentRuntimePairs(
+  queryClient: QueryClient,
+): void {
+  const baseline = queryClient.getQueryData<ManagedAgentRuntimeStatus[]>(
+    managedAgentRuntimesQueryKey,
+  );
+  const communities = loadCommunities().map((community) => ({
+    relayUrl: community.relayUrl,
+  }));
+  void reconcileManagedAgentRuntimes(communities)
+    .then((runtimes) => {
+      cacheReconciledManagedAgentRuntimes(queryClient, baseline, runtimes);
+    })
+    .catch((error) => {
+      console.warn(
+        "[managed-agent-runtimes] post-create reconcile failed:",
+        error,
+      );
+    });
 }
 
 export function useManagedAgentRuntimesQuery(options?: { enabled?: boolean }) {

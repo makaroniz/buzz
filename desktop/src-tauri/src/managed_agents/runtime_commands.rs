@@ -315,16 +315,25 @@ pub fn restart_managed_agent_runtime(
     start_pair(pubkey, relay_url, true, None, app)
 }
 
-async fn discover_agent_membership(
+/// Probe whether this agent can operate on `requested_relay_url`.
+///
+/// Runs a bounded authenticated query with the agent's own keys (NIP-42 +
+/// NIP-OA auth tag). Auth success is the spawn-eligibility signal: NIP-29
+/// membership (kind 39002) cannot exist before the agent's harness first
+/// connects to a relay, so gating on membership *presence* could never
+/// bootstrap a pair on a newly configured community — it only rediscovered
+/// pairs that had already run. A rejected or timed-out probe surfaces as a
+/// Failed status row instead of a silent skip.
+async fn probe_agent_relay_access(
     state: &AppState,
     record: super::ManagedAgentRecord,
     requested_relay_url: String,
-) -> Result<Option<(super::ManagedAgentRecord, ManagedAgentRuntimeKey, String)>, String> {
+) -> Result<(super::ManagedAgentRecord, ManagedAgentRuntimeKey, String), String> {
     let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &requested_relay_url)?;
     let keys = nostr::Keys::parse(record.private_key_nsec.trim())
         .map_err(|error| format!("invalid managed-agent key: {error}"))?;
     let api_base = crate::relay::relay_http_base_url(&key.relay_url);
-    let events = tokio::time::timeout(
+    tokio::time::timeout(
         std::time::Duration::from_secs(10),
         crate::relay::query_relay_at_with_keys(
             state,
@@ -335,8 +344,25 @@ async fn discover_agent_membership(
         ),
     )
     .await
-    .map_err(|_| "membership discovery timed out".to_string())??;
-    Ok((!events.is_empty()).then_some((record, key, requested_relay_url)))
+    .map_err(|_| "relay access probe timed out".to_string())??;
+    Ok((record, key, requested_relay_url))
+}
+
+/// True when `record` may run a pair on `relay_url`: unpinned records run on
+/// every configured community; a record with an explicit `relay_url` pin runs
+/// only on that relay (compared canonically).
+fn record_allows_relay(record: &super::ManagedAgentRecord, relay_url: &str) -> bool {
+    let pinned = record.relay_url.trim();
+    if pinned.is_empty() {
+        return true;
+    }
+    match (
+        buzz_core_pkg::relay::normalize_relay_url(pinned),
+        buzz_core_pkg::relay::normalize_relay_url(relay_url),
+    ) {
+        (Ok(pinned), Ok(requested)) => pinned == requested,
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -352,17 +378,20 @@ pub async fn reconcile_managed_agent_runtimes(
         for record in records
             .iter()
             .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
+            // Respect explicit relay pins: a pinned agent runs only on its
+            // pinned relay — never spawn it onto other communities.
+            .filter(|record| record_allows_relay(record, &community.relay_url))
         {
             jobs.push((record.clone(), community.relay_url.clone()));
         }
     }
-    let discoveries: Vec<_> = stream::iter(jobs)
+    let probes: Vec<_> = stream::iter(jobs)
         .map(|(record, requested)| {
             let state = app.state::<AppState>();
             async move {
                 let fallback_record = record.clone();
                 let fallback_requested = requested.clone();
-                discover_agent_membership(&state, record, requested)
+                probe_agent_relay_access(&state, record, requested)
                     .await
                     .map_err(|error| (fallback_record, fallback_requested, error))
             }
@@ -372,9 +401,9 @@ pub async fn reconcile_managed_agent_runtimes(
         .await;
 
     let mut rows = Vec::new();
-    for discovery in discoveries {
-        match discovery {
-            Ok(Some((record, key, requested))) => {
+    for probe in probes {
+        match probe {
+            Ok((record, key, requested)) => {
                 match start_pair(
                     record.pubkey.clone(),
                     key.relay_url.clone(),
@@ -394,7 +423,6 @@ pub async fn reconcile_managed_agent_runtimes(
                     }
                 }
             }
-            Ok(None) => {}
             Err((record, requested, error)) => {
                 let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &requested)?;
                 let mut status = status_for(&app, &record, &key, None, Some(requested));
@@ -423,6 +451,42 @@ mod tests {
             lifecycle,
             error: error.map(str::to_owned),
         }
+    }
+
+    fn record_with_relay(relay_url: &str) -> super::super::ManagedAgentRecord {
+        serde_json::from_str(&format!(
+            r#"{{
+                "pubkey": "{}",
+                "name": "pin-test",
+                "relay_url": "{relay_url}",
+                "acp_command": "buzz-acp",
+                "agent_command": "goose",
+                "agent_args": [],
+                "mcp_command": "",
+                "turn_timeout_seconds": 320,
+                "system_prompt": "",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }}"#,
+            "aa".repeat(32)
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn unpinned_record_allows_every_relay() {
+        let record = record_with_relay("");
+        assert!(record_allows_relay(&record, "wss://one.example"));
+        assert!(record_allows_relay(&record, "wss://two.example"));
+    }
+
+    #[test]
+    fn pinned_record_allows_only_its_canonical_relay() {
+        let record = record_with_relay("wss://one.example");
+        assert!(record_allows_relay(&record, "wss://one.example"));
+        // Canonical comparison: scheme case, default port, trailing slash.
+        assert!(record_allows_relay(&record, "WSS://One.Example:443/"));
+        assert!(!record_allows_relay(&record, "wss://two.example"));
     }
 
     #[test]
