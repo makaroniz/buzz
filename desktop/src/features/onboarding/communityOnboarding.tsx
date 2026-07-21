@@ -242,6 +242,55 @@ export function shouldSkipCommunityOnboarding(
   return profile !== null && profile.hasProfileEvent === true;
 }
 
+/**
+ * Outcome of a profile-check attempt during the connecting → profile
+ * transition. Produced by `resolveProfileCheckAction`.
+ *
+ * - `{ action: "skip", profile }` — kind:0 exists; mark complete and enter
+ *   the app. The resolved `Profile` is included so callers have the pubkey
+ *   for `markCommunityOnboardingComplete` without a second fetch.
+ * - `{ action: "show-profile" }` — no kind:0, or the fetch failed / timed
+ *   out; show the profile setup step.
+ */
+export type ProfileCheckAction =
+  | { action: "skip"; profile: Profile }
+  | { action: "show-profile" };
+
+/**
+ * Runs a bounded profile fetch and returns the action to take at the
+ * `connecting → profile` transition.
+ *
+ * Accepts `fetchProfile` and `timeoutMs` as parameters so callers (and tests)
+ * can supply controlled implementations. The timeout promise uses the caller-
+ * supplied `setTimeout` so fake timers work in tests without touching globals.
+ *
+ * Any fetch error or timeout → `{ action: "show-profile" }` (never strands
+ * onboarding).
+ */
+export async function resolveProfileCheckAction(
+  fetchProfile: () => Promise<Profile>,
+  timeoutMs: number,
+  scheduleTimeout: (fn: () => void, ms: number) => void = (fn, ms) =>
+    void window.setTimeout(fn, ms),
+): Promise<ProfileCheckAction> {
+  try {
+    const profile = await Promise.race([
+      fetchProfile(),
+      new Promise<never>((_, reject) =>
+        scheduleTimeout(
+          () => reject(new Error("profile-check-timeout")),
+          timeoutMs,
+        ),
+      ),
+    ]);
+    return shouldSkipCommunityOnboarding(profile)
+      ? { action: "skip", profile }
+      : { action: "show-profile" };
+  } catch {
+    return { action: "show-profile" };
+  }
+}
+
 import * as React from "react";
 
 type CommunityOnboardingContextValue = {

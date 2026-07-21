@@ -21,7 +21,7 @@ import {
   type FirstCommunityPage,
   useCommunityOnboarding,
   markCommunityOnboardingComplete,
-  shouldSkipCommunityOnboarding,
+  resolveProfileCheckAction,
 } from "@/features/onboarding/communityOnboarding";
 import { CommunityOnboardingFlow } from "@/features/onboarding/ui/CommunityOnboardingFlow";
 import {
@@ -282,7 +282,14 @@ function CommunityApp({
   } = useCommunities();
   const communityOnboarding = useCommunityOnboarding();
   const connectingTransactionRef = useRef<string | null>(null);
+  // Tracks the ID of the profile-check request that has been launched for the
+  // current connecting transaction. Prevents the effect from launching a
+  // second request if it re-runs while a fetch is in flight.
   const profileCheckTransactionRef = useRef<string | null>(null);
+  // Always reflects the live transaction object so async callbacks can perform
+  // an atomic check of both ID and stage before mutating state.
+  const transactionRef = useRef(communityOnboarding.transaction);
+  transactionRef.current = communityOnboarding.transaction;
   const [isCommunityChangeOpen, setIsCommunityChangeOpen] = useState(false);
   const [resumeFirstCommunityPage, setResumeFirstCommunityPage] =
     useState<FirstCommunityPage | null>(null);
@@ -401,24 +408,32 @@ function CommunityApp({
     const relayUrl = transaction.relayUrl;
     if (profileCheckTransactionRef.current === transactionId) return;
     profileCheckTransactionRef.current = transactionId;
-    void getProfile()
-      .then((profile) => {
-        if (shouldSkipCommunityOnboarding(profile)) {
-          markCommunityOnboardingComplete(profile.pubkey, relayUrl);
-          communityOnboarding.clear();
-        } else {
-          communityOnboarding.update(
-            { stage: "profile", error: undefined },
-            transactionId,
-          );
-        }
-      })
-      .catch(() => {
+
+    // Settled flag: ensures exactly one of {skip, show-profile} fires even if
+    // a timeout and a late success both resolve for the same request.
+    let settled = false;
+
+    void resolveProfileCheckAction(getProfile, 10_000).then((result) => {
+      if (settled) return;
+      settled = true;
+
+      // Atomic staleness guard: the transaction must still be the same one
+      // that launched this request AND must still be in the connecting stage.
+      // This covers: (a) user cancelled A and started B — B must not be
+      // cleared; (b) cancel without replacement — ref is null, guard fires.
+      const live = transactionRef.current;
+      if (live?.id !== transactionId || live.stage !== "connecting") return;
+
+      if (result.action === "skip") {
+        markCommunityOnboardingComplete(result.profile.pubkey, relayUrl);
+        communityOnboarding.clear();
+      } else {
         communityOnboarding.update(
           { stage: "profile", error: undefined },
           transactionId,
         );
-      });
+      }
+    });
   }, [
     communityOnboarding,
     targetIsReady,

@@ -5,6 +5,7 @@ import {
   clearCommunityOnboardingTransaction,
   loadCommunityOnboardingTransaction,
   markCommunityOnboardingComplete,
+  resolveProfileCheckAction,
   shouldSkipCommunityOnboarding,
   startCommunityOnboarding,
   updateCommunityOnboardingTransaction,
@@ -187,5 +188,101 @@ test("shouldSkipCommunityOnboarding_fetchError_returnsFalse", () => {
     shouldSkipCommunityOnboarding(null),
     false,
     "fetch error ⇒ show profile step (safe fallback)",
+  );
+});
+
+// ── resolveProfileCheckAction — async orchestration ──────────────────────────
+
+/**
+ * Returns a fake scheduleTimeout that captures registered callbacks so tests
+ * can fire or skip them manually without real timers.
+ */
+function makeScheduler() {
+  const callbacks = [];
+  return {
+    schedule: (fn, _ms) => callbacks.push(fn),
+    fireTimeout: () => {
+      const fn = callbacks.shift();
+      if (fn) fn();
+    },
+    pendingCount: () => callbacks.length,
+  };
+}
+
+test("resolveProfileCheckAction_hasProfileEvent_returnsSkipWithProfile", async () => {
+  const profile = makeProfile(true, { pubkey: "aabbcc" });
+  const result = await resolveProfileCheckAction(
+    () => Promise.resolve(profile),
+    10_000,
+    makeScheduler().schedule,
+  );
+  assert.equal(result.action, "skip");
+  assert.equal(result.profile.pubkey, "aabbcc");
+});
+
+test("resolveProfileCheckAction_noProfileEvent_returnsShowProfile", async () => {
+  const result = await resolveProfileCheckAction(
+    () => Promise.resolve(makeProfile(false)),
+    10_000,
+    makeScheduler().schedule,
+  );
+  assert.equal(result.action, "show-profile");
+});
+
+test("resolveProfileCheckAction_fetchRejects_returnsShowProfile", async () => {
+  const result = await resolveProfileCheckAction(
+    () => Promise.reject(new Error("network error")),
+    10_000,
+    makeScheduler().schedule,
+  );
+  assert.equal(result.action, "show-profile");
+});
+
+test("resolveProfileCheckAction_timeout_returnsShowProfile", async () => {
+  // Fetch never settles; scheduler fires the timeout immediately.
+  const scheduler = makeScheduler();
+  const result = await resolveProfileCheckAction(
+    () => new Promise(() => {}), // hangs forever
+    10_000,
+    (fn, ms) => {
+      scheduler.schedule(fn, ms);
+      // Fire synchronously so the test does not wait for a real timer.
+      scheduler.fireTimeout();
+    },
+  );
+  assert.equal(
+    result.action,
+    "show-profile",
+    "timeout ⇒ show-profile (never strands onboarding)",
+  );
+});
+
+test("resolveProfileCheckAction_lateSuccessAfterTimeout_doesNotSkip", async () => {
+  // Fetch resolves AFTER the timeout has already fired.
+  // resolveProfileCheckAction must return show-profile from the timeout path,
+  // and the late fetch result must have no effect.
+  let resolveFetch;
+  const fetchPromise = new Promise((resolve) => {
+    resolveFetch = resolve;
+  });
+
+  const scheduler = makeScheduler();
+  const resultPromise = resolveProfileCheckAction(
+    () => fetchPromise,
+    10_000,
+    scheduler.schedule,
+  );
+
+  // Fire the timeout — race settles with the timeout rejection.
+  scheduler.fireTimeout();
+
+  // Now resolve the fetch with a kind:0 profile.
+  resolveFetch(makeProfile(true));
+
+  const result = await resultPromise;
+  assert.equal(
+    result.action,
+    "show-profile",
+    "late success after timeout must not complete onboarding",
   );
 });
