@@ -17,7 +17,7 @@
 //!   while the newest attempt is failing, so a transient S3 blip never blanks
 //!   the dashboards.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant};
 
@@ -102,6 +102,35 @@ struct SweepAttempt {
     duration: Duration,
 }
 
+/// Key tracking which per-community series were emitted in the previous tick,
+/// so series for communities that disappear from the snapshot (unmapped, host
+/// renamed, or scope-excluded) are zeroed rather than left at their last
+/// nonzero value until the recorder's idle-eviction kicks in.
+///
+/// Carries the resolved host label (not the UUID) so a rename can still zero
+/// the old series, and distinguishes bytes vs. objects because they are
+/// separate Prometheus series.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum StorageEmittedKey {
+    Bytes(String),
+    Objects(String),
+}
+
+impl StorageEmittedKey {
+    fn set(&self, value: f64) {
+        match self {
+            Self::Bytes(host) => {
+                metrics::gauge!("buzz_community_storage_bytes", "community" => host.clone())
+                    .set(value);
+            }
+            Self::Objects(host) => {
+                metrics::gauge!("buzz_community_storage_objects", "community" => host.clone())
+                    .set(value);
+            }
+        }
+    }
+}
+
 /// Single-flight + cache state for the storage sweep. One instance lives in
 /// `AppState`, shared behind a `Mutex` — the same pattern this codebase uses
 /// for other cross-tick poller state (e.g. the audit worker's
@@ -112,12 +141,22 @@ pub struct StorageSweepState {
     cached: Option<CachedSnapshot>,
     last_attempt: Option<LastAttempt>,
     failures_total: u64,
+    /// Per-community series emitted on the previous tick — used to zero series
+    /// whose community disappears from the snapshot (see [`emit_storage_metrics`]).
+    previously_emitted: HashSet<StorageEmittedKey>,
 }
 
 /// Single-flight + cadence rule (F5/F5-bis): spawn a new sweep iff no sweep
 /// is in flight AND (cold cache, OR the last attempt failed — respawn on the
 /// very next tick rather than waiting a full interval, OR the cached
 /// snapshot is older than `interval`).
+///
+/// Note: a failed attempt (`!ok`) returns `true` unconditionally, so a
+/// permanently failing sweep (e.g. missing `s3:ListBucket`) will retry on
+/// every usage tick (default 300 s), not at the sweep-interval cadence.
+/// This is intentional: the retry is a single cheap LIST call, it means the
+/// sweep self-heals the moment the permission is added, and the tick cadence
+/// is documented in values.yaml.
 fn should_spawn(
     cached: &Option<CachedSnapshot>,
     last_attempt: &Option<LastAttempt>,
@@ -228,23 +267,37 @@ pub async fn maybe_spawn_sweep<Fut>(
 /// from `host_map` is "unmapped" (sidecar references a community with no DB
 /// row) and rolls into `buzz_storage_unmapped_community_bytes` instead of a
 /// per-community series.
+///
+/// Per-community series whose community disappears from the current snapshot
+/// (unmapped, host rename, or scope exclusion) are explicitly zeroed — the
+/// same pattern as `emit_in_memory_usage_metrics`. Without this, a series
+/// would linger at its last nonzero value until the recorder's idle eviction
+/// fires (≥3 ticks), producing a transient double-count against the
+/// `buzz_storage_unmapped_community_bytes` gauge.
 pub async fn emit_storage_metrics(
     state: &Mutex<StorageSweepState>,
     host_map: &HashMap<Uuid, String>,
     allows: impl Fn(&Uuid) -> bool,
 ) {
-    let state = state.lock().await;
+    let mut state = state.lock().await;
 
     let ok = state.last_attempt.is_some_and(|a| a.ok);
     metrics::gauge!("buzz_storage_sweep_ok").set(if ok { 1.0 } else { 0.0 });
     // Process-local gauge: resets/jumps on leader failover — not a global counter.
-    metrics::gauge!("buzz_storage_sweep_failures_total").set(state.failures_total as f64);
+    // Named without _total suffix to avoid confusing tools that infer counter
+    // semantics from the _total convention (e.g. rate() in PromQL).
+    metrics::gauge!("buzz_storage_sweep_failures").set(state.failures_total as f64);
     if let Some(attempt) = state.last_attempt {
         metrics::gauge!("buzz_storage_sweep_duration_seconds").set(attempt.duration.as_secs_f64());
     }
 
     // Cold cache + failure (F5): no storage-family/per-community gauges yet.
+    // Zero any previously-emitted per-community series before returning so
+    // they don't linger if we had a warm cache in a prior tick.
     let Some(cached) = &state.cached else {
+        for key in state.previously_emitted.drain() {
+            key.set(0.0);
+        }
         return;
     };
     metrics::gauge!("buzz_storage_sweep_age_seconds")
@@ -268,6 +321,7 @@ pub async fn emit_storage_metrics(
     metrics::gauge!("buzz_storage_unknown_key_bytes").set(snapshot.unknown_key_bytes as f64);
     metrics::gauge!("buzz_storage_unknown_key_objects").set(snapshot.unknown_key_objects as f64);
 
+    let mut current = HashSet::new();
     let mut unmapped_bytes = 0u64;
     for (community_id, storage) in &snapshot.per_community {
         let Some(host) = host_map.get(community_id) else {
@@ -281,8 +335,23 @@ pub async fn emit_storage_metrics(
             .set(storage.bytes as f64);
         metrics::gauge!("buzz_community_storage_objects", "community" => host.clone())
             .set(storage.objects as f64);
+        current.insert(StorageEmittedKey::Bytes(host.clone()));
+        current.insert(StorageEmittedKey::Objects(host.clone()));
     }
     metrics::gauge!("buzz_storage_unmapped_community_bytes").set(unmapped_bytes as f64);
+
+    // Zero series for communities that were emitted last tick but are no longer
+    // present in the current snapshot (community removed, host renamed, or
+    // scope exclusion added).
+    for key in state
+        .previously_emitted
+        .difference(&current)
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        key.set(0.0);
+    }
+    state.previously_emitted = current;
 }
 
 #[cfg(test)]
@@ -748,7 +817,7 @@ mod tests {
 
         let values = gauge_snapshot(&recorder);
         assert_eq!(values.get("buzz_storage_sweep_ok"), Some(&0.0));
-        assert_eq!(values.get("buzz_storage_sweep_failures_total"), Some(&0.0));
+        assert_eq!(values.get("buzz_storage_sweep_failures"), Some(&0.0));
         assert!(!values.contains_key("buzz_total_storage_bytes"));
         assert!(!values.contains_key("buzz_storage_sweep_age_seconds"));
     }
@@ -820,5 +889,200 @@ mod tests {
             Some(&30.0)
         );
         assert_eq!(values.get("buzz_community_storage_bytes"), Some(&100.0));
+    }
+
+    // --- F-EXT1 regression: stale per-community series are zeroed ---
+
+    /// Returns a map of `(metric_name, community_label_value) -> gauge_value`
+    /// for gauges that carry a "community" label. Used to verify per-community
+    /// series are zeroed rather than left stale between emissions.
+    fn labeled_community_gauges(
+        recorder: &DebuggingRecorder,
+    ) -> std::collections::HashMap<(String, String), f64> {
+        recorder
+            .snapshotter()
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(composite_key, _, _, value)| {
+                let DebugValue::Gauge(v) = value else {
+                    return None;
+                };
+                let key = composite_key.key();
+                let community = key
+                    .labels()
+                    .find(|l| l.key() == "community")
+                    .map(|l| l.value().to_owned())?;
+                Some(((key.name().to_owned(), community), v.into_inner()))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn stale_per_community_series_are_zeroed_on_disappearance() {
+        // Three scenarios in one state machine using a single StorageSweepState:
+        // (a) community disappears from snapshot (mapped → no entry),
+        // (b) host label rename (same UUID, different host string),
+        // (c) scope removal (community excluded by the `allows` predicate).
+        //
+        // After the second emission, the old series from (a), (b), and (c)
+        // must read 0.0, not their last nonzero value.
+
+        let community_a = Uuid::new_v4(); // (a) will disappear from snapshot
+        let community_b = Uuid::new_v4(); // (b) will be renamed host.old → host.new
+        let community_c = Uuid::new_v4(); // (c) will be scope-excluded
+
+        let make_snapshot = |include_a: bool, b_bytes: u64| {
+            let mut per_community = HashMap::new();
+            if include_a {
+                per_community.insert(
+                    community_a,
+                    CommunityStorage {
+                        bytes: 10,
+                        objects: 1,
+                    },
+                );
+            }
+            per_community.insert(
+                community_b,
+                CommunityStorage {
+                    bytes: b_bytes,
+                    objects: 2,
+                },
+            );
+            per_community.insert(
+                community_c,
+                CommunityStorage {
+                    bytes: 7,
+                    objects: 1,
+                },
+            );
+            BucketSnapshot {
+                physical_bytes: 10 + b_bytes + 7,
+                physical_objects: 4,
+                logical_bytes: 10 + b_bytes + 7,
+                logical_objects: 4,
+                per_community,
+                ..Default::default()
+            }
+        };
+
+        let state = Mutex::new(StorageSweepState {
+            cached: Some(CachedSnapshot {
+                data: make_snapshot(true, 20),
+                completed_at: Instant::now(),
+            }),
+            last_attempt: Some(LastAttempt {
+                ok: true,
+                duration: Duration::from_millis(100),
+            }),
+            ..Default::default()
+        });
+
+        let recorder = DebuggingRecorder::new();
+
+        // --- Emission 1: all three communities visible ---
+        let mut host_map_1 = HashMap::new();
+        host_map_1.insert(community_a, "host.a".to_string());
+        host_map_1.insert(community_b, "host.old".to_string());
+        host_map_1.insert(community_c, "host.c".to_string());
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(emit_storage_metrics(&state, &host_map_1, |_| true));
+        });
+        {
+            let labeled = labeled_community_gauges(&recorder);
+            assert_eq!(
+                labeled.get(&(
+                    "buzz_community_storage_bytes".to_string(),
+                    "host.a".to_string()
+                )),
+                Some(&10.0),
+                "emission 1: host.a bytes should be 10"
+            );
+            assert_eq!(
+                labeled.get(&(
+                    "buzz_community_storage_bytes".to_string(),
+                    "host.old".to_string()
+                )),
+                Some(&20.0),
+                "emission 1: host.old bytes should be 20"
+            );
+        }
+
+        // --- Emission 2: community_a gone, community_b renamed, community_c excluded ---
+        {
+            let mut guard = state.lock().await;
+            guard.cached = Some(CachedSnapshot {
+                data: make_snapshot(false, 20),
+                completed_at: Instant::now(),
+            });
+        }
+        let mut host_map_2 = HashMap::new();
+        // community_a absent from host_map → unmapped (gone from per-community series)
+        host_map_2.insert(community_b, "host.new".to_string()); // renamed
+        host_map_2.insert(community_c, "host.c".to_string());
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(emit_storage_metrics(
+                &state,
+                &host_map_2,
+                |id| *id != community_c, // (c) scope-excluded
+            ));
+        });
+
+        let labeled = labeled_community_gauges(&recorder);
+
+        // (a) community_a disappeared — old host.a series must be zeroed
+        assert_eq!(
+            labeled.get(&(
+                "buzz_community_storage_bytes".to_string(),
+                "host.a".to_string()
+            )),
+            Some(&0.0),
+            "(a) disappeared community: host.a bytes must be zeroed"
+        );
+        assert_eq!(
+            labeled.get(&(
+                "buzz_community_storage_objects".to_string(),
+                "host.a".to_string()
+            )),
+            Some(&0.0),
+            "(a) disappeared community: host.a objects must be zeroed"
+        );
+
+        // (b) community_b renamed host.old → host.new — old series must be zeroed
+        assert_eq!(
+            labeled.get(&(
+                "buzz_community_storage_bytes".to_string(),
+                "host.old".to_string()
+            )),
+            Some(&0.0),
+            "(b) host rename: host.old bytes must be zeroed"
+        );
+        assert_eq!(
+            labeled.get(&(
+                "buzz_community_storage_bytes".to_string(),
+                "host.new".to_string()
+            )),
+            Some(&20.0),
+            "(b) host rename: host.new bytes must be 20"
+        );
+
+        // (c) community_c scope-excluded — host.c series must be zeroed
+        assert_eq!(
+            labeled.get(&(
+                "buzz_community_storage_bytes".to_string(),
+                "host.c".to_string()
+            )),
+            Some(&0.0),
+            "(c) scope removal: host.c bytes must be zeroed"
+        );
+        assert_eq!(
+            labeled.get(&(
+                "buzz_community_storage_objects".to_string(),
+                "host.c".to_string()
+            )),
+            Some(&0.0),
+            "(c) scope removal: host.c objects must be zeroed"
+        );
     }
 }
