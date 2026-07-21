@@ -49,7 +49,10 @@ import {
 } from "@/shared/ui/modalSearchStyles";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
 import { useManagedAgentRuntimesQuery } from "@/features/agents/managedAgentRuntimeHooks";
-import { findManagedAgentRuntime } from "@/features/agents/managedAgentRuntimeStatus";
+import {
+  findManagedAgentRuntime,
+  managedAgentPairAction,
+} from "@/features/agents/managedAgentRuntimeStatus";
 import { EditRespondToDialog } from "./EditRespondToDialog";
 import { useMembersSidebarActions } from "./useMembersSidebarActions";
 import { useMembersSidebarModeration } from "./useMembersSidebarModeration";
@@ -496,6 +499,7 @@ export function MembersSidebar({
     removableManagedBots,
     currentPubkey,
     onOpenChange,
+    relayUrl,
   });
 
   useFeedbackToasts(actionNoticeMessage, actionErrorMessage);
@@ -560,6 +564,24 @@ export function MembersSidebar({
         currentPubkey &&
         memberProfile.ownerPubkey.toLowerCase() === currentPubkey.toLowerCase(),
     );
+    const managedAgent = memberIsBot
+      ? managedAgentByPubkey.get(normalizePubkey(member.pubkey))
+      : undefined;
+    const managedAgentRuntime =
+      memberIsBot && relayUrl
+        ? findManagedAgentRuntime(
+            managedAgentRuntimesQuery.data ?? [],
+            member.pubkey,
+            relayUrl,
+          )
+        : undefined;
+    // Mirrors the dispatch condition in useMembersSidebarActions: local
+    // agents in a community context act on the pair; provider agents keep
+    // the agent-wide deploy/!shutdown action.
+    const pairAction =
+      managedAgent?.backend.type === "local" && relayUrl
+        ? managedAgentPairAction(managedAgentRuntime)
+        : undefined;
     return (
       <div className="content-visibility-auto" key={member.pubkey}>
         <MembersSidebarMemberCard
@@ -572,20 +594,8 @@ export function MembersSidebar({
             isModerationPending
           }
           isArchived={isArchived}
-          managedAgent={
-            memberIsBot
-              ? managedAgentByPubkey.get(normalizePubkey(member.pubkey))
-              : undefined
-          }
-          managedAgentRuntime={
-            memberIsBot && relayUrl
-              ? findManagedAgentRuntime(
-                  managedAgentRuntimesQuery.data ?? [],
-                  member.pubkey,
-                  relayUrl,
-                )
-              : undefined
-          }
+          managedAgent={managedAgent}
+          managedAgentRuntime={managedAgentRuntime}
           member={member}
           memberIsBot={memberIsBot}
           memberAvatarLabel={
@@ -601,7 +611,7 @@ export function MembersSidebar({
           }}
           onEditRespondTo={memberIsBot ? setEditRespondToAgent : undefined}
           onManagedAgentAction={(agent) => {
-            void handleAgentLifecycleAction(agent);
+            void handleAgentLifecycleAction(agent, managedAgentRuntime);
           }}
           onOpenProfile={handleOpenProfile}
           onRemoveMember={handleRemoveMember}
@@ -616,6 +626,7 @@ export function MembersSidebar({
                 }
               : undefined
           }
+          pairAction={pairAction}
           presenceStatus={
             memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null
           }

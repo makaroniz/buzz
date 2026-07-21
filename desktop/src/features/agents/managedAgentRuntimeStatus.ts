@@ -41,6 +41,27 @@ export function managedAgentRuntimeKey(
   return JSON.stringify([runtime.pubkey, runtime.relayUrl]);
 }
 
+export type ManagedAgentPairAction = "start" | "stop" | "restart";
+
+/** Menu action for one agent+community pair. A missing runtime row means the
+ * pair is not running here, so the only sensible action is to start it. */
+export function managedAgentPairAction(
+  runtime: ManagedAgentRuntimeStatus | undefined,
+): ManagedAgentPairAction {
+  if (!runtime || runtime.lifecycle === "stopped") return "start";
+  if (runtime.lifecycle === "failed") return "restart";
+  return "stop";
+}
+
+export const MANAGED_AGENT_PAIR_ACTION_LABELS: Record<
+  ManagedAgentPairAction,
+  string
+> = {
+  start: "Start",
+  stop: "Stop",
+  restart: "Restart",
+};
+
 export function findManagedAgentRuntime(
   runtimes: readonly ManagedAgentRuntimeStatus[],
   pubkey: string,
