@@ -152,6 +152,12 @@ export function CommunityOnboardingFlow({
   const systemColorScheme = useSystemColorScheme();
   const [displayName, setDisplayName] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
+  const avatarPresentation = useAvatarPresentation(avatarUrl);
+  const [hasSavedProfile, setHasSavedProfile] = React.useState(false);
+  const persistedAvatarUrlRef = React.useRef<string | null>(null);
+  const profileAvatarSyncQueueRef = React.useRef<Promise<void>>(
+    Promise.resolve(),
+  );
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
   const [isAvatarEditorOpen, setIsAvatarEditorOpen] = React.useState(false);
   const [starterPersonas, setStarterPersonas] = React.useState<AgentPersona[]>(
@@ -292,6 +298,29 @@ export function CommunityOnboardingFlow({
     }
   }, [isAvatarEditorOpen, isProfileStage]);
 
+  React.useEffect(() => {
+    if (!hasSavedProfile) return;
+
+    // Next remains available during propagation. Serialize later failure and
+    // Retry transitions so an older profile write cannot win the race.
+    const nextAvatarUrl =
+      avatarPresentation?.state === "failed" ? "" : avatarUrl.trim();
+    if (persistedAvatarUrlRef.current === nextAvatarUrl) return;
+
+    persistedAvatarUrlRef.current = nextAvatarUrl;
+    profileAvatarSyncQueueRef.current = profileAvatarSyncQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await updateProfile({ avatarUrl: nextAvatarUrl });
+        } catch {
+          if (persistedAvatarUrlRef.current === nextAvatarUrl) {
+            persistedAvatarUrlRef.current = null;
+          }
+        }
+      });
+  }, [avatarPresentation?.state, avatarUrl, hasSavedProfile]);
+
   React.useLayoutEffect(() => {
     if (!isAvatarEditorOpen) {
       setAvatarEditorDialogHeight(null);
@@ -356,10 +385,14 @@ export function CommunityOnboardingFlow({
     if (!displayName.trim()) return;
     setIsPending(true);
     try {
+      const nextAvatarUrl =
+        avatarPresentation?.state === "failed" ? "" : avatarUrl.trim();
       await updateProfile({
         displayName: displayName.trim(),
-        avatarUrl: avatarUrl.trim() || undefined,
+        avatarUrl: nextAvatarUrl,
       });
+      persistedAvatarUrlRef.current = nextAvatarUrl;
+      setHasSavedProfile(true);
       update({ stage: "team-intro", error: undefined });
     } catch (error) {
       if (isRelayMembershipDeniedError(error)) {
