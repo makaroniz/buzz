@@ -3,6 +3,7 @@ import {
   normalizeRelayUrl,
 } from "@/features/communities/communityStorage";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
+import type { Profile } from "@/shared/api/types";
 
 const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 
@@ -225,6 +226,20 @@ export function markCommunityOnboardingComplete(
   // The legacy gate is identity-scoped. Marking it here prevents the old profile
   // flow from reopening after the first community transaction completes.
   storage.setItem(`buzz-onboarding-complete.v1:${pubkey}`, "true");
+}
+
+/**
+ * Returns true when a relay-profile check result means the user should skip
+ * community onboarding entirely and land directly in the app.
+ *
+ * A profile fetch error is represented as `null` and always returns false so
+ * that the fallback (show the profile step) applies — the skip must never
+ * block or strand onboarding.
+ */
+export function shouldSkipCommunityOnboarding(
+  profile: Profile | null,
+): boolean {
+  return profile !== null && profile.hasProfileEvent === true;
 }
 
 import * as React from "react";

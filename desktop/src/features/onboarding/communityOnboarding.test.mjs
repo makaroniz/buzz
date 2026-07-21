@@ -5,6 +5,7 @@ import {
   clearCommunityOnboardingTransaction,
   loadCommunityOnboardingTransaction,
   markCommunityOnboardingComplete,
+  shouldSkipCommunityOnboarding,
   startCommunityOnboarding,
   updateCommunityOnboardingTransaction,
   updateCurrentCommunityOnboardingTransaction,
@@ -146,4 +147,45 @@ test("completion is scoped by relay and pubkey and preserves legacy gate", () =>
     "true",
   );
   assert.equal(storage.getItem("buzz-onboarding-complete.v1:pubkey"), "true");
+});
+
+// ── shouldSkipCommunityOnboarding ────────────────────────────────────────────
+
+/** Minimal Profile stub — only the fields the helper inspects. */
+function makeProfile(hasProfileEvent, overrides = {}) {
+  return {
+    pubkey: "aabbcc",
+    displayName: null,
+    avatarUrl: null,
+    about: null,
+    nip05Handle: null,
+    ownerPubkey: null,
+    hasProfileEvent,
+    ...overrides,
+  };
+}
+
+test("shouldSkipCommunityOnboarding_hasProfileEvent_returnsTrue", () => {
+  assert.equal(
+    shouldSkipCommunityOnboarding(makeProfile(true)),
+    true,
+    "existing kind:0 ⇒ skip onboarding",
+  );
+});
+
+test("shouldSkipCommunityOnboarding_noProfileEvent_returnsFalse", () => {
+  assert.equal(
+    shouldSkipCommunityOnboarding(makeProfile(false)),
+    false,
+    "no kind:0 ⇒ show profile step",
+  );
+});
+
+test("shouldSkipCommunityOnboarding_fetchError_returnsFalse", () => {
+  // fetch error is represented as null — must never block onboarding
+  assert.equal(
+    shouldSkipCommunityOnboarding(null),
+    false,
+    "fetch error ⇒ show profile step (safe fallback)",
+  );
 });

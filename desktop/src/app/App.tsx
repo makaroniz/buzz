@@ -20,6 +20,8 @@ import { useMachineOnboardingState } from "@/features/onboarding/machineOnboardi
 import {
   type FirstCommunityPage,
   useCommunityOnboarding,
+  markCommunityOnboardingComplete,
+  shouldSkipCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
 import { CommunityOnboardingFlow } from "@/features/onboarding/ui/CommunityOnboardingFlow";
 import {
@@ -43,6 +45,7 @@ import { CommunityApplyErrorScreen } from "@/features/communities/ui/CommunityAp
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
 import { createBuzzQueryClient } from "@/shared/api/queryClient";
 import { isSharedIdentity as isSharedIdentityCmd } from "@/shared/api/tauri";
+import { getProfile } from "@/shared/api/tauriProfiles";
 import {
   type AddCommunityDeepLinkPayload,
   listenForDeepLinks,
@@ -279,6 +282,7 @@ function CommunityApp({
   } = useCommunities();
   const communityOnboarding = useCommunityOnboarding();
   const connectingTransactionRef = useRef<string | null>(null);
+  const profileCheckTransactionRef = useRef<string | null>(null);
   const [isCommunityChangeOpen, setIsCommunityChangeOpen] = useState(false);
   const [resumeFirstCommunityPage, setResumeFirstCommunityPage] =
     useState<FirstCommunityPage | null>(null);
@@ -384,6 +388,7 @@ function CommunityApp({
   useEffect(() => {
     if (transaction?.stage !== "connecting") {
       connectingTransactionRef.current = null;
+      profileCheckTransactionRef.current = null;
     }
   }, [transaction?.stage]);
   const targetIsReady =
@@ -391,10 +396,36 @@ function CommunityApp({
     community.isReady &&
     community.appliedKey === communityKey;
   useEffect(() => {
-    if (transaction?.stage === "connecting" && targetIsReady) {
-      communityOnboarding.update({ stage: "profile", error: undefined });
-    }
-  }, [communityOnboarding.update, targetIsReady, transaction?.stage]);
+    if (transaction?.stage !== "connecting" || !targetIsReady) return;
+    const transactionId = transaction.id;
+    const relayUrl = transaction.relayUrl;
+    if (profileCheckTransactionRef.current === transactionId) return;
+    profileCheckTransactionRef.current = transactionId;
+    void getProfile()
+      .then((profile) => {
+        if (shouldSkipCommunityOnboarding(profile)) {
+          markCommunityOnboardingComplete(profile.pubkey, relayUrl);
+          communityOnboarding.clear();
+        } else {
+          communityOnboarding.update(
+            { stage: "profile", error: undefined },
+            transactionId,
+          );
+        }
+      })
+      .catch(() => {
+        communityOnboarding.update(
+          { stage: "profile", error: undefined },
+          transactionId,
+        );
+      });
+  }, [
+    communityOnboarding,
+    targetIsReady,
+    transaction?.stage,
+    transaction?.id,
+    transaction?.relayUrl,
+  ]);
   // During "entering" the transaction stays alive as a curtain: the app mounts
   // underneath (already pointed at the Welcome channel route) while the
   // onboarding screen covers it, then fades once Welcome reports ready.
