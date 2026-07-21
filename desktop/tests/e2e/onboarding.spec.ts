@@ -456,6 +456,23 @@ async function invokeMockCommand<T>(
   );
 }
 
+async function seedCurrentAvatar(page: Page, avatarUrl: string) {
+  await page.waitForFunction(() => {
+    const bridgeWindow = window as Window & {
+      __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+      __TAURI_INTERNALS__?: { invoke?: unknown };
+    };
+    return (
+      typeof bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
+      typeof bridgeWindow.__TAURI_INTERNALS__?.invoke === "function"
+    );
+  });
+  await invokeMockCommand(page, "update_profile", { avatarUrl });
+  await page.evaluate(() => {
+    window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
+  });
+}
+
 async function getWelcomeChannelId(page: Page) {
   const channels = await getMockChannels(page);
   return (
@@ -1680,6 +1697,38 @@ test("connected first-community profile step offers equal-width Next and Back co
     .toBeNull();
 });
 
+test("name-only community profile save preserves an existing avatar", async ({
+  page,
+}) => {
+  await seedCommunityProfileStage(page, "txn-avatar-preserve-existing");
+  await installMockBridge(page, undefined, {
+    relayWsUrl: "wss://default.example.com",
+    skipOnboardingSeed: true,
+  });
+  await page.goto("/");
+
+  const existingAvatarUrl =
+    "https://mock.relay/media/existing-community-avatar.png";
+  await seedCurrentAvatar(page, existingAvatarUrl);
+  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await page.getByTestId("community-profile-next").click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+          .filter(({ command }) => command === "update_profile")
+          .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
+      ),
+    )
+    .toEqual([undefined]);
+  const profile = await invokeMockCommand<{ avatar_url: string | null }>(
+    page,
+    "get_profile",
+  );
+  expect(profile.avatar_url).toBe(existingAvatarUrl);
+});
+
 test("pending avatar stays navigable, clears failures, and retries", async ({
   page,
 }) => {
@@ -1787,7 +1836,7 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([""]);
+    .toEqual([undefined]);
 
   avatarReady = true;
   await page.getByRole("button", { name: "Retry" }).click();
@@ -1799,7 +1848,7 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual(["", uploadedAvatarUrl]);
+    .toEqual([undefined, uploadedAvatarUrl]);
   await expect(page.getByText("Avatar couldn’t finish uploading")).toHaveCount(
     0,
   );
@@ -1854,6 +1903,59 @@ test("a pending avatar is cleared if propagation fails after profile save", asyn
   await expect(
     page.getByText("Avatar couldn’t finish uploading"),
   ).toBeVisible();
+});
+
+test("a failed pending avatar restores the previously confirmed avatar", async ({
+  page,
+}) => {
+  await seedCommunityProfileStage(page, "txn-avatar-restore-existing");
+  const existingAvatarUrl =
+    "https://mock.relay/media/existing-community-avatar.png";
+  const uploadedAvatarUrl =
+    "https://mock.relay/media/replacement-community-avatar.png";
+  await page.route(`${uploadedAvatarUrl}*`, (route) =>
+    route.fulfill({ status: 404 }),
+  );
+  await installMockBridge(
+    page,
+    {
+      uploadDescriptors: [
+        {
+          filename: "replacement-community-avatar.png",
+          sha256: "a".repeat(64),
+          size: 128,
+          type: "image/png",
+          uploaded: 1_779_900_003,
+          url: uploadedAvatarUrl,
+        },
+      ],
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+    },
+  );
+  await page.goto("/");
+  await seedCurrentAvatar(page, existingAvatarUrl);
+
+  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await uploadCommunityAvatar(page, "replacement-community-avatar.png");
+  await page.getByTestId("community-profile-next").click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+          .filter(({ command }) => command === "update_profile")
+          .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
+      ),
+    )
+    .toEqual([uploadedAvatarUrl, existingAvatarUrl]);
+  const profile = await invokeMockCommand<{ avatar_url: string | null }>(
+    page,
+    "get_profile",
+  );
+  expect(profile.avatar_url).toBe(existingAvatarUrl);
 });
 
 test("replacing a pending upload disposes its verifier and local preview", async ({

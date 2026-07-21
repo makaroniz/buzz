@@ -20,7 +20,7 @@ import {
   parseEmojiAvatarDataUrl,
   ProfileAvatarEditor,
 } from "@/features/profile/ui/ProfileAvatarEditor";
-import { updateProfile } from "@/shared/api/tauriProfiles";
+import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
 import { relayClient } from "@/shared/api/relayClient";
@@ -154,6 +154,9 @@ export function CommunityOnboardingFlow({
   const [avatarUrl, setAvatarUrl] = React.useState("");
   const avatarPresentation = useAvatarPresentation(avatarUrl);
   const [hasSavedProfile, setHasSavedProfile] = React.useState(false);
+  const confirmedAvatarUrlRef = React.useRef<string | null | undefined>(
+    undefined,
+  );
   const persistedAvatarUrlRef = React.useRef<string | null>(null);
   const profileAvatarSyncQueueRef = React.useRef<Promise<void>>(
     Promise.resolve(),
@@ -303,16 +306,34 @@ export function CommunityOnboardingFlow({
 
     // Next remains available during propagation. Serialize later failure and
     // Retry transitions so an older profile write cannot win the race.
+    const candidateAvatarUrl = avatarUrl.trim();
+    if (!candidateAvatarUrl) return;
+
+    const presentationState = avatarPresentation?.state;
     const nextAvatarUrl =
-      avatarPresentation?.state === "failed" ? "" : avatarUrl.trim();
-    if (persistedAvatarUrlRef.current === nextAvatarUrl) return;
+      presentationState === "failed"
+        ? (confirmedAvatarUrlRef.current ?? "")
+        : candidateAvatarUrl;
+    if (persistedAvatarUrlRef.current === nextAvatarUrl) {
+      if (presentationState === "ready") {
+        confirmedAvatarUrlRef.current = candidateAvatarUrl;
+      }
+      return;
+    }
 
     persistedAvatarUrlRef.current = nextAvatarUrl;
     profileAvatarSyncQueueRef.current = profileAvatarSyncQueueRef.current
       .catch(() => undefined)
       .then(async () => {
         try {
-          await updateProfile({ avatarUrl: nextAvatarUrl });
+          const profile = await updateProfile({ avatarUrl: nextAvatarUrl });
+          if (
+            presentationState !== "failed" &&
+            presentationState !== "pending" &&
+            persistedAvatarUrlRef.current === nextAvatarUrl
+          ) {
+            confirmedAvatarUrlRef.current = profile.avatarUrl?.trim() || null;
+          }
         } catch {
           if (persistedAvatarUrlRef.current === nextAvatarUrl) {
             persistedAvatarUrlRef.current = null;
@@ -385,13 +406,28 @@ export function CommunityOnboardingFlow({
     if (!displayName.trim()) return;
     setIsPending(true);
     try {
-      const nextAvatarUrl =
-        avatarPresentation?.state === "failed" ? "" : avatarUrl.trim();
-      await updateProfile({
+      const candidateAvatarUrl = avatarUrl.trim();
+      const presentationState = avatarPresentation?.state;
+      const shouldSaveCandidate =
+        candidateAvatarUrl.length > 0 && presentationState !== "failed";
+
+      if (
+        shouldSaveCandidate &&
+        presentationState === "pending" &&
+        confirmedAvatarUrlRef.current === undefined
+      ) {
+        const profile = await getProfile();
+        confirmedAvatarUrlRef.current = profile.avatarUrl?.trim() || null;
+      }
+
+      const profile = await updateProfile({
         displayName: displayName.trim(),
-        avatarUrl: nextAvatarUrl,
+        avatarUrl: shouldSaveCandidate ? candidateAvatarUrl : undefined,
       });
-      persistedAvatarUrlRef.current = nextAvatarUrl;
+      persistedAvatarUrlRef.current = profile.avatarUrl?.trim() || "";
+      if (presentationState !== "pending") {
+        confirmedAvatarUrlRef.current = profile.avatarUrl?.trim() || null;
+      }
       setHasSavedProfile(true);
       update({ stage: "team-intro", error: undefined });
     } catch (error) {
