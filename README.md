@@ -13,11 +13,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/engineering-channel.png" alt="A Buzz engineering channel where a team shares code, test results, an issue, and a release decision" width="100%">
-</p>
-
-<p align="center">
-  <sub><em>The conversation with the code in it, from investigation to release.</em></sub>
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/brand/buzz-ambient-static.png">
+    <img src="docs/assets/brand/buzz-ambient.webp" alt="" width="100%">
+  </picture>
 </p>
 
 Buzz is a self-hostable collaboration and development workspace where people
@@ -80,6 +79,12 @@ community.
 ## A look inside
 
 <table>
+  <tr>
+    <td valign="top">
+      <img src="docs/assets/screenshots/engineering-channel.png" alt="A Buzz engineering channel where a team shares code, test results, an issue, and a release decision" width="100%"><br>
+      <sub><strong>The conversation has the code in it.</strong> Share code, test results, issues, and release decisions without breaking context.</sub>
+    </td>
+  </tr>
   <tr>
     <td valign="top">
       <img src="docs/assets/screenshots/agent-swarm.png" alt="Buzz agents delegating implementation and deployment work, reviewing pull requests, and returning the decision to a person" width="100%"><br>
