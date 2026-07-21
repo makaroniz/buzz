@@ -37,12 +37,16 @@
 //! - `VOICE_FILE_EXT: &str`         — extension for per-voice files on disk.
 //! - `load_text_to_speech(model_dir)`              → `Result<Engine, String>`
 //! - `load_voice_style(path)`                      → `Result<VoiceStyle, String>`
-//! - `Engine::synth_chunk(&self, text, lang, &VoiceStyle, steps, speed)`
+//! - `Engine::synth_chunk(&self, text, lang, &VoiceStyle, steps)`
 //!   → `Result<Vec<f32>, String>`
 //!
 //! `lang` and `steps` are accepted for API compatibility with the previous
 //! Kokoro engine but are unused — Pocket TTS does its own language ID from
 //! the input text and is not a diffusion model (consistency LM, one step).
+//! There is no speed knob: sherpa-onnx's `GenerationConfig.speed` is only
+//! read by some model families (vits), never by the Pocket impl
+//! (`offline-tts-pocket-impl.h` — zero references), and upstream pocket-tts
+//! has no speed parameter either.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -385,7 +389,6 @@ impl PocketTts {
         _lang: &str,
         style: &VoiceStyle,
         _steps: usize,
-        speed: f32,
     ) -> Result<Vec<f32>, String> {
         // Mirror upstream pocket-tts prompt prep — without this short or
         // unpunctuated inputs can cause the LM's EOS logit to never trip,
@@ -405,12 +408,13 @@ impl PocketTts {
         let extra = build_generation_extra(&prepared);
 
         let cfg = GenerationConfig {
-            speed,
             num_steps: SYNTH_NUM_STEPS,
             silence_scale: SYNTH_SILENCE_SCALE,
             reference_audio: Some(style.samples.clone()),
             reference_sample_rate: style.sample_rate,
             extra,
+            // `speed` stays at its default: the Pocket impl never reads it
+            // (see the engine-contract note in the module docs).
             ..Default::default()
         };
 
