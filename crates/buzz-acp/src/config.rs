@@ -2036,14 +2036,16 @@ channels = "ALL"
 
     #[test]
     fn lazy_pool_defaults_off() {
-        assert!(!CliArgs::parse_from(["buzz-acp"]).lazy_pool);
+        let key = "0".repeat(64);
+        assert!(!CliArgs::parse_from(["buzz-acp", "--private-key", &key]).lazy_pool);
     }
 
     #[test]
     fn lazy_pool_cli_flag_enables_deferred_startup() {
-        let args = CliArgs::try_parse_from(["buzz-acp", "--lazy-pool=true"]);
+        let key = "0".repeat(64);
+        let args = CliArgs::try_parse_from(["buzz-acp", "--private-key", &key, "--lazy-pool=true"]);
         assert!(args.is_err(), "bool flags do not take an explicit value");
-        assert!(CliArgs::parse_from(["buzz-acp", "--lazy-pool"]).lazy_pool);
+        assert!(CliArgs::parse_from(["buzz-acp", "--private-key", &key, "--lazy-pool"]).lazy_pool);
     }
 
     #[test]

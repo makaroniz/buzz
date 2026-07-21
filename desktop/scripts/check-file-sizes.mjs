@@ -479,7 +479,11 @@ const overrides = new Map([
   // get_agent_config_surface derive the ManagedAgentRuntimeKey (relay-URL
   // fallback resolution) and put_agent_session_config gains a relay_url param.
   // Load-bearing identity plumbing; queued to split.
-  ["src-tauri/src/commands/agent_config.rs", 1032],
+  // +18 (1032 -> 1050): review fix — put_agent_session_config reads the pair
+  // relay from the harness-attached payload relayUrl (with effective-relay
+  // fallback for older harnesses) instead of a required arg the frontend
+  // wrapper never passed, which silently broke the session-config cache.
+  ["src-tauri/src/commands/agent_config.rs", 1050],
   // codex-install-auto-restart review-fixes: should_restart_after_install
   // takes pid_alive:bool (pure predicate, no OS-dependent call); 3 racy
   // cache tests replaced with 6 pure availability_drift predicate tests;

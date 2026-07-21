@@ -2,9 +2,11 @@ import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bot, UserRoundPlus, X } from "lucide-react";
 import {
+  invalidateChannelState,
   useAddChannelMembersMutation,
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
+import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
 import {
   coalesceAgentAutocompleteCandidates,
   isAgentIdentityInManagedList,
@@ -542,6 +544,35 @@ export function MembersSidebar({
     setAddingMemberPubkeys((prev) => new Set(prev).add(user.pubkey));
 
     try {
+      // A local managed agent needs a running harness pair in this community,
+      // not just channel membership — a bare membership add leaves it deaf
+      // until someone @mentions it or manually starts the pair. Route it
+      // through the attach helper, which adds membership AND ensures the active
+      // community's pair is running (idempotent: a live pair is left alone).
+      // Humans and provider agents keep the plain membership add.
+      const managedAgent = managedAgentByPubkey.get(
+        normalizePubkey(user.pubkey),
+      );
+      if (channelId && managedAgent?.backend.type === "local") {
+        try {
+          await attachManagedAgentToChannel(channelId, {
+            agent: managedAgent,
+            ensureRunning: true,
+          });
+          await invalidateChannelState(queryClient, channelId);
+        } catch (error) {
+          setInviteSubmissionErrors((prev) => [
+            ...prev,
+            {
+              pubkey: user.pubkey,
+              error:
+                error instanceof Error ? error.message : "Failed to add agent.",
+            },
+          ]);
+        }
+        return;
+      }
+
       const result = await addMembersMutation.mutateAsync({
         pubkeys: [user.pubkey],
         role: user.isAgent ? "bot" : "member",

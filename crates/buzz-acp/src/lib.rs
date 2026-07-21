@@ -1511,6 +1511,7 @@ async fn tokio_main() -> Result<()> {
             .and_then(|hex| nostr::PublicKey::from_hex(hex).ok()),
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
+        relay_url: config.relay_url.clone(),
     });
 
     if !config.memory_enabled {
@@ -1656,9 +1657,16 @@ async fn tokio_main() -> Result<()> {
     }
 
     loop {
+        // Whether buffered work is waiting on a lazy pool. Also gates the
+        // retry-deadline sleep arm below: a `Failed` lifecycle keeps its
+        // (possibly past) `retry_at` until the next wake, so sleeping on it
+        // unconditionally would complete instantly on every iteration — a
+        // busy spin — whenever the queued work drained after a failed wake.
+        let mut lazy_wake_work_pending = false;
         if config.lazy_pool && !pool_ready {
+            lazy_wake_work_pending = queue.has_flushable_work();
             if let Some(attempt) = pool_lifecycle
-                .start_wake_if_due(queue.has_flushable_work(), tokio::time::Instant::now())
+                .start_wake_if_due(lazy_wake_work_pending, tokio::time::Instant::now())
             {
                 emit_runtime_lifecycle(
                     observer.as_ref(),
@@ -1791,9 +1799,15 @@ async fn tokio_main() -> Result<()> {
                 Some((attempt, result)) = wake_rx.recv(), if config.lazy_pool && !pool_ready => {
                     Some(PoolEvent::Wake(attempt, result))
                 }
+                // Gated on pending work: with an empty queue there is nothing
+                // for the retry to dispatch, and a past `retry_at` would
+                // otherwise complete instantly on every iteration (busy spin).
+                // The next accepted event re-enables the arm.
                 _ = async {
                     match pool_lifecycle.retry_at() {
-                        Some(retry_at) if !pool_ready => tokio::time::sleep_until(retry_at).await,
+                        Some(retry_at) if lazy_wake_work_pending => {
+                            tokio::time::sleep_until(retry_at).await
+                        }
                         _ => std::future::pending().await,
                     }
                 } => None,
@@ -2509,7 +2523,24 @@ async fn tokio_main() -> Result<()> {
         }
     }
 
-    wake_tasks.shutdown().await;
+    // Drain wake tasks gracefully rather than aborting: an in-flight
+    // initialize_agent_pool observes the shutdown watch at its biased per-slot
+    // select and reaps its partially-spawned agents itself. `shutdown()` here
+    // would abort the task mid-init and drop those AcpClients via best-effort
+    // Drop — the exact zombie class the eager path's spawn-outside-the-timeout
+    // comment exists to prevent. Fire the watch first so exits that bypass the
+    // signal handlers (result channel closed, LoopAction::Exit) cancel the wake
+    // just as promptly. Timeout is a backstop for a slot stuck outside the
+    // select (e.g. in spawn); only then do we fall back to aborting.
+    let _ = shutdown_tx.send(());
+    let wake_drain = tokio::time::timeout(Duration::from_secs(30), async {
+        while wake_tasks.join_next().await.is_some() {}
+    })
+    .await;
+    if wake_drain.is_err() {
+        tracing::warn!("wake task did not drain within grace period — aborting");
+        wake_tasks.shutdown().await;
+    }
     while let Ok((_attempt, result)) = wake_rx.try_recv() {
         if let Ok(mut awakened_pool) = result {
             shutdown_agent_pool(&mut awakened_pool).await;

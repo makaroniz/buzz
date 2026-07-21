@@ -395,21 +395,39 @@ pub async fn get_agent_config_surface(
 #[tauri::command]
 pub fn put_agent_session_config(
     pubkey: String,
-    relay_url: String,
     payload: serde_json::Value,
     app: AppHandle,
     state: State<'_, AppState>,
 ) {
-    {
+    let record_relay_url = {
         let _guard = match state.managed_agents_store_lock.lock() {
             Ok(g) => g,
             Err(_) => return,
         };
         match load_managed_agents(&app) {
-            Ok(records) if records.iter().any(|r| r.pubkey == pubkey) => {}
+            Ok(records) => match records.into_iter().find(|r| r.pubkey == pubkey) {
+                Some(record) => record.relay_url,
+                None => return,
+            },
             _ => return,
         }
-    }
+    };
+
+    // Pair identity: prefer the relay URL the harness attached to the payload
+    // (same pattern as lifecycle frames). Older harnesses don't attach one;
+    // fall back to the record's effective relay — with no attached URL the
+    // frame can only have arrived over the active workspace relay, which is
+    // exactly what effective_agent_relay_url resolves to absent a pin.
+    let relay_url = payload
+        .get("relayUrl")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            crate::relay::effective_agent_relay_url(
+                &record_relay_url,
+                &crate::relay::relay_ws_url_with_override(&state),
+            )
+        });
 
     let config_options = parse_config_options(payload.get("configOptions"));
     let available_modes = parse_modes(&config_options, payload.get("modes"));

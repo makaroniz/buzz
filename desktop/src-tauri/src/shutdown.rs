@@ -153,27 +153,26 @@ pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), Stri
     }
 
     let mut to_stop: Vec<AgentToStop> = Vec::new();
-    for (idx, record) in records.iter_mut().enumerate() {
+    for (idx, record) in records.iter().enumerate() {
         if record.backend != BackendKind::Local {
             continue;
         }
-        if !runtimes.keys().any(|key| key.pubkey == record.pubkey) {
-            continue;
+        // Drain every tracked pair for this record, not just the first — an
+        // agent can run one harness per community, and each pair gets the
+        // graceful SIGTERM → 2s wait → SIGKILL fan-out with a stop log
+        // marker, instead of falling through to the orphan sweep's 200ms
+        // grace below.
+        for key in managed_agents::managed_agent_runtime_keys(&runtimes, &record.pubkey) {
+            let runtime = runtimes.remove(&key);
+            let Some(pid) = runtime
+                .as_ref()
+                .map(|rt| rt.child.id())
+                .or(record.runtime_pid)
+            else {
+                continue;
+            };
+            to_stop.push(AgentToStop { idx, pid, runtime });
         }
-        let key = runtimes
-            .keys()
-            .find(|key| key.pubkey == record.pubkey)
-            .cloned()
-            .expect("checked above");
-        let runtime = runtimes.remove(&key);
-        let Some(pid) = runtime
-            .as_ref()
-            .map(|rt| rt.child.id())
-            .or(record.runtime_pid)
-        else {
-            continue;
-        };
-        to_stop.push(AgentToStop { idx, pid, runtime });
     }
 
     if !to_stop.is_empty() {
