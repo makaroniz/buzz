@@ -45,6 +45,8 @@ crates/
   buzz-search         # Postgres FTS full-text search
   buzz-audit          # Hash-chain audit log
   buzz-media          # Blossom/S3 media storage
+  buzz-relay-mesh     # Inter-relay QUIC mesh — transport, membership, fenced wire contract
+  buzz-push-gateway   # Blind, capability-gated APNs gateway for mobile push (NIP-PL)
   # Agent surface
   buzz-acp            # ACP harness bridging Buzz events to AI agents
   buzz-agent          # Minimal ACP-compliant agent (non-streaming, tool-calls-as-output)
@@ -62,10 +64,12 @@ crates/
   buzz-admin          # Operator CLI for relay administration
   buzz-ws-client      # Shared NIP-42 WebSocket client (connect, auth, publish)
   buzz-test-client    # Integration test client and E2E test suite
+  buzz-conformance    # Multi-tenant conformance gate — trace replay checker for docs/spec/MultiTenantRelay.tla
   sprig               # All-in-one harness bundling ACP, agent, and dev MCP
 
 desktop/              # Tauri 2 + React 19 desktop app
 web/                  # Browser web client (repo browser, served by the relay)
+admin-web/            # Private read-only admin dashboard (`just admin`, served by the relay)
 mobile/               # Flutter mobile app
 migrations/           # SQL migrations (auto-applied on relay startup)
 scripts/              # Dev tooling
@@ -201,6 +205,11 @@ See `crates/buzz-cli/TESTING.md` for the full live-testing runbook.
 ```bash
 just test-unit    # unit tests, no infrastructure needed
 just test         # full integration suite (requires Postgres + Redis)
+
+# Single Rust test (unit): name filter works as usual
+cargo test -p buzz-core <test_name>
+# Single relay E2E test — these are #[ignore]d and need a running relay (`just relay`)
+cargo test -p buzz-test-client --test e2e_relay <test_name> -- --ignored
 ```
 
 E2E tests live in `crates/buzz-test-client/tests/`:
@@ -209,7 +218,10 @@ E2E tests live in `crates/buzz-test-client/tests/`:
 - `e2e_media_extended.rs` — extended media scenarios
 - `e2e_nostr_interop.rs` — Nostr interop (NIP-50 search, NIP-10 threads, NIP-17 gift wraps)
 
-Desktop E2E: `cd desktop && pnpm exec playwright test`
+Desktop E2E: `just desktop-e2e-smoke` (browser-only, mock bridge) or
+`just desktop-e2e-integration` (relay-backed; seeds infra automatically).
+`just desktop-e2e-pre-push` runs only the specs changed vs `origin/main`.
+Single spec: `cd desktop && pnpm test:e2e:smoke -- <name>.spec.ts`.
 
 See [TESTING.md](TESTING.md) for the full multi-agent E2E guide.
 
