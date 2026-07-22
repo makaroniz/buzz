@@ -1854,15 +1854,19 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
   );
 });
 
-test("a pending avatar is cleared if propagation fails after profile save", async ({
+test("a pending avatar never becomes durable if propagation fails after onboarding unmounts", async ({
   page,
 }) => {
   await seedCommunityProfileStage(page, "txn-avatar-saved-before-failure");
   const uploadedAvatarUrl =
     "https://mock.relay/media/saved-pending-community-avatar.png";
-  await page.route(`${uploadedAvatarUrl}*`, (route) =>
-    route.fulfill({ status: 404 }),
-  );
+  let allowAvatarFailure = false;
+  await page.route(`${uploadedAvatarUrl}*`, async (route) => {
+    while (!allowAvatarFailure) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await route.fulfill({ status: 404 });
+  });
   await installMockBridge(
     page,
     {
@@ -1890,6 +1894,11 @@ test("a pending avatar is cleared if propagation fails after profile save", asyn
     page.getByTestId("community-avatar-circle-upload-pending"),
   ).toBeVisible();
   await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("community-team-intro-enter").click();
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
+    timeout: 10_000,
+  });
+  allowAvatarFailure = true;
 
   await expect
     .poll(() =>
@@ -1899,13 +1908,89 @@ test("a pending avatar is cleared if propagation fails after profile save", asyn
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([uploadedAvatarUrl, ""]);
+    .toEqual([undefined]);
   await expect(
     page.getByText("Avatar couldn’t finish uploading"),
   ).toBeVisible();
+  const profile = await invokeMockCommand<{ avatar_url: string | null }>(
+    page,
+    "get_profile",
+  );
+  expect(profile.avatar_url).toBeNull();
 });
 
-test("a failed pending avatar restores the previously confirmed avatar", async ({
+test("a pending avatar becomes durable after onboarding unmounts once ready", async ({
+  page,
+}) => {
+  await seedCommunityProfileStage(page, "txn-avatar-ready-after-unmount");
+  const uploadedAvatarUrl =
+    "https://mock.relay/media/ready-after-unmount-community-avatar.png";
+  let allowAvatarReady = false;
+  await page.route(`${uploadedAvatarUrl}*`, async (route) => {
+    while (!allowAvatarReady) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await route.fulfill({
+      body: Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"),
+      contentType: "image/png",
+    });
+  });
+  await installMockBridge(
+    page,
+    {
+      uploadDescriptors: [
+        {
+          filename: "ready-after-unmount-community-avatar.png",
+          sha256: "b".repeat(64),
+          size: 128,
+          type: "image/png",
+          uploaded: 1_779_900_004,
+          url: uploadedAvatarUrl,
+        },
+      ],
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await uploadCommunityAvatar(page, "ready-after-unmount-community-avatar.png");
+  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("community-team-intro-enter").click();
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
+    timeout: 10_000,
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+          .filter(({ command }) => command === "update_profile")
+          .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
+      ),
+    )
+    .toEqual([undefined]);
+
+  allowAvatarReady = true;
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+          .filter(({ command }) => command === "update_profile")
+          .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
+      ),
+    )
+    .toEqual([undefined, uploadedAvatarUrl]);
+  const profile = await invokeMockCommand<{ avatar_url: string | null }>(
+    page,
+    "get_profile",
+  );
+  expect(profile.avatar_url).toBe(uploadedAvatarUrl);
+});
+
+test("a failed pending replacement leaves the confirmed avatar untouched", async ({
   page,
 }) => {
   await seedCommunityProfileStage(page, "txn-avatar-restore-existing");
@@ -1950,7 +2035,7 @@ test("a failed pending avatar restores the previously confirmed avatar", async (
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([uploadedAvatarUrl, existingAvatarUrl]);
+    .toEqual([undefined]);
   const profile = await invokeMockCommand<{ avatar_url: string | null }>(
     page,
     "get_profile",

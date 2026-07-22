@@ -13,7 +13,11 @@ import {
   takePendingWelcomeChannelForDirectEntry,
   WELCOME_SURFACE_READY_EVENT,
 } from "@/features/onboarding/welcome";
-import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
+import {
+  getAvatarPresentation,
+  subscribeAvatarPresentations,
+  useAvatarPresentation,
+} from "@/features/profile/avatarPresentationStore";
 import { profileQueryKey } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
@@ -61,6 +65,59 @@ const ENTERING_CURTAIN_FADE_MS = 500;
  * fade anyway rather than stranding the user on the onboarding screen.
  */
 const ENTERING_CURTAIN_MAX_WAIT_MS = 8_000;
+
+// Upload verification can finish after onboarding unmounts, so these
+// subscriptions deliberately live for the lifetime of the application.
+const pendingAvatarProfileSyncs = new Map<string, () => void>();
+
+function normalizedAvatarUrl(avatarUrl: string | null | undefined) {
+  return avatarUrl?.trim() || null;
+}
+
+function saveAvatarWhenReady(
+  avatarUrl: string,
+  expectedPubkey: string,
+  expectedAvatarUrl: string | null,
+): void {
+  const syncKey = `${expectedPubkey}:${avatarUrl}`;
+  if (pendingAvatarProfileSyncs.has(syncKey)) return;
+
+  let isSaving = false;
+  const stop = () => {
+    pendingAvatarProfileSyncs.get(syncKey)?.();
+    pendingAvatarProfileSyncs.delete(syncKey);
+  };
+  const saveIfReady = () => {
+    const presentation = getAvatarPresentation(avatarUrl);
+    if (!presentation) {
+      stop();
+      return;
+    }
+    if (presentation.state !== "ready" || isSaving) return;
+
+    isSaving = true;
+    void getProfile()
+      .then((profile) => {
+        // Do not overwrite an identity or avatar the user changed meanwhile.
+        if (
+          profile.pubkey !== expectedPubkey ||
+          normalizedAvatarUrl(profile.avatarUrl) !==
+            normalizedAvatarUrl(expectedAvatarUrl)
+        ) {
+          return;
+        }
+        return updateProfile({ avatarUrl });
+      })
+      .catch(() => undefined)
+      .finally(stop);
+  };
+
+  pendingAvatarProfileSyncs.set(
+    syncKey,
+    subscribeAvatarPresentations(saveIfReady),
+  );
+  saveIfReady();
+}
 
 const NEUTRAL_EMOJI_PICKER_THEME_VARS = {
   "--buzz-emoji-picker-rgb-background":
@@ -153,14 +210,6 @@ export function CommunityOnboardingFlow({
   const [displayName, setDisplayName] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
   const avatarPresentation = useAvatarPresentation(avatarUrl);
-  const [hasSavedProfile, setHasSavedProfile] = React.useState(false);
-  const confirmedAvatarUrlRef = React.useRef<string | null | undefined>(
-    undefined,
-  );
-  const persistedAvatarUrlRef = React.useRef<string | null>(null);
-  const profileAvatarSyncQueueRef = React.useRef<Promise<void>>(
-    Promise.resolve(),
-  );
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
   const [isAvatarEditorOpen, setIsAvatarEditorOpen] = React.useState(false);
   const [starterPersonas, setStarterPersonas] = React.useState<AgentPersona[]>(
@@ -301,47 +350,6 @@ export function CommunityOnboardingFlow({
     }
   }, [isAvatarEditorOpen, isProfileStage]);
 
-  React.useEffect(() => {
-    if (!hasSavedProfile) return;
-
-    // Next remains available during propagation. Serialize later failure and
-    // Retry transitions so an older profile write cannot win the race.
-    const candidateAvatarUrl = avatarUrl.trim();
-    if (!candidateAvatarUrl) return;
-
-    const presentationState = avatarPresentation?.state;
-    const nextAvatarUrl =
-      presentationState === "failed"
-        ? (confirmedAvatarUrlRef.current ?? "")
-        : candidateAvatarUrl;
-    if (persistedAvatarUrlRef.current === nextAvatarUrl) {
-      if (presentationState === "ready") {
-        confirmedAvatarUrlRef.current = candidateAvatarUrl;
-      }
-      return;
-    }
-
-    persistedAvatarUrlRef.current = nextAvatarUrl;
-    profileAvatarSyncQueueRef.current = profileAvatarSyncQueueRef.current
-      .catch(() => undefined)
-      .then(async () => {
-        try {
-          const profile = await updateProfile({ avatarUrl: nextAvatarUrl });
-          if (
-            presentationState !== "failed" &&
-            presentationState !== "pending" &&
-            persistedAvatarUrlRef.current === nextAvatarUrl
-          ) {
-            confirmedAvatarUrlRef.current = profile.avatarUrl?.trim() || null;
-          }
-        } catch {
-          if (persistedAvatarUrlRef.current === nextAvatarUrl) {
-            persistedAvatarUrlRef.current = null;
-          }
-        }
-      });
-  }, [avatarPresentation?.state, avatarUrl, hasSavedProfile]);
-
   React.useLayoutEffect(() => {
     if (!isAvatarEditorOpen) {
       setAvatarEditorDialogHeight(null);
@@ -409,26 +417,25 @@ export function CommunityOnboardingFlow({
       const candidateAvatarUrl = avatarUrl.trim();
       const presentationState = avatarPresentation?.state;
       const shouldSaveCandidate =
-        candidateAvatarUrl.length > 0 && presentationState !== "failed";
-
-      if (
-        shouldSaveCandidate &&
-        presentationState === "pending" &&
-        confirmedAvatarUrlRef.current === undefined
-      ) {
-        const profile = await getProfile();
-        confirmedAvatarUrlRef.current = profile.avatarUrl?.trim() || null;
-      }
+        candidateAvatarUrl.length > 0 &&
+        presentationState !== "failed" &&
+        presentationState !== "pending";
 
       const profile = await updateProfile({
         displayName: displayName.trim(),
         avatarUrl: shouldSaveCandidate ? candidateAvatarUrl : undefined,
       });
-      persistedAvatarUrlRef.current = profile.avatarUrl?.trim() || "";
-      if (presentationState !== "pending") {
-        confirmedAvatarUrlRef.current = profile.avatarUrl?.trim() || null;
+      if (
+        candidateAvatarUrl &&
+        presentationState &&
+        presentationState !== "ready"
+      ) {
+        saveAvatarWhenReady(
+          candidateAvatarUrl,
+          profile.pubkey,
+          profile.avatarUrl,
+        );
       }
-      setHasSavedProfile(true);
       update({ stage: "team-intro", error: undefined });
     } catch (error) {
       if (isRelayMembershipDeniedError(error)) {
