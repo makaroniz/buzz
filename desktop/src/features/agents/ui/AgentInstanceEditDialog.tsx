@@ -1,9 +1,7 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-
 import { toast } from "sonner";
-
 import {
   useAcpRuntimesQuery,
   useAgentConfigSurface,
@@ -81,12 +79,13 @@ import { useAgentDialogDefaults } from "./useAgentDialogDefaults";
 import { AgentAiDefaultsNotice } from "./AgentAiDefaults";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
 import { useProviderApiKeyFieldState } from "./providerApiKeyFieldState";
-
+import { WhereToRunSection } from "./WhereToRunSection";
+import { canSubmitWhereToRun } from "./whereToRunIntent";
+import { useAgentBackendEdit } from "./useAgentBackendEdit";
 const ADVANCED_FIELDS_MOTION_TRANSITION = {
   duration: 0.18,
   ease: [0.23, 1, 0.32, 1],
 } as const;
-
 export function AgentInstanceEditDialog({
   agent,
   initialFocus,
@@ -110,7 +109,6 @@ export function AgentInstanceEditDialog({
   const runtimesQuery = useAcpRuntimesQuery({ enabled: open });
   const configSurfaceQuery = useAgentConfigSurface(open ? agent.pubkey : null);
   const runtimes = runtimesQuery.data ?? [];
-
   const [name, setName] = React.useState(agent.name);
   const [aiDefaultsOpen, setAiDefaultsOpen] = React.useState(false);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -138,6 +136,7 @@ export function AgentInstanceEditDialog({
   const [envVars, setEnvVars] = React.useState<EnvVarsValue>(agent.envVars);
   const [autoRestartOnConfigChange, setAutoRestartOnConfigChange] =
     React.useState(agent.autoRestartOnConfigChange);
+  const backendEdit = useAgentBackendEdit(agent.backend);
   const personasQuery = usePersonasQuery();
   const linkedPersona = React.useMemo(
     () =>
@@ -187,6 +186,7 @@ export function AgentInstanceEditDialog({
       setIsCustomProviderEditing(false);
       setEnvVars(agent.envVars);
       setAutoRestartOnConfigChange(agent.autoRestartOnConfigChange);
+      backendEdit.reset();
       setRespondTo(agent.respondTo);
       setRespondToAllowlist(agent.respondToAllowlist);
       setAvatarUrl(agent.avatarUrl ?? "");
@@ -610,7 +610,8 @@ export function AgentInstanceEditDialog({
     }) &&
     providerValid &&
     !updateMutation.isPending &&
-    !isAvatarUploadPending;
+    !isAvatarUploadPending &&
+    canSubmitWhereToRun(backendEdit.draft);
 
   async function handleSubmit() {
     try {
@@ -652,6 +653,7 @@ export function AgentInstanceEditDialog({
       // all agree. See resolveInheritedRuntimeSubmission.
       const normalizedSubmitProvider = inheritedSubmission.provider;
       const submitEnvVars = inheritedSubmission.envVars;
+
       const input: UpdateManagedAgentInput = {
         pubkey: agent.pubkey,
         name: name.trim() !== agent.name ? name.trim() : undefined,
@@ -715,6 +717,7 @@ export function AgentInstanceEditDialog({
           respondToAllowlist.join(",") !== agent.respondToAllowlist.join(",")
             ? respondToAllowlist
             : undefined,
+        backend: backendEdit.update,
       };
 
       const result = await updateMutation.mutateAsync(input);
@@ -930,6 +933,12 @@ export function AgentInstanceEditDialog({
               onAllowlistChange={setRespondToAllowlist}
               onModeChange={setRespondTo}
               variant="persona"
+            />
+
+            <WhereToRunSection
+              draft={backendEdit.draft}
+              isPending={updateMutation.isPending}
+              onDraftChange={backendEdit.setDraft}
             />
 
             {/* Provider (runtime) */}

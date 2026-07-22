@@ -534,8 +534,11 @@ export function AgentsView() {
           isConfirming={teamActions.isTeamSnapshotImportConfirming}
           result={teamActions.teamSnapshotImportResult}
           confirmError={teamActions.teamSnapshotImportConfirmError}
-          onConfirm={(keepAllowlist) => {
-            void teamActions.handleConfirmTeamSnapshotImport(keepAllowlist);
+          onConfirm={(keepAllowlist, backend) => {
+            void teamActions.handleConfirmTeamSnapshotImport(
+              keepAllowlist,
+              backend,
+            );
           }}
           onOpenChange={(open) => {
             if (!open) {
