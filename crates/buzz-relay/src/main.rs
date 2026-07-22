@@ -1434,12 +1434,10 @@ async fn run_storage_sweep_tick(
 ) {
     static SWEEP_CONFIG: std::sync::OnceLock<storage_sweep::StorageSweepConfig> =
         std::sync::OnceLock::new();
-    // SWEEP_CONFIG is a function-local OnceLock (not on AppState) by design:
-    // AppState is constructed once at startup with six call sites, and adding
-    // a StorageSweepConfig field would require touching all of them. The
-    // OnceLock-on-AppState pattern was explicitly rejected to avoid that churn.
-    // First-call init here is equivalent to boot-time for this code path
-    // (leader-only tick, runs within seconds of startup).
+    // SWEEP_CONFIG is a function-local OnceLock by design: it is localized
+    // feature config consumed only by this code path, read once on the first
+    // leader tick, and stable for the process lifetime (env is immutable).
+    // Keeping it here avoids widening Config/AppState for a single consumer.
     let config = *SWEEP_CONFIG.get_or_init(storage_sweep::StorageSweepConfig::from_env);
     if !config.enabled {
         return;

@@ -154,9 +154,11 @@ pub struct StorageSweepState {
 /// Note: a failed attempt (`!ok`) returns `true` unconditionally, so a
 /// permanently failing sweep (e.g. missing `s3:ListBucket`) will retry on
 /// every usage tick (default 300 s), not at the sweep-interval cadence.
-/// This is intentional: the retry is a single cheap LIST call, it means the
-/// sweep self-heals the moment the permission is added, and the tick cadence
-/// is documented in values.yaml.
+/// This is intentional: a permission failure (the common persistent case)
+/// costs a single cheap LIST call per retry, other failures (timeout, cap,
+/// malformed page) are bounded by the sweep's own timeout and object caps,
+/// and tick-cadence retry means the sweep self-heals as soon as the
+/// underlying cause is fixed. The tick cadence is documented in values.yaml.
 fn should_spawn(
     cached: &Option<CachedSnapshot>,
     last_attempt: &Option<LastAttempt>,
